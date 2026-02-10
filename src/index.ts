@@ -1,3 +1,4 @@
+import http from 'http';
 import { logger } from './utils/logger.js';
 import { config } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './database/connection.js';
@@ -7,6 +8,8 @@ import { startBot, stopBot } from './bot/bot.js';
 import './bot/handlers/command.handler.js';
 import './bot/handlers/forward.handler.js';
 import './bot/handlers/callback.handler.js';
+
+let server: http.Server | null = null;
 
 async function main() {
   try {
@@ -20,6 +23,22 @@ async function main() {
     // Start the bot
     await startBot();
 
+    // Start HTTP server for health checks
+    const port = process.env.PORT ?? 3000;
+    server = http.createServer((req, res) => {
+      if (req.url === '/health' || req.url === '/') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', service: 'telegram-poster-bot' }));
+      } else {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      }
+    });
+
+    server.listen(port, () => {
+      logger.info(`Health check server listening on port ${port}`);
+    });
+
     logger.info('Bot is running...');
   } catch (error) {
     logger.error('Failed to start bot:', error);
@@ -32,6 +51,16 @@ async function shutdown() {
   logger.info('Shutting down gracefully...');
 
   try {
+    // Close HTTP server
+    if (server) {
+      await new Promise<void>((resolve) => {
+        server?.close(() => {
+          logger.info('HTTP server closed');
+          resolve();
+        });
+      });
+    }
+
     await stopBot();
     await disconnectDatabase();
     logger.info('Shutdown complete');
