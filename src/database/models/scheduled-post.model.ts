@@ -8,6 +8,9 @@ export interface IScheduledPost extends Document {
   originalForward: ForwardInfo;
   content: MessageContent;
   action: TransformAction;
+  status: 'pending' | 'posted' | 'failed';
+  postedAt?: Date;
+  error?: string;
   createdAt: Date;
 }
 
@@ -48,6 +51,18 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     type: String,
     enum: ['transform', 'forward'],
     required: true,
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'posted', 'failed'],
+    default: 'pending',
+    index: true,
+  },
+  postedAt: {
+    type: Date,
+  },
+  error: {
+    type: String,
   },
   createdAt: {
     type: Date,

@@ -2,7 +2,8 @@ import http from 'http';
 import { logger } from './utils/logger.js';
 import { config } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './database/connection.js';
-import { startBot, stopBot } from './bot/bot.js';
+import { startBot, stopBot, bot } from './bot/bot.js';
+import { PostWorkerService } from './services/post-worker.service.js';
 
 // Import handlers to register them
 import './bot/handlers/command.handler.js';
@@ -10,6 +11,7 @@ import './bot/handlers/forward.handler.js';
 import './bot/handlers/callback.handler.js';
 
 let server: http.Server | null = null;
+let postWorker: PostWorkerService | null = null;
 
 async function main() {
   try {
@@ -22,6 +24,10 @@ async function main() {
 
     // Start the bot
     await startBot();
+
+    // Start post worker for scheduled publishing
+    postWorker = new PostWorkerService(bot.api);
+    postWorker.start();
 
     // Start HTTP server for health checks
     const port = process.env.PORT ?? 3000;
@@ -51,6 +57,11 @@ async function shutdown() {
   logger.info('Shutting down gracefully...');
 
   try {
+    // Stop post worker
+    if (postWorker) {
+      postWorker.stop();
+    }
+
     // Close HTTP server
     if (server) {
       await new Promise<void>((resolve) => {

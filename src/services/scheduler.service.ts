@@ -8,7 +8,7 @@ import { findNextAvailableSlot, formatSlotTime } from '../utils/time-slots.js';
 import { logger } from '../utils/logger.js';
 
 export class SchedulerService {
-  constructor(private api: Api) {}
+  constructor(_api: Api) {} // Keep for compatibility but not used anymore
 
   /**
    * Schedule a post to the target channel
@@ -26,74 +26,20 @@ export class SchedulerService {
 
     // Find next available time slot
     const scheduledTime = await findNextAvailableSlot(targetChannelId);
-    const unixTimestamp = Math.floor(scheduledTime.getTime() / 1000);
 
     logger.info(
       `Scheduling ${transformedContent.type} post for ${formatSlotTime(scheduledTime)} (${targetChannelId})`
     );
 
     try {
-      // Schedule via Telegram API based on content type
-      let telegramScheduledMessageId: number | undefined;
-
-      if (transformedContent.type === 'photo' && transformedContent.fileId) {
-        logger.info(`Calling sendPhoto with schedule_date: ${unixTimestamp}`);
-        const result = (await this.api.raw.sendPhoto({
-          chat_id: targetChannelId,
-          photo: transformedContent.fileId,
-          caption: transformedContent.text,
-          parse_mode: 'HTML',
-          schedule_date: unixTimestamp,
-        } as any)) as any;
-        telegramScheduledMessageId = result.message_id;
-        logger.info(`Telegram returned message_id: ${telegramScheduledMessageId}`);
-      } else if (transformedContent.type === 'video' && transformedContent.fileId) {
-        const result = (await this.api.raw.sendVideo({
-          chat_id: targetChannelId,
-          video: transformedContent.fileId,
-          caption: transformedContent.text,
-          parse_mode: 'HTML',
-          schedule_date: unixTimestamp,
-        } as any)) as any;
-        telegramScheduledMessageId = result.message_id;
-      } else if (transformedContent.type === 'document' && transformedContent.fileId) {
-        const result = (await this.api.raw.sendDocument({
-          chat_id: targetChannelId,
-          document: transformedContent.fileId,
-          caption: transformedContent.text,
-          parse_mode: 'HTML',
-          schedule_date: unixTimestamp,
-        } as any)) as any;
-        telegramScheduledMessageId = result.message_id;
-      } else if (transformedContent.type === 'animation' && transformedContent.fileId) {
-        const result = (await this.api.raw.sendAnimation({
-          chat_id: targetChannelId,
-          animation: transformedContent.fileId,
-          caption: transformedContent.text,
-          parse_mode: 'HTML',
-          schedule_date: unixTimestamp,
-        } as any)) as any;
-        telegramScheduledMessageId = result.message_id;
-      } else if (transformedContent.type === 'text' && transformedContent.text) {
-        const result = (await this.api.raw.sendMessage({
-          chat_id: targetChannelId,
-          text: transformedContent.text,
-          parse_mode: 'HTML',
-          schedule_date: unixTimestamp,
-        } as any)) as any;
-        telegramScheduledMessageId = result.message_id;
-      } else {
-        throw new Error(`Unsupported content type: ${transformedContent.type}`);
-      }
-
-      // Save to MongoDB for record-keeping
+      // Save to MongoDB - will be posted by background worker at scheduled time
       const post = await ScheduledPost.create({
         scheduledTime,
         targetChannelId,
-        telegramScheduledMessageId,
         originalForward: forwardInfo,
         content: transformedContent,
         action,
+        status: 'pending',
         createdAt: new Date(),
       });
 
@@ -127,6 +73,7 @@ export class SchedulerService {
 
     const now = new Date();
     return await ScheduledPost.countDocuments({
+      status: 'pending',
       scheduledTime: { $gte: now },
       targetChannelId,
     });
@@ -143,6 +90,7 @@ export class SchedulerService {
 
     const now = new Date();
     return await ScheduledPost.find({
+      status: 'pending',
       scheduledTime: { $gte: now },
       targetChannelId,
     })
