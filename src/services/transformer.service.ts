@@ -49,9 +49,9 @@ export class TransformerService {
           forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
         const channelPart = `<a href="${forwardInfo.messageLink}">${channelReference}</a>`;
 
-        // If user nickname exists, show "via [nickname] via [channel]"
+        // If user nickname exists, show "from [nickname] via [channel]"
         if (userNickname) {
-          const attribution = `\n\nvia ${userNickname} via ${channelPart}`;
+          const attribution = `\n\nfrom ${userNickname} via ${channelPart}`;
           return processedText + attribution;
         }
 
@@ -64,7 +64,7 @@ export class TransformerService {
       if (isRed && userNickname) {
         const channelReference =
           forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
-        const attribution = `\n\nvia ${userNickname} via ${channelReference}`;
+        const attribution = `\n\nfrom ${userNickname} via ${channelReference}`;
         return processedText + attribution;
       }
 
