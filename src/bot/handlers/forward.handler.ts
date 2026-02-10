@@ -3,6 +3,7 @@ import { Message } from 'grammy/types';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { createChannelSelectKeyboard } from '../keyboards/channel-select.keyboard.js';
+import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
 import type { MessageContent } from '../../types/message.types.js';
@@ -15,6 +16,8 @@ interface PendingForward {
   selectedChannel?: string;
   textHandling?: 'keep' | 'remove' | 'quote';
   selectedNickname?: string | null; // null = "No attribution", undefined = not selected yet
+  customText?: string; // Optional custom text to prepend
+  waitingForCustomText?: boolean; // Flag to indicate waiting for text input
   timestamp: number;
 }
 
@@ -32,6 +35,54 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+
+// Handle text messages when waiting for custom text input
+bot.on('message:text', async (ctx: Context) => {
+  try {
+    const message = ctx.message;
+
+    if (!message) {
+      return;
+    }
+
+    // Check if this is a reply to our bot message and we're waiting for custom text
+    const replyToMessage = message.reply_to_message;
+    if (!replyToMessage || !('text' in replyToMessage)) {
+      return; // Not a reply or not replying to text message
+    }
+
+    // Find if there's a pending forward waiting for custom text
+    let foundEntry: [string, PendingForward] | undefined;
+    for (const entry of pendingForwards.entries()) {
+      const [_key, value] = entry;
+      if (value.waitingForCustomText) {
+        foundEntry = entry;
+        break;
+      }
+    }
+
+    if (!foundEntry) {
+      return; // Not waiting for custom text
+    }
+
+    const [_foundKey, pendingForward] = foundEntry;
+
+    // Store the custom text
+    pendingForward.customText = message.text;
+    pendingForward.waitingForCustomText = false;
+
+    // Show transform/forward buttons
+    const keyboard = createForwardActionKeyboard();
+    await ctx.reply('✅ Custom text added!\n\nChoose how to post this message:', {
+      reply_markup: keyboard,
+      reply_to_message_id: pendingForward.message.message_id,
+    });
+
+    logger.debug(`Custom text added for message ${pendingForward.message.message_id}`);
+  } catch (error) {
+    logger.error('Error handling custom text input:', error);
+  }
+});
 
 bot.on('message:forward_origin', async (ctx: Context) => {
   try {
