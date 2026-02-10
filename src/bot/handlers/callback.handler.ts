@@ -1,4 +1,5 @@
 import { Context } from 'grammy';
+import { Message } from 'grammy/types';
 import { extractMessageContent, pendingForwards } from './forward.handler.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
@@ -57,8 +58,17 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       : false;
 
     if (shouldAutoForward) {
+      // Get media group messages if available
+      let mediaGroupMessages: Message[] | undefined;
+      for (const [_key, value] of pendingForwards.entries()) {
+        if (value.message.message_id === originalMessage.message_id) {
+          mediaGroupMessages = value.mediaGroupMessages;
+          break;
+        }
+      }
+
       // Auto-forward green-listed content
-      const content = extractMessageContent(originalMessage);
+      const content = extractMessageContent(originalMessage, mediaGroupMessages);
 
       if (!content || !forwardInfo) {
         await ctx.editMessageText('❌ Could not process message.');
@@ -333,11 +343,12 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel, text handling, nickname, and custom text
+    // Find the pending forward to get selected channel, text handling, nickname, custom text, and media group
     let selectedChannel: string | undefined;
     let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
     let selectedNickname: string | null | undefined;
     let customText: string | undefined;
+    let mediaGroupMessages: Message[] | undefined;
     let foundKey: string | undefined;
 
     for (const [key, value] of pendingForwards.entries()) {
@@ -346,6 +357,7 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
         textHandling = value.textHandling ?? 'keep';
         selectedNickname = value.selectedNickname;
         customText = value.customText;
+        mediaGroupMessages = value.mediaGroupMessages;
         foundKey = key;
         break;
       }
@@ -364,8 +376,8 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Extract message content
-    const content = extractMessageContent(originalMessage);
+    // Extract message content (including media group if present)
+    const content = extractMessageContent(originalMessage, mediaGroupMessages);
 
     if (!content) {
       await ctx.editMessageText('❌ Unsupported message type.');
@@ -433,11 +445,12 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel, text handling, nickname, and custom text
+    // Find the pending forward to get selected channel, text handling, nickname, custom text, and media group
     let selectedChannel: string | undefined;
     let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
     let selectedNickname: string | null | undefined;
     let customText: string | undefined;
+    let mediaGroupMessages: Message[] | undefined;
     let foundKey: string | undefined;
 
     for (const [key, value] of pendingForwards.entries()) {
@@ -446,6 +459,7 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
         textHandling = value.textHandling ?? 'keep';
         selectedNickname = value.selectedNickname;
         customText = value.customText;
+        mediaGroupMessages = value.mediaGroupMessages;
         foundKey = key;
         break;
       }
@@ -464,8 +478,8 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Extract message content
-    const content = extractMessageContent(originalMessage);
+    // Extract message content (including media group if present)
+    const content = extractMessageContent(originalMessage, mediaGroupMessages);
 
     if (!content) {
       await ctx.editMessageText('❌ Unsupported message type.');

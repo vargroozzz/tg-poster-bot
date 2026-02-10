@@ -92,7 +92,25 @@ export class PostWorkerService {
       let result: any;
 
       // Post based on content type
-      if (post.content.type === 'photo' && post.content.fileId) {
+      if (post.content.type === 'media_group' && post.content.mediaGroup) {
+        // Build media array for sendMediaGroup
+        const media = post.content.mediaGroup.map((item: any, index: number) => {
+          const baseMedia = {
+            media: item.fileId,
+            // Only first item gets caption
+            caption: index === 0 ? post.content.text : undefined,
+            parse_mode: index === 0 ? ('HTML' as const) : undefined,
+          };
+
+          if (item.type === 'photo') {
+            return { type: 'photo' as const, ...baseMedia };
+          } else {
+            return { type: 'video' as const, ...baseMedia };
+          }
+        });
+
+        result = await this.api.sendMediaGroup(post.targetChannelId, media);
+      } else if (post.content.type === 'photo' && post.content.fileId) {
         result = await this.api.sendPhoto(post.targetChannelId, post.content.fileId, {
           caption: post.content.text,
           parse_mode: 'HTML',
@@ -123,11 +141,13 @@ export class PostWorkerService {
       // Mark as posted
       post.status = 'posted';
       post.postedAt = new Date();
-      post.telegramScheduledMessageId = result.message_id;
+      // For media groups, result is an array, store first message ID
+      post.telegramScheduledMessageId = Array.isArray(result) ? result[0].message_id : result.message_id;
       await post.save();
 
+      const messageId = Array.isArray(result) ? `${result.length} messages` : `message_id ${result.message_id}`;
       logger.info(
-        `Successfully published post ${post._id} with message_id ${result.message_id}`
+        `Successfully published post ${post._id} with ${messageId}`
       );
     } catch (error) {
       logger.error(`Failed to publish post ${post._id}:`, error);
