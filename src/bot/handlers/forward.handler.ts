@@ -18,10 +18,19 @@ interface PendingForward {
   selectedNickname?: string | null; // null = "No attribution", undefined = not selected yet
   customText?: string; // Optional custom text to prepend
   waitingForCustomText?: boolean; // Flag to indicate waiting for text input
+  mediaGroupMessages?: Message[]; // For collecting media group items
   timestamp: number;
 }
 
 const pendingForwards = new Map<string, PendingForward>();
+
+// Store media group buffers temporarily
+interface MediaGroupBuffer {
+  messages: Message[];
+  timeout: NodeJS.Timeout;
+}
+
+const mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
 
 // Clean up old pending forwards every 5 minutes
 setInterval(() => {
@@ -92,68 +101,207 @@ bot.on('message:forward_origin', async (ctx: Context) => {
       return;
     }
 
-    // Get available posting channels
-    const postingChannels = await getActivePostingChannels();
+    // Check if this is part of a media group
+    const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
 
-    if (postingChannels.length === 0) {
-      await ctx.reply(
-        '⚠️ No posting channels configured.\n\n' +
-          'Please add channels first using /addchannel command.\n' +
-          'Example: /addchannel -1001234567890'
-      );
-      return;
+    if (mediaGroupId) {
+      // Buffer this message
+      const buffer = mediaGroupBuffers.get(mediaGroupId);
+
+      if (buffer) {
+        // Add to existing buffer
+        buffer.messages.push(message);
+        // Reset timeout
+        clearTimeout(buffer.timeout);
+        buffer.timeout = setTimeout(() => {
+          processMediaGroup(mediaGroupId).catch((error) => {
+            logger.error('Error processing media group:', error);
+          });
+        }, 1000); // Wait 1 second for all messages
+      } else {
+        // Create new buffer
+        const timeout = setTimeout(() => {
+          processMediaGroup(mediaGroupId).catch((error) => {
+            logger.error('Error processing media group:', error);
+          });
+        }, 1000);
+
+        mediaGroupBuffers.set(mediaGroupId, {
+          messages: [message],
+          timeout,
+        });
+      }
+
+      return; // Don't process yet
     }
 
-    // Parse forward information
-    const forwardInfo = parseForwardInfo(message);
-
-    if (!forwardInfo) {
-      await ctx.reply('❌ Could not parse forward information.');
-      return;
-    }
-
-    // Check if from a green-listed channel - show channels but mark as auto-forward
-    const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
-
-    // Create channel selection keyboard
-    const channels = postingChannels.map((ch) => ({
-      id: ch.channelId,
-      title: ch.channelTitle ?? ch.channelId,
-      username: ch.channelUsername,
-    }));
-
-    const keyboard = createChannelSelectKeyboard(channels);
-
-    // Store message data with unique key
-    const callbackKey = `${ctx.from?.id}_${message.message_id}_${Date.now()}`;
-    pendingForwards.set(callbackKey, {
-      message,
-      timestamp: Date.now(),
-    });
-
-    const greenListNote = shouldAutoForward
-      ? '\n\n🟢 This is from a green-listed channel - will be forwarded as-is.'
-      : '';
-
-    await ctx.reply(`📍 Select target channel for this post:${greenListNote}`, {
-      reply_markup: keyboard,
-      reply_to_message_id: message.message_id,
-    });
+    // Single message (not part of media group)
+    await processSingleMessage(ctx, message);
   } catch (error) {
     logger.error('Error handling forward:', error);
     await ctx.reply('❌ Error processing forward. Please try again.');
   }
 });
 
-export function extractMessageContent(message: Message): MessageContent | null {
-  // Check if this is part of a media group (album with multiple photos/videos)
-  if ('media_group_id' in message && message.media_group_id) {
-    // Media groups need special handling
-    // For now, we'll handle single media from the group
-    // TODO: Implement full media group support
-    logger.warn(`Message ${message.message_id} is part of media group ${message.media_group_id} - only first media will be posted`);
+async function processSingleMessage(ctx: Context, message: Message) {
+  // Get available posting channels
+  const postingChannels = await getActivePostingChannels();
+
+  if (postingChannels.length === 0) {
+    await ctx.reply(
+      '⚠️ No posting channels configured.\n\n' +
+        'Please add channels first using /addchannel command.\n' +
+        'Example: /addchannel -1001234567890'
+    );
+    return;
   }
 
+  // Parse forward information
+  const forwardInfo = parseForwardInfo(message);
+
+  if (!forwardInfo) {
+    await ctx.reply('❌ Could not parse forward information.');
+    return;
+  }
+
+  // Check if from a green-listed channel - show channels but mark as auto-forward
+  const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
+
+  // Create channel selection keyboard
+  const channels = postingChannels.map((ch) => ({
+    id: ch.channelId,
+    title: ch.channelTitle ?? ch.channelId,
+    username: ch.channelUsername,
+  }));
+
+  const keyboard = createChannelSelectKeyboard(channels);
+
+  // Store message data with unique key
+  const callbackKey = `${ctx.from?.id}_${message.message_id}_${Date.now()}`;
+  pendingForwards.set(callbackKey, {
+    message,
+    timestamp: Date.now(),
+  });
+
+  const greenListNote = shouldAutoForward
+    ? '\n\n🟢 This is from a green-listed channel - will be forwarded as-is.'
+    : '';
+
+  await ctx.reply(`📍 Select target channel for this post:${greenListNote}`, {
+    reply_markup: keyboard,
+    reply_to_message_id: message.message_id,
+  });
+}
+
+async function processMediaGroup(mediaGroupId: string) {
+  const buffer = mediaGroupBuffers.get(mediaGroupId);
+
+  if (!buffer) {
+    return;
+  }
+
+  // Clean up buffer
+  clearTimeout(buffer.timeout);
+  mediaGroupBuffers.delete(mediaGroupId);
+
+  const messages = buffer.messages;
+
+  if (messages.length === 0) {
+    return;
+  }
+
+  // Use the first message as the primary message
+  const primaryMessage = messages[0];
+
+  // Get available posting channels
+  const postingChannels = await getActivePostingChannels();
+
+  if (postingChannels.length === 0) {
+    await bot.api.sendMessage(
+      primaryMessage.chat.id,
+      '⚠️ No posting channels configured.\n\n' +
+        'Please add channels first using /addchannel command.\n' +
+        'Example: /addchannel -1001234567890'
+    );
+    return;
+  }
+
+  // Parse forward information from primary message
+  const forwardInfo = parseForwardInfo(primaryMessage);
+
+  if (!forwardInfo) {
+    await bot.api.sendMessage(primaryMessage.chat.id, '❌ Could not parse forward information.');
+    return;
+  }
+
+  // Check if from a green-listed channel
+  const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
+
+  // Create channel selection keyboard
+  const channels = postingChannels.map((ch) => ({
+    id: ch.channelId,
+    title: ch.channelTitle ?? ch.channelId,
+    username: ch.channelUsername,
+  }));
+
+  const keyboard = createChannelSelectKeyboard(channels);
+
+  // Store message data with all media group messages
+  const callbackKey = `${primaryMessage.from?.id}_${primaryMessage.message_id}_${Date.now()}`;
+  pendingForwards.set(callbackKey, {
+    message: primaryMessage,
+    mediaGroupMessages: messages,
+    timestamp: Date.now(),
+  });
+
+  const greenListNote = shouldAutoForward
+    ? '\n\n🟢 This is from a green-listed channel - will be forwarded as-is.'
+    : '';
+
+  await bot.api.sendMessage(
+    primaryMessage.chat.id,
+    `📍 Select target channel for this album (${messages.length} items):${greenListNote}`,
+    {
+      reply_markup: keyboard,
+      reply_to_message_id: primaryMessage.message_id,
+    }
+  );
+}
+
+export function extractMessageContent(
+  message: Message,
+  mediaGroupMessages?: Message[]
+): MessageContent | null {
+  // If media group messages provided, create media group content
+  if (mediaGroupMessages && mediaGroupMessages.length > 1) {
+    const mediaItems: Array<{ type: 'photo' | 'video'; fileId: string }> = [];
+    let caption: string | undefined;
+
+    for (const msg of mediaGroupMessages) {
+      if ('photo' in msg && msg.photo && msg.photo.length > 0) {
+        const photo = msg.photo[msg.photo.length - 1];
+        mediaItems.push({ type: 'photo', fileId: photo.file_id });
+        if (!caption && msg.caption) {
+          caption = msg.caption;
+        }
+      } else if ('video' in msg && msg.video) {
+        mediaItems.push({ type: 'video', fileId: msg.video.file_id });
+        if (!caption && msg.caption) {
+          caption = msg.caption;
+        }
+      }
+    }
+
+    if (mediaItems.length > 0) {
+      return {
+        type: 'media_group',
+        mediaGroup: mediaItems,
+        text: caption,
+      };
+    }
+  }
+
+  // Single message handling
   if ('photo' in message && message.photo && message.photo.length > 0) {
     const photo = message.photo[message.photo.length - 1]; // Get highest quality
     return {
