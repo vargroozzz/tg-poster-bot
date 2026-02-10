@@ -6,12 +6,14 @@ import { logger } from '../utils/logger.js';
 export class TransformerService {
   /**
    * Transform message text with attribution based on forward info and action
+   * @param manualNickname - Manually selected nickname (overrides automatic lookup). null = no attribution, undefined = use automatic lookup
    */
   async transformMessage(
     originalText: string,
     forwardInfo: ForwardInfo,
     action: TransformAction,
-    textHandling: TextHandling = 'keep'
+    textHandling: TextHandling = 'keep',
+    manualNickname?: string | null
   ): Promise<string> {
     // Handle text modifications first
     let processedText = originalText;
@@ -38,40 +40,45 @@ export class TransformerService {
 
       const isRed = await channelListService.isRedListed(channelId);
 
+      // Determine the nickname to use
+      let userNickname: string | null = null;
+
+      if (manualNickname !== undefined) {
+        // Manual nickname was explicitly provided (null = no attribution, string = use this nickname)
+        userNickname = manualNickname;
+      } else if (forwardInfo.fromUserId) {
+        // No manual selection, try automatic lookup
+        userNickname = await this.getUserAttribution(forwardInfo.fromUserId);
+      }
+
       // From channel, not red-listed - add channel attribution
       if (!isRed && forwardInfo.messageLink) {
         const channelReference =
           forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
         const channelPart = `<a href="${forwardInfo.messageLink}">${channelReference}</a>`;
 
-        // If forwarded by a user (not direct channel post), check for nickname
-        if (forwardInfo.fromUserId) {
-          const userNickname = await this.getUserAttribution(forwardInfo.fromUserId);
-          if (userNickname) {
-            const attribution = `\n\nfrom ${userNickname} via ${channelPart}`;
-            return processedText + attribution;
-          }
+        // If nickname selected/found, show "from [nickname] via [channel]"
+        if (userNickname) {
+          const attribution = `\n\nfrom ${userNickname} via ${channelPart}`;
+          return processedText + attribution;
         }
 
-        // Direct channel post or user without nickname - just show channel
+        // No nickname - just show channel
         const attribution = `\n\nvia ${channelPart}`;
         return processedText + attribution;
       }
 
       // From channel, red-listed
       if (isRed) {
-        // Check if forwarded by a user with custom nickname
-        if (forwardInfo.fromUserId) {
-          const userNickname = await this.getUserAttribution(forwardInfo.fromUserId);
-          if (userNickname) {
-            const channelReference =
-              forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
-            const attribution = `\n\nfrom ${userNickname} via ${channelReference}`;
-            return processedText + attribution;
-          }
+        // If nickname selected/found, show "from [nickname] via [channel name]"
+        if (userNickname) {
+          const channelReference =
+            forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
+          const attribution = `\n\nfrom ${userNickname} via ${channelReference}`;
+          return processedText + attribution;
         }
 
-        // Direct channel post or no user nickname - no attribution for red-listed
+        // No nickname - no attribution for red-listed
         return processedText;
       }
 

@@ -14,6 +14,7 @@ interface PendingForward {
   message: Message;
   selectedChannel?: string;
   textHandling?: 'keep' | 'remove' | 'quote';
+  selectedNickname?: string | null; // null = "No attribution", undefined = not selected yet
   timestamp: number;
 }
 
