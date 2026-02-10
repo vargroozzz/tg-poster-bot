@@ -38,37 +38,44 @@ export class TransformerService {
 
       const isRed = await channelListService.isRedListed(channelId);
 
-      // Check if forwarded by a user with custom nickname
-      const userNickname = forwardInfo.fromUserId
-        ? await this.getUserAttribution(forwardInfo.fromUserId)
-        : null;
-
       // From channel, not red-listed - add channel attribution
       if (!isRed && forwardInfo.messageLink) {
         const channelReference =
           forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
         const channelPart = `<a href="${forwardInfo.messageLink}">${channelReference}</a>`;
 
-        // If user nickname exists, show "from [nickname] via [channel]"
-        if (userNickname) {
-          const attribution = `\n\nfrom ${userNickname} via ${channelPart}`;
-          return processedText + attribution;
+        // If forwarded by a user (not direct channel post), check for nickname
+        if (forwardInfo.fromUserId) {
+          const userNickname = await this.getUserAttribution(forwardInfo.fromUserId);
+          if (userNickname) {
+            const attribution = `\n\nfrom ${userNickname} via ${channelPart}`;
+            return processedText + attribution;
+          }
         }
 
-        // Otherwise just show channel
+        // Direct channel post or user without nickname - just show channel
         const attribution = `\n\nvia ${channelPart}`;
         return processedText + attribution;
       }
 
-      // From channel, red-listed - check if forwarded by a user with custom nickname
-      if (isRed && userNickname) {
-        const channelReference =
-          forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
-        const attribution = `\n\nfrom ${userNickname} via ${channelReference}`;
-        return processedText + attribution;
+      // From channel, red-listed
+      if (isRed) {
+        // Check if forwarded by a user with custom nickname
+        if (forwardInfo.fromUserId) {
+          const userNickname = await this.getUserAttribution(forwardInfo.fromUserId);
+          if (userNickname) {
+            const channelReference =
+              forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
+            const attribution = `\n\nfrom ${userNickname} via ${channelReference}`;
+            return processedText + attribution;
+          }
+        }
+
+        // Direct channel post or no user nickname - no attribution for red-listed
+        return processedText;
       }
 
-      // From channel, red-listed, direct forward or no user nickname - no attribution
+      // No messageLink and not red-listed - no attribution
       return processedText;
     }
 
