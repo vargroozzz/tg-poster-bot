@@ -39,25 +39,13 @@ bot.catch((err) => {
   logger.error('Bot error:', err.error);
 });
 
-export async function startBot(): Promise<void> {
+export async function initBot(): Promise<void> {
   try {
-    await bot.start({
-      onStart: (botInfo) => {
-        logger.info(`Bot started: @${botInfo.username}`);
-      },
-    });
+    // Initialize bot to fetch bot info
+    await bot.init();
+    logger.info(`Bot initialized: @${bot.botInfo.username}`);
   } catch (error) {
-    logger.error('Failed to start bot:', error);
-    throw error;
-  }
-}
-
-export async function stopBot(): Promise<void> {
-  try {
-    await bot.stop();
-    logger.info('Bot stopped');
-  } catch (error) {
-    logger.error('Error stopping bot:', error);
+    logger.error('Failed to initialize bot:', error);
     throw error;
   }
 }
