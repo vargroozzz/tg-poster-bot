@@ -5,23 +5,29 @@ A Telegram bot that helps schedule channel posts with automatic attribution. For
 ## Features
 
 - 📅 **Automatic Scheduling** - Posts are scheduled to the nearest available hh:00:01 or hh:30:01 time slot
+- ⏰ **Cron-Based Publishing** - Background worker posts messages at scheduled time (independent of Telegram's Bot API limitations)
 - 📍 **Per-Message Channel Selection** - Choose destination channel for each post via inline buttons
 - 📢 **Multi-Channel Support** - Manage multiple posting channels, select target for each message
-- ✨ **Smart Attribution** - Automatically adds "via @username" or "via [Channel](link)" to transformed posts
+- 📝 **Text Handling Options** - Keep, remove, or wrap text in blockquotes for each post
+- ✨ **Smart Attribution** - Automatically adds custom nicknames or channel links to transformed posts
+- 👤 **Custom User Nicknames** - Set friendly names for users (e.g., "My Best Friend" instead of @username)
 - 🟢 **Green List** - Auto-forward posts from trusted channels without prompting
 - 🔴 **Red List** - Omit channel attribution when transforming posts from specific channels
 - 🔒 **Single User** - Authorized for one user only (secure and private)
 - 📦 **Supports Multiple Media Types** - Text, photos, videos, documents, and animations
+- 💬 **Reply-Driven UX** - Reply to forwarded messages with commands (no need to look up IDs)
 
 ## How It Works
 
 1. Add your posting channels with `/addchannel <channel_id>` (bot must be admin)
 2. Forward a message to the bot
 3. **Select which channel** to post to from your configured channels
-4. If from a green-listed source → automatically posts as-is
-5. Otherwise → choose "Transform & Schedule" or "Forward As-Is"
-6. Bot schedules the post using Telegram's native scheduling (no cron jobs needed!)
-7. Telegram automatically posts at the scheduled time
+4. **Choose text handling** (if message has text): Keep / Remove / Wrap in quote
+5. If from a green-listed source → automatically schedules as-is
+6. Otherwise → choose "Transform & Schedule" or "Forward As-Is"
+7. Bot saves the post to MongoDB with scheduled time
+8. **Background worker** checks every 30 seconds and publishes posts at their scheduled time
+9. Posts appear in your channel at exactly hh:00:01 or hh:30:01
 
 ## Setup
 
@@ -91,14 +97,32 @@ npm start
 
 ## Commands
 
-- `/start` - Welcome message and help
+### Channel Management
 - `/addchannel <channel_id>` - Add a channel where you want to post (bot must be admin)
 - `/removechannel <channel_id>` - Remove a posting channel
 - `/listchannels` - Show all posting channels and green/red lists
-- `/status` - Show pending scheduled posts (count and next 5)
+
+### Attribution Control
 - `/addgreen <channel_id>` - Add source channel to green list (auto-forward)
 - `/addred <channel_id>` - Add source channel to red list (omit channel reference)
 - `/remove <channel_id>` - Remove channel from green/red lists
+- `/setnickname <user_id> <nickname>` - Set custom nickname for a user
+- `/removenickname <user_id>` - Remove user's custom nickname
+- `/listnicknames` - Show all configured user nicknames
+
+### Status
+- `/status` - Show pending scheduled posts (count and next 5)
+
+### Reply-Driven Commands
+You can reply to any forwarded message with these commands (no need to provide IDs):
+- Reply with `/addgreen` - Add the source channel to green list
+- Reply with `/addred` - Add the source channel to red list
+- Reply with `/remove` - Remove the source channel from lists
+- Reply with `/setnickname <nickname>` - Set nickname for the user who forwarded the message
+- Reply with `/removenickname` - Remove nickname for the user
+
+### Help
+- `/start` - Welcome message
 - `/help` - Usage instructions
 
 ## Attribution Rules
@@ -107,20 +131,30 @@ npm start
 If a channel is green-listed, all forwards from it are automatically scheduled as-is with no transformation.
 
 ### Transform Action
-- **From channel (not red-listed):** Adds `via [Channel Name](link)`
-- **From channel (red-listed):** Omits channel reference, adds `via @username` if forwarded by a user
-- **From user:** Adds `via @username`
+- **From channel (not red-listed) with message link:** Adds `via [Channel Name](link)` (uses @username if available)
+- **From channel (not red-listed) without message link:** No attribution added
+- **From channel (red-listed):** Omits channel reference, adds custom nickname if user has one
+- **From user with custom nickname:** Adds `via Custom Nickname`
+- **From user without custom nickname:** No attribution added
+
+### Text Handling
+When a message has text/caption, you can choose:
+- **Keep text** - Leave text as-is
+- **Remove text** - Remove all text/caption
+- **Wrap in quote** - Wrap text in Telegram blockquote
 
 ### Forward As-Is Action
-Posts the message exactly as received with no modifications.
+Posts the message exactly as received with no modifications (except text handling if selected).
 
 ## Architecture
 
 - **Grammy** - Modern Telegram bot framework
 - **MongoDB + Mongoose** - Cloud persistence with schema validation
+- **Background Worker** - Cron-based post publishing (runs every 30 seconds)
 - **date-fns-tz** - Timezone-aware scheduling (Europe/Kyiv)
 - **Winston** - Structured logging
 - **Zod** - Configuration validation
+- **HTTP Health Check** - Endpoint for deployment monitoring
 
 ## Project Structure
 
@@ -133,7 +167,8 @@ src/
 │   ├── handlers/              # Message and callback handlers
 │   └── keyboards/             # Inline keyboards
 ├── services/
-│   ├── scheduler.service.ts   # Post scheduling via Telegram API
+│   ├── scheduler.service.ts   # Schedule slot calculation and DB storage
+│   ├── post-worker.service.ts # Background worker for publishing posts
 │   ├── transformer.service.ts # Message transformation with attribution
 │   └── channel-list.service.ts # Green/red list management
 ├── database/
