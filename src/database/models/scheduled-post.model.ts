@@ -40,12 +40,24 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
   content: {
     type: {
       type: String,
-      enum: ['text', 'photo', 'video', 'document', 'animation'],
+      enum: ['text', 'photo', 'video', 'document', 'animation', 'media_group'],
       required: true,
     },
     text: String,
     fileId: String,
-    mediaGroup: [String],
+    mediaGroup: [
+      {
+        type: {
+          type: String,
+          enum: ['photo', 'video'],
+          required: true,
+        },
+        fileId: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
   },
   action: {
     type: String,
