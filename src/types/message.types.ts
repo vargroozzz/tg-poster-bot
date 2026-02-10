@@ -17,3 +17,5 @@ export interface MessageContent {
 }
 
 export type TransformAction = 'transform' | 'forward';
+
+export type TextHandling = 'keep' | 'remove' | 'quote';

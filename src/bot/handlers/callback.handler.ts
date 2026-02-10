@@ -4,6 +4,7 @@ import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { SchedulerService } from '../../services/scheduler.service.js';
 import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
+import { createTextHandlingKeyboard } from '../keyboards/text-handling.keyboard.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
@@ -79,6 +80,68 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
+    // Check if message has text - if so, show text handling options first
+    const content = extractMessageContent(originalMessage);
+    const hasText = content?.text && content.text.trim().length > 0;
+
+    if (hasText) {
+      const keyboard = createTextHandlingKeyboard();
+      await ctx.editMessageText('How should the text be handled?', {
+        reply_markup: keyboard,
+      });
+    } else {
+      // No text, go straight to transform/forward options
+      const keyboard = createForwardActionKeyboard();
+      await ctx.editMessageText('Choose how to post this message:', {
+        reply_markup: keyboard,
+      });
+    }
+
+    logger.debug(`Channel ${selectedChannelId} selected for message ${originalMessage.message_id}`);
+  } catch (error) {
+    logger.error('Error in channel selection callback:', error);
+    await ctx.editMessageText('❌ Error processing channel selection. Please try again.').catch(() => {
+      ctx.reply('❌ Error processing channel selection. Please try again.');
+    });
+  }
+});
+
+// Handle text handling selection
+bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const match = ctx.callbackQuery?.data?.match(/^text:(keep|remove|quote)$/);
+    const textHandling = match?.[1] as 'keep' | 'remove' | 'quote';
+
+    if (!textHandling) {
+      await ctx.editMessageText('❌ Invalid text handling option.');
+      return;
+    }
+
+    // Find the original message
+    const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
+
+    if (!originalMessage) {
+      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      return;
+    }
+
+    // Update the pending forward with text handling choice
+    let foundKey: string | undefined;
+    for (const [key, value] of pendingForwards.entries()) {
+      if (value.message.message_id === originalMessage.message_id) {
+        value.textHandling = textHandling;
+        foundKey = key;
+        break;
+      }
+    }
+
+    if (!foundKey) {
+      await ctx.editMessageText('❌ Session expired. Please forward the message again.');
+      return;
+    }
+
     // Show Transform/Forward action buttons
     const keyboard = createForwardActionKeyboard();
 
@@ -86,11 +149,11 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       reply_markup: keyboard,
     });
 
-    logger.debug(`Channel ${selectedChannelId} selected for message ${originalMessage.message_id}`);
+    logger.debug(`Text handling "${textHandling}" selected for message ${originalMessage.message_id}`);
   } catch (error) {
-    logger.error('Error in channel selection callback:', error);
-    await ctx.editMessageText('❌ Error processing channel selection. Please try again.').catch(() => {
-      ctx.reply('❌ Error processing channel selection. Please try again.');
+    logger.error('Error in text handling callback:', error);
+    await ctx.editMessageText('❌ Error processing text handling. Please try again.').catch(() => {
+      ctx.reply('❌ Error processing text handling. Please try again.');
     });
   }
 });
@@ -107,13 +170,15 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel
+    // Find the pending forward to get selected channel and text handling
     let selectedChannel: string | undefined;
+    let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
     let foundKey: string | undefined;
 
     for (const [key, value] of pendingForwards.entries()) {
       if (value.message.message_id === originalMessage.message_id) {
         selectedChannel = value.selectedChannel;
+        textHandling = value.textHandling ?? 'keep';
         foundKey = key;
         break;
       }
@@ -140,12 +205,13 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Transform the message text
+    // Transform the message text with text handling
     const originalText = content.text ?? '';
     const transformedText = await transformerService.transformMessage(
       originalText,
       forwardInfo,
-      'transform'
+      'transform',
+      textHandling
     );
 
     // Update content with transformed text
@@ -198,13 +264,15 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel
+    // Find the pending forward to get selected channel and text handling
     let selectedChannel: string | undefined;
+    let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
     let foundKey: string | undefined;
 
     for (const [key, value] of pendingForwards.entries()) {
       if (value.message.message_id === originalMessage.message_id) {
         selectedChannel = value.selectedChannel;
+        textHandling = value.textHandling ?? 'keep';
         foundKey = key;
         break;
       }
@@ -223,7 +291,7 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Extract message content (no transformation)
+    // Extract message content
     const content = extractMessageContent(originalMessage);
 
     if (!content) {
@@ -231,12 +299,27 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Schedule the post as-is
+    // Apply text handling even for forward as-is
+    const originalText = content.text ?? '';
+    const processedText = await transformerService.transformMessage(
+      originalText,
+      forwardInfo,
+      'forward',
+      textHandling
+    );
+
+    // Update content with processed text
+    const processedContent = {
+      ...content,
+      text: processedText,
+    };
+
+    // Schedule the post
     const result = await schedulerService.schedulePost(
       originalMessage,
       forwardInfo,
       'forward',
-      content,
+      processedContent,
       selectedChannel
     );
 

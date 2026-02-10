@@ -13,6 +13,7 @@ import { getActivePostingChannels } from '../../database/models/posting-channel.
 interface PendingForward {
   message: Message;
   selectedChannel?: string;
+  textHandling?: 'keep' | 'remove' | 'quote';
   timestamp: number;
 }
 
