@@ -7,18 +7,6 @@ import type { ScheduledPostInfo } from '../types/schedule.types.js';
 import { findNextAvailableSlot, formatSlotTime } from '../utils/time-slots.js';
 import { logger } from '../utils/logger.js';
 
-// Type extensions for Telegram API methods with schedule_date parameter
-interface ScheduledMessageOptions {
-  caption?: string;
-  parse_mode?: 'Markdown' | 'HTML';
-  schedule_date: number;
-}
-
-interface ScheduledTextOptions {
-  parse_mode?: 'Markdown' | 'HTML';
-  schedule_date: number;
-}
-
 export class SchedulerService {
   constructor(private api: Api) {}
 
@@ -49,44 +37,50 @@ export class SchedulerService {
       let telegramScheduledMessageId: number | undefined;
 
       if (transformedContent.type === 'photo' && transformedContent.fileId) {
-        logger.debug(`Scheduling photo with schedule_date: ${unixTimestamp} (${new Date(unixTimestamp * 1000).toISOString()})`);
-        const result = await this.api.sendPhoto(targetChannelId, transformedContent.fileId, {
+        logger.info(`Calling sendPhoto with schedule_date: ${unixTimestamp}`);
+        const result = (await this.api.raw.sendPhoto({
+          chat_id: targetChannelId,
+          photo: transformedContent.fileId,
           caption: transformedContent.text,
           parse_mode: 'HTML',
           schedule_date: unixTimestamp,
-        } as any);
+        } as any)) as any;
         telegramScheduledMessageId = result.message_id;
-        logger.debug(`Telegram returned message_id: ${telegramScheduledMessageId}`);
+        logger.info(`Telegram returned message_id: ${telegramScheduledMessageId}`);
       } else if (transformedContent.type === 'video' && transformedContent.fileId) {
-        const options: ScheduledMessageOptions = {
+        const result = (await this.api.raw.sendVideo({
+          chat_id: targetChannelId,
+          video: transformedContent.fileId,
           caption: transformedContent.text,
           parse_mode: 'HTML',
           schedule_date: unixTimestamp,
-        };
-        const result = await this.api.sendVideo(targetChannelId, transformedContent.fileId, options as any);
+        } as any)) as any;
         telegramScheduledMessageId = result.message_id;
       } else if (transformedContent.type === 'document' && transformedContent.fileId) {
-        const options: ScheduledMessageOptions = {
+        const result = (await this.api.raw.sendDocument({
+          chat_id: targetChannelId,
+          document: transformedContent.fileId,
           caption: transformedContent.text,
           parse_mode: 'HTML',
           schedule_date: unixTimestamp,
-        };
-        const result = await this.api.sendDocument(targetChannelId, transformedContent.fileId, options as any);
+        } as any)) as any;
         telegramScheduledMessageId = result.message_id;
       } else if (transformedContent.type === 'animation' && transformedContent.fileId) {
-        const options: ScheduledMessageOptions = {
+        const result = (await this.api.raw.sendAnimation({
+          chat_id: targetChannelId,
+          animation: transformedContent.fileId,
           caption: transformedContent.text,
           parse_mode: 'HTML',
           schedule_date: unixTimestamp,
-        };
-        const result = await this.api.sendAnimation(targetChannelId, transformedContent.fileId, options as any);
+        } as any)) as any;
         telegramScheduledMessageId = result.message_id;
       } else if (transformedContent.type === 'text' && transformedContent.text) {
-        const options: ScheduledTextOptions = {
+        const result = (await this.api.raw.sendMessage({
+          chat_id: targetChannelId,
+          text: transformedContent.text,
           parse_mode: 'HTML',
           schedule_date: unixTimestamp,
-        };
-        const result = await this.api.sendMessage(targetChannelId, transformedContent.text, options as any);
+        } as any)) as any;
         telegramScheduledMessageId = result.message_id;
       } else {
         throw new Error(`Unsupported content type: ${transformedContent.type}`);
