@@ -25,14 +25,14 @@ async function main() {
 
     // Start HTTP server for health checks
     const port = process.env.PORT ?? 3000;
+    const healthResponse = JSON.stringify({ status: 'ok', service: 'telegram-poster-bot' });
+    const notFoundResponse = JSON.stringify({ error: 'Not found' });
+
     server = http.createServer((req, res) => {
-      if (req.url === '/health' || req.url === '/') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', service: 'telegram-poster-bot' }));
-      } else {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-      }
+      const isHealthEndpoint = req.url === '/health' || req.url === '/';
+
+      res.writeHead(isHealthEndpoint ? 200 : 404, { 'Content-Type': 'application/json' });
+      res.end(isHealthEndpoint ? healthResponse : notFoundResponse);
     });
 
     server.listen(port, () => {
