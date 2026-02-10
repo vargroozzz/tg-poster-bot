@@ -49,13 +49,14 @@ export class SchedulerService {
       let telegramScheduledMessageId: number | undefined;
 
       if (transformedContent.type === 'photo' && transformedContent.fileId) {
-        const options: ScheduledMessageOptions = {
+        logger.debug(`Scheduling photo with schedule_date: ${unixTimestamp} (${new Date(unixTimestamp * 1000).toISOString()})`);
+        const result = await this.api.sendPhoto(targetChannelId, transformedContent.fileId, {
           caption: transformedContent.text,
           parse_mode: 'Markdown',
           schedule_date: unixTimestamp,
-        };
-        const result = await this.api.sendPhoto(targetChannelId, transformedContent.fileId, options as never);
+        } as never);
         telegramScheduledMessageId = result.message_id;
+        logger.debug(`Telegram returned message_id: ${telegramScheduledMessageId}`);
       } else if (transformedContent.type === 'video' && transformedContent.fileId) {
         const options: ScheduledMessageOptions = {
           caption: transformedContent.text,

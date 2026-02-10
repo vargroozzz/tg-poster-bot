@@ -93,6 +93,14 @@ bot.on('message:forward_origin', async (ctx: Context) => {
 });
 
 export function extractMessageContent(message: Message): MessageContent | null {
+  // Check if this is part of a media group (album with multiple photos/videos)
+  if ('media_group_id' in message && message.media_group_id) {
+    // Media groups need special handling
+    // For now, we'll handle single media from the group
+    // TODO: Implement full media group support
+    logger.warn(`Message ${message.message_id} is part of media group ${message.media_group_id} - only first media will be posted`);
+  }
+
   if ('photo' in message && message.photo && message.photo.length > 0) {
     const photo = message.photo[message.photo.length - 1]; // Get highest quality
     return {
