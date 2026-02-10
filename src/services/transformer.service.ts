@@ -38,24 +38,37 @@ export class TransformerService {
 
       const isRed = await channelListService.isRedListed(channelId);
 
-      // From channel, not red-listed - add channel attribution only if messageLink exists
+      // Check if forwarded by a user with custom nickname
+      const userNickname = forwardInfo.fromUserId
+        ? await this.getUserAttribution(forwardInfo.fromUserId)
+        : null;
+
+      // From channel, not red-listed - add channel attribution
       if (!isRed && forwardInfo.messageLink) {
         const channelReference =
           forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
-        const attribution = `\n\nvia <a href="${forwardInfo.messageLink}">${channelReference}</a>`;
+        const channelPart = `<a href="${forwardInfo.messageLink}">${channelReference}</a>`;
+
+        // If user nickname exists, show "via [nickname] via [channel]"
+        if (userNickname) {
+          const attribution = `\n\nvia ${userNickname} via ${channelPart}`;
+          return processedText + attribution;
+        }
+
+        // Otherwise just show channel
+        const attribution = `\n\nvia ${channelPart}`;
         return processedText + attribution;
       }
 
       // From channel, red-listed - check if forwarded by a user with custom nickname
-      if (isRed && forwardInfo.fromUserId) {
-        const userAttribution = await this.getUserAttribution(forwardInfo.fromUserId);
-        if (userAttribution) {
-          const attribution = `\n\nvia ${userAttribution}`;
-          return processedText + attribution;
-        }
+      if (isRed && userNickname) {
+        const channelReference =
+          forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
+        const attribution = `\n\nvia ${userNickname} via ${channelReference}`;
+        return processedText + attribution;
       }
 
-      // From channel, red-listed, direct forward - no attribution
+      // From channel, red-listed, direct forward or no user nickname - no attribution
       return processedText;
     }
 
