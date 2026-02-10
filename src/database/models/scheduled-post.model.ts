@@ -52,7 +52,6 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
   createdAt: {
     type: Date,
     default: Date.now,
-    index: true,
   },
 });
 
