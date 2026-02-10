@@ -1,5 +1,6 @@
 import type { ForwardInfo, TransformAction, TextHandling } from '../types/message.types.js';
 import { channelListService } from './channel-list.service.js';
+import { getUserNickname } from '../database/models/user-nickname.model.js';
 import { logger } from '../utils/logger.js';
 
 export class TransformerService {
@@ -45,24 +46,42 @@ export class TransformerService {
         return processedText + attribution;
       }
 
-      // From channel, red-listed - check if forwarded by a user
-      if (isRed && forwardInfo.fromUsername) {
-        const attribution = `\n\nvia ${forwardInfo.fromUsername}`;
-        return processedText + attribution;
+      // From channel, red-listed - check if forwarded by a user with custom nickname
+      if (isRed && forwardInfo.fromUserId) {
+        const userAttribution = await this.getUserAttribution(forwardInfo.fromUserId);
+        if (userAttribution) {
+          const attribution = `\n\nvia ${userAttribution}`;
+          return processedText + attribution;
+        }
       }
 
       // From channel, red-listed, direct forward - no attribution
       return processedText;
     }
 
-    // From user (not via channel)
-    if (forwardInfo.fromUsername) {
-      const attribution = `\n\nvia ${forwardInfo.fromUsername}`;
-      return processedText + attribution;
+    // From user (not via channel) - only add attribution if custom nickname is set
+    if (forwardInfo.fromUserId) {
+      const userAttribution = await this.getUserAttribution(forwardInfo.fromUserId);
+      if (userAttribution) {
+        const attribution = `\n\nvia ${userAttribution}`;
+        return processedText + attribution;
+      }
     }
 
     // From hidden user or no username
     return processedText;
+  }
+
+  /**
+   * Get user attribution text (custom nickname only, or null)
+   */
+  private async getUserAttribution(userId?: number): Promise<string | null> {
+    if (!userId) {
+      return null;
+    }
+
+    // Only return attribution if custom nickname is set
+    return await getUserNickname(userId);
   }
 
   /**
