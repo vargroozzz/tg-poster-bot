@@ -6,6 +6,7 @@ import { SchedulerService } from '../../services/scheduler.service.js';
 import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
 import { createTextHandlingKeyboard } from '../keyboards/text-handling.keyboard.js';
 import { createNicknameSelectKeyboard } from '../keyboards/nickname-select.keyboard.js';
+import { createCustomTextKeyboard } from '../keyboards/custom-text.keyboard.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
@@ -125,6 +126,70 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
   }
 });
 
+// Handle custom text selection
+bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const match = ctx.callbackQuery?.data?.match(/^custom_text:(add|skip)$/);
+    const action = match?.[1];
+
+    if (!action) {
+      await ctx.editMessageText('❌ Invalid action.');
+      return;
+    }
+
+    const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
+
+    if (!originalMessage) {
+      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      return;
+    }
+
+    // Find the pending forward
+    let foundKey: string | undefined;
+    for (const [key, value] of pendingForwards.entries()) {
+      if (value.message.message_id === originalMessage.message_id) {
+        if (action === 'add') {
+          // Set waiting flag and ask for text
+          value.waitingForCustomText = true;
+          foundKey = key;
+        } else {
+          // Skip custom text
+          value.customText = undefined;
+          foundKey = key;
+        }
+        break;
+      }
+    }
+
+    if (!foundKey) {
+      await ctx.editMessageText('❌ Session expired. Please forward the message again.');
+      return;
+    }
+
+    if (action === 'add') {
+      await ctx.editMessageText(
+        '✍️ Reply to this message with your custom text.\n\n' +
+          'This text will be added at the beginning of your post.'
+      );
+    } else {
+      // Show transform/forward buttons
+      const keyboard = createForwardActionKeyboard();
+      await ctx.editMessageText('Choose how to post this message:', {
+        reply_markup: keyboard,
+      });
+    }
+
+    logger.debug(`Custom text action "${action}" for message ${originalMessage.message_id}`);
+  } catch (error) {
+    logger.error('Error in custom text callback:', error);
+    await ctx.editMessageText('❌ Error processing custom text. Please try again.').catch(() => {
+      ctx.reply('❌ Error processing custom text. Please try again.');
+    });
+  }
+});
+
 // Handle nickname selection
 bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
   try {
@@ -171,10 +236,10 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Show Transform/Forward action buttons
-    const keyboard = createForwardActionKeyboard();
+    // Show custom text keyboard
+    const keyboard = createCustomTextKeyboard();
 
-    await ctx.editMessageText('Choose how to post this message:', {
+    await ctx.editMessageText('Do you want to add custom text to this post?', {
       reply_markup: keyboard,
     });
 
@@ -268,10 +333,11 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel, text handling, and nickname
+    // Find the pending forward to get selected channel, text handling, nickname, and custom text
     let selectedChannel: string | undefined;
     let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
     let selectedNickname: string | null | undefined;
+    let customText: string | undefined;
     let foundKey: string | undefined;
 
     for (const [key, value] of pendingForwards.entries()) {
@@ -279,6 +345,7 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
         selectedChannel = value.selectedChannel;
         textHandling = value.textHandling ?? 'keep';
         selectedNickname = value.selectedNickname;
+        customText = value.customText;
         foundKey = key;
         break;
       }
@@ -305,14 +372,15 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Transform the message text with text handling and selected nickname
+    // Transform the message text with text handling, selected nickname, and custom text
     const originalText = content.text ?? '';
     const transformedText = await transformerService.transformMessage(
       originalText,
       forwardInfo,
       'transform',
       textHandling,
-      selectedNickname
+      selectedNickname,
+      customText
     );
 
     // Update content with transformed text
@@ -365,10 +433,11 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel, text handling, and nickname
+    // Find the pending forward to get selected channel, text handling, nickname, and custom text
     let selectedChannel: string | undefined;
     let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
     let selectedNickname: string | null | undefined;
+    let customText: string | undefined;
     let foundKey: string | undefined;
 
     for (const [key, value] of pendingForwards.entries()) {
@@ -376,6 +445,7 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
         selectedChannel = value.selectedChannel;
         textHandling = value.textHandling ?? 'keep';
         selectedNickname = value.selectedNickname;
+        customText = value.customText;
         foundKey = key;
         break;
       }
@@ -402,14 +472,15 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Apply text handling even for forward as-is (but nickname is ignored for forward action)
+    // Apply text handling and custom text even for forward as-is (but nickname is ignored for forward action)
     const originalText = content.text ?? '';
     const processedText = await transformerService.transformMessage(
       originalText,
       forwardInfo,
       'forward',
       textHandling,
-      selectedNickname
+      selectedNickname,
+      customText
     );
 
     // Update content with processed text

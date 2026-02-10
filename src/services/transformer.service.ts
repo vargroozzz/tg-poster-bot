@@ -7,13 +7,15 @@ export class TransformerService {
   /**
    * Transform message text with attribution based on forward info and action
    * @param manualNickname - Manually selected nickname (overrides automatic lookup). null = no attribution, undefined = use automatic lookup
+   * @param customText - Optional custom text to prepend to the message
    */
   async transformMessage(
     originalText: string,
     forwardInfo: ForwardInfo,
     action: TransformAction,
     textHandling: TextHandling = 'keep',
-    manualNickname?: string | null
+    manualNickname?: string | null,
+    customText?: string
   ): Promise<string> {
     // Handle text modifications first
     let processedText = originalText;
@@ -23,7 +25,13 @@ export class TransformerService {
     } else if (textHandling === 'quote' && originalText) {
       processedText = `<blockquote>${originalText}</blockquote>`;
     }
-    // If action is 'forward', return original text
+
+    // Prepend custom text if provided
+    if (customText) {
+      processedText = customText + (processedText ? '\n\n' + processedText : '');
+    }
+
+    // If action is 'forward', return processed text with custom text
     if (action === 'forward') {
       return processedText;
     }
