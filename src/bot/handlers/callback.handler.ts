@@ -53,9 +53,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     // Parse forward info to check if it's green-listed or red-listed
     const forwardInfo = parseForwardInfo(originalMessage);
-    const shouldAutoForward = forwardInfo
-      ? await transformerService.shouldAutoForward(forwardInfo)
-      : false;
+    const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
     if (shouldAutoForward) {
       // Get media group messages if available
@@ -240,11 +238,6 @@ async function scheduleTransformPost(ctx: Context, originalMessage: Message, pen
 
     // Parse forward info
     const forwardInfo = parseForwardInfo(originalMessage);
-
-    if (!forwardInfo) {
-      await ctx.editMessageText('❌ Could not parse forward information.');
-      return;
-    }
 
     // Extract message content
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
@@ -529,11 +522,6 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
 
     // Parse forward info
     const forwardInfo = parseForwardInfo(originalMessage);
-
-    if (!forwardInfo) {
-      await ctx.editMessageText('❌ Could not parse forward information.');
-      return;
-    }
 
     // Extract message content (including media group if present)
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
