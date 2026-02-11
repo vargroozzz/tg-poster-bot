@@ -107,6 +107,15 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     const forwardInfo = parseForwardInfo(originalMessage);
     const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
+    // Check if red-listed
+    const isRedListed = forwardInfo?.fromChannelId
+      ? await transformerService.isRedListed(String(forwardInfo.fromChannelId))
+      : false;
+
+    // Check if message has text
+    const content = extractMessageContent(originalMessage);
+    const hasText = !!(content?.text && content.text.trim().length > 0);
+
     // DUAL READ: Try to find session in DB first, fall back to Map
     const { session, pending } = await getPendingForward(
       ctx.from?.id ?? 0,
@@ -119,11 +128,11 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       // Update session in DB with proper state transition
       const sessionSvc = getSessionService();
       if (sessionSvc) {
-        // Determine next state based on context
+        // Determine next state based on ACTUAL context
         const context = {
           isGreenListed: shouldAutoForward,
-          isRedListed: false, // Will be checked below
-          hasText: false, // Will be checked below
+          isRedListed,
+          hasText,
           isForward: false,
         };
 
@@ -188,28 +197,12 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Check if red-listed - auto-transform without asking
-    const isRedListed = forwardInfo?.fromChannelId
-      ? await transformerService.isRedListed(String(forwardInfo.fromChannelId))
-      : false;
-
+    // Red-listed channels auto-transform without asking
     if (isRedListed) {
-      // Store that transform was chosen - update both DB and Map
+      // Store that transform was chosen (state already updated above)
       if (session && getSessionService()) {
-        // Red-listed: determine next state (text handling or nickname)
-        const content = extractMessageContent(originalMessage);
-        const hasText = !!(content?.text && content.text.trim().length > 0);
-
-        const context = {
-          isGreenListed: false,
-          isRedListed: true,
-          hasText,
-          isForward: false,
-        };
-
-        const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, context);
-
-        await getSessionService().updateState(session._id.toString(), nextState, {
+        // Just update the action field (state was already transitioned above)
+        await getSessionService().update(session._id.toString(), {
           selectedAction: 'transform',
         });
       } else if (pending) {
