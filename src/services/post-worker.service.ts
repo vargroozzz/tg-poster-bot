@@ -2,13 +2,20 @@ import { Api } from 'grammy';
 import { ScheduledPost, type IScheduledPost } from '../database/models/scheduled-post.model.js';
 import { logger } from '../utils/logger.js';
 import { formatSlotTime } from '../utils/time-slots.js';
-import type { MediaGroupItem } from '../types/message.types.js';
+import { PostPublisherService } from '../core/posting/post-publisher.service.js';
 
+/**
+ * Background worker service for processing scheduled posts
+ * Coordinates publishing via PostPublisherService
+ */
 export class PostWorkerService {
   private intervalId: NodeJS.Timeout | null = null;
   private isProcessing = false;
+  private publisher: PostPublisherService;
 
-  constructor(private api: Api) {}
+  constructor(api: Api) {
+    this.publisher = new PostPublisherService(api);
+  }
 
   /**
    * Start the background worker that checks for posts to publish
@@ -90,84 +97,16 @@ export class PostWorkerService {
         `Publishing ${post.content.type} post to ${post.targetChannelId} (scheduled for ${formatSlotTime(post.scheduledTime)})`
       );
 
-      let result: { message_id: number } | Array<{ message_id: number }>;
-
-      // For 'forward' action, use copyMessage to preserve "Forwarded from" attribution
-      if (post.action === 'forward' && post.originalForward.chatId && post.originalForward.messageId) {
-        result = await this.api.copyMessage(
-          post.targetChannelId,
-          post.originalForward.chatId,
-          post.originalForward.messageId
-        );
-
-        // Mark as posted
-        post.status = 'posted';
-        post.postedAt = new Date();
-        post.telegramScheduledMessageId = result.message_id;
-        await post.save();
-
-        logger.info(`Successfully forwarded message ${post._id} with message_id ${result.message_id}`);
-        return;
-      }
-
-      // For 'transform' action or when copyMessage not applicable, post based on content type
-      if (post.content.type === 'media_group' && post.content.mediaGroup) {
-        // Build media array for sendMediaGroup
-        const media = post.content.mediaGroup.map((item: MediaGroupItem, index: number) => {
-          const baseMedia = {
-            media: item.fileId,
-            // Only first item gets caption
-            caption: index === 0 ? post.content.text : undefined,
-            parse_mode: index === 0 ? ('HTML' as const) : undefined,
-          };
-
-          if (item.type === 'photo') {
-            return { type: 'photo' as const, ...baseMedia };
-          } else {
-            return { type: 'video' as const, ...baseMedia };
-          }
-        });
-
-        result = await this.api.sendMediaGroup(post.targetChannelId, media);
-      } else if (post.content.type === 'photo' && post.content.fileId) {
-        result = await this.api.sendPhoto(post.targetChannelId, post.content.fileId, {
-          caption: post.content.text,
-          parse_mode: 'HTML',
-        });
-      } else if (post.content.type === 'video' && post.content.fileId) {
-        result = await this.api.sendVideo(post.targetChannelId, post.content.fileId, {
-          caption: post.content.text,
-          parse_mode: 'HTML',
-        });
-      } else if (post.content.type === 'document' && post.content.fileId) {
-        result = await this.api.sendDocument(post.targetChannelId, post.content.fileId, {
-          caption: post.content.text,
-          parse_mode: 'HTML',
-        });
-      } else if (post.content.type === 'animation' && post.content.fileId) {
-        result = await this.api.sendAnimation(post.targetChannelId, post.content.fileId, {
-          caption: post.content.text,
-          parse_mode: 'HTML',
-        });
-      } else if (post.content.type === 'text' && post.content.text) {
-        result = await this.api.sendMessage(post.targetChannelId, post.content.text, {
-          parse_mode: 'HTML',
-        });
-      } else {
-        throw new Error(`Unsupported content type: ${post.content.type}`);
-      }
+      // Delegate publishing to the publisher service
+      const messageId = await this.publisher.publish(post);
 
       // Mark as posted
       post.status = 'posted';
       post.postedAt = new Date();
-      // For media groups, result is an array, store first message ID
-      post.telegramScheduledMessageId = Array.isArray(result) ? result[0].message_id : result.message_id;
+      post.telegramScheduledMessageId = messageId;
       await post.save();
 
-      const messageId = Array.isArray(result) ? `${result.length} messages` : `message_id ${result.message_id}`;
-      logger.info(
-        `Successfully published post ${post._id} with ${messageId}`
-      );
+      logger.info(`Successfully published post ${post._id} with message_id ${messageId}`);
     } catch (error) {
       logger.error(`Failed to publish post ${post._id}:`, error);
 

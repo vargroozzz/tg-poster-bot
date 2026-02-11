@@ -1,9 +1,25 @@
 import type { ForwardInfo, TransformAction, TextHandling } from '../types/message.types.js';
-import { channelListService } from './channel-list.service.js';
-import { getUserNickname } from '../database/models/user-nickname.model.js';
-import { logger } from '../utils/logger.js';
+import { TextTransformerService } from '../core/transformation/text-transformer.service.js';
+import { NicknameResolverService } from '../core/attribution/nickname-resolver.service.js';
+import { AttributionService } from '../core/attribution/attribution.service.js';
+import { ChannelListRepository } from '../database/repositories/channel-list.repository.js';
 
+/**
+ * Facade service for message transformation
+ * Coordinates text transformation and attribution services
+ * Maintains backward compatibility while delegating to specialized services
+ */
 export class TransformerService {
+  private textTransformer: TextTransformerService;
+  private attribution: AttributionService;
+  private channelListRepo: ChannelListRepository;
+
+  constructor() {
+    this.textTransformer = new TextTransformerService();
+    const nicknameResolver = new NicknameResolverService();
+    this.channelListRepo = new ChannelListRepository();
+    this.attribution = new AttributionService(nicknameResolver, this.channelListRepo);
+  }
   /**
    * Transform message text with attribution based on forward info and action
    * @param manualNickname - Manually selected nickname (overrides automatic lookup). null = no attribution, undefined = use automatic lookup
@@ -17,104 +33,30 @@ export class TransformerService {
     manualNickname?: string | null,
     customText?: string
   ): Promise<string> {
-    // Handle text modifications first
-    let processedText = originalText;
+    // Apply text transformations (quote/remove/keep) and custom text
+    let processedText = this.textTransformer.transformText(
+      originalText,
+      textHandling,
+      customText
+    );
 
-    if (textHandling === 'remove') {
-      processedText = '';
-    } else if (textHandling === 'quote' && originalText) {
-      processedText = `<blockquote>${originalText}</blockquote>`;
-    }
-
-    // Prepend custom text if provided
-    if (customText) {
-      processedText = customText + (processedText ? '\n\n' + processedText : '');
-    }
-
-    // If action is 'forward', return processed text with custom text
+    // If action is 'forward', return processed text without attribution
     if (action === 'forward') {
       return processedText;
     }
 
-    // If from a channel and green-listed, return processed (should not reach here, but safety check)
-    if (forwardInfo.fromChannelId) {
-      const channelId = String(forwardInfo.fromChannelId);
-      const isGreen = await channelListService.isGreenListed(channelId);
+    // Build attribution string based on forward info and rules
+    const attributionText = await this.attribution.buildAttribution(
+      forwardInfo,
+      manualNickname
+    );
 
-      if (isGreen) {
-        logger.debug(`Channel ${channelId} is green-listed, returning processed text`);
-        return processedText;
-      }
-
-      const isRed = await channelListService.isRedListed(channelId);
-
-      // Determine the nickname to use
-      let userNickname: string | null = null;
-
-      if (manualNickname !== undefined) {
-        // Manual nickname was explicitly provided (null = no attribution, string = use this nickname)
-        userNickname = manualNickname;
-      } else if (forwardInfo.fromUserId) {
-        // No manual selection, try automatic lookup
-        userNickname = await this.getUserAttribution(forwardInfo.fromUserId);
-      }
-
-      // From channel, not red-listed - add channel attribution
-      if (!isRed && forwardInfo.messageLink) {
-        const channelReference =
-          forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
-        const channelPart = `<a href="${forwardInfo.messageLink}">${channelReference}</a>`;
-
-        // If nickname selected/found, show "from [nickname] via [channel]"
-        if (userNickname) {
-          const attribution = `\n\nfrom ${userNickname} via ${channelPart}`;
-          return processedText + attribution;
-        }
-
-        // No nickname - just show channel
-        const attribution = `\n\nvia ${channelPart}`;
-        return processedText + attribution;
-      }
-
-      // From channel, red-listed - OMIT channel reference
-      if (isRed) {
-        // If nickname selected/found, show only "via [nickname]" (no channel)
-        if (userNickname) {
-          const attribution = `\n\nvia ${userNickname}`;
-          return processedText + attribution;
-        }
-
-        // No nickname - no attribution for red-listed
-        return processedText;
-      }
-
-      // No messageLink and not red-listed - no attribution
-      return processedText;
+    // Append attribution if available
+    if (attributionText) {
+      processedText = processedText + attributionText;
     }
 
-    // From user (not via channel) - only add attribution if custom nickname is set
-    if (forwardInfo.fromUserId) {
-      const userAttribution = await this.getUserAttribution(forwardInfo.fromUserId);
-      if (userAttribution) {
-        const attribution = `\n\nvia ${userAttribution}`;
-        return processedText + attribution;
-      }
-    }
-
-    // From hidden user or no username
     return processedText;
-  }
-
-  /**
-   * Get user attribution text (custom nickname only, or null)
-   */
-  private async getUserAttribution(userId?: number): Promise<string | null> {
-    if (!userId) {
-      return null;
-    }
-
-    // Only return attribution if custom nickname is set
-    return await getUserNickname(userId);
   }
 
   /**
@@ -126,14 +68,14 @@ export class TransformerService {
     }
 
     const channelId = String(forwardInfo.fromChannelId);
-    return await channelListService.isGreenListed(channelId);
+    return await this.channelListRepo.isGreenListed(channelId);
   }
 
   /**
    * Check if a channel is red-listed (should omit channel reference)
    */
   async isRedListed(channelId: string): Promise<boolean> {
-    return await channelListService.isRedListed(channelId);
+    return await this.channelListRepo.isRedListed(channelId);
   }
 }
 
