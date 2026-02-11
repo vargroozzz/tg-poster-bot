@@ -17,6 +17,8 @@ import { PostSchedulerService } from '../../core/posting/post-scheduler.service.
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
 import type { ISession } from '../../database/models/session.model.js';
+import { SessionState } from '../../shared/constants/flow-states.js';
+import { SessionStateMachine } from '../../core/session/session-state-machine.js';
 
 const schedulerService = new SchedulerService(bot.api);
 const postScheduler = new PostSchedulerService();
@@ -101,6 +103,10 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
+    // Parse forward info to check if it's green-listed or red-listed
+    const forwardInfo = parseForwardInfo(originalMessage);
+    const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
+
     // DUAL READ: Try to find session in DB first, fall back to Map
     const { session, pending } = await getPendingForward(
       ctx.from?.id ?? 0,
@@ -110,10 +116,20 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     let foundKey: string | undefined;
 
     if (session) {
-      // Update session in DB
+      // Update session in DB with proper state transition
       const sessionSvc = getSessionService();
       if (sessionSvc) {
-        await sessionSvc.update(session._id.toString(), {
+        // Determine next state based on context
+        const context = {
+          isGreenListed: shouldAutoForward,
+          isRedListed: false, // Will be checked below
+          hasText: false, // Will be checked below
+          isForward: false,
+        };
+
+        const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, context);
+
+        await sessionSvc.updateState(session._id.toString(), nextState, {
           selectedChannel: selectedChannelId,
         });
         foundKey = session._id.toString();
@@ -129,10 +145,6 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       await ErrorMessages.sessionExpired(ctx);
       return;
     }
-
-    // Parse forward info to check if it's green-listed or red-listed
-    const forwardInfo = parseForwardInfo(originalMessage);
-    const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
     if (shouldAutoForward) {
       // Get media group messages if available
@@ -184,7 +196,20 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     if (isRedListed) {
       // Store that transform was chosen - update both DB and Map
       if (session && getSessionService()) {
-        await getSessionService().update(session._id.toString(), {
+        // Red-listed: determine next state (text handling or nickname)
+        const content = extractMessageContent(originalMessage);
+        const hasText = !!(content?.text && content.text.trim().length > 0);
+
+        const context = {
+          isGreenListed: false,
+          isRedListed: true,
+          hasText,
+          isForward: false,
+        };
+
+        const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, context);
+
+        await getSessionService().updateState(session._id.toString(), nextState, {
           selectedAction: 'transform',
         });
       } else if (pending) {
@@ -264,7 +289,11 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
       : { customText: undefined };
 
     if (session && getSessionService()) {
-      await getSessionService().update(session._id.toString(), updates);
+      // For custom text, we either wait for input or proceed to completion
+      // Keep state as CUSTOM_TEXT while waiting, or transition to COMPLETED
+      const nextState = action === 'add' ? SessionState.CUSTOM_TEXT : SessionState.COMPLETED;
+
+      await getSessionService().updateState(session._id.toString(), nextState, updates);
       foundKey = session._id.toString();
     } else if (pending) {
       Object.assign(pending[1], updates);
@@ -426,7 +455,19 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
     let foundKey: string | undefined;
 
     if (session && getSessionService()) {
-      await getSessionService().update(session._id.toString(), { selectedNickname });
+      // Transition from NICKNAME_SELECT to CUSTOM_TEXT
+      const context = {
+        isGreenListed: false,
+        isRedListed: false,
+        hasText: false,
+        isForward: false,
+      };
+
+      const nextState = SessionStateMachine.getNextState(SessionState.NICKNAME_SELECT, context);
+
+      await getSessionService().updateState(session._id.toString(), nextState, {
+        selectedNickname,
+      });
       foundKey = session._id.toString();
     } else if (pending) {
       pending[1].selectedNickname = selectedNickname;
@@ -486,7 +527,19 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
     let foundKey: string | undefined;
 
     if (session && getSessionService()) {
-      await getSessionService().update(session._id.toString(), { textHandling });
+      // Transition from TEXT_HANDLING to NICKNAME_SELECT
+      const context = {
+        isGreenListed: false,
+        isRedListed: false,
+        hasText: true,
+        isForward: false,
+      };
+
+      const nextState = SessionStateMachine.getNextState(SessionState.TEXT_HANDLING, context);
+
+      await getSessionService().updateState(session._id.toString(), nextState, {
+        textHandling,
+      });
       foundKey = session._id.toString();
     } else if (pending) {
       pending[1].textHandling = textHandling;
@@ -534,17 +587,27 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       originalMessage.message_id
     );
 
+    // Check if message has text - if so, show text handling first
+    const content = extractMessageContent(originalMessage);
+    const hasText = !!(content?.text && content.text.trim().length > 0);
+
     if (session && getSessionService()) {
-      await getSessionService().update(session._id.toString(), {
+      // Determine next state after selecting transform
+      const context = {
+        isGreenListed: false,
+        isRedListed: false,
+        hasText,
+        isForward: false,
+      };
+
+      const nextState = SessionStateMachine.getNextState(SessionState.ACTION_SELECT, context);
+
+      await getSessionService().updateState(session._id.toString(), nextState, {
         selectedAction: 'transform',
       });
     } else if (pending) {
       pending[1].selectedAction = 'transform';
     }
-
-    // Check if message has text - if so, show text handling first
-    const content = extractMessageContent(originalMessage);
-    const hasText = content?.text && content.text.trim().length > 0;
 
     if (hasText) {
       const keyboard = createTextHandlingKeyboard();
