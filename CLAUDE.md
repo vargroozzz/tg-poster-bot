@@ -34,11 +34,15 @@ Users can manage multiple posting channels and select destination per message.
 
 Three types of sources with different attribution rules:
 
-1. **Green-listed channels:** Auto-forward as-is (no transformation)
-2. **Red-listed channels:** Omit channel attribution, only add user nickname if available
-3. **Regular channels/users:** Add attribution based on custom nickname or channel link
+1. **Green-listed channels:** Auto-forward as-is using `copyMessage` (no transformation, no user interaction)
+2. **Red-listed channels:** Auto-transform (skips Transform/Forward choice), omits channel reference, shows only "via [nickname]" if user selected
+3. **Regular channels/users:** Show Transform/Forward choice, add attribution based on channel link and/or nickname
 
-**Custom Nicknames:** Users can set friendly names for people (stored in `user-nickname` collection). If no nickname is set, user attribution is omitted entirely.
+**Custom Nicknames:** Users can set friendly names for people (stored in `user-nickname` collection). Nicknames are selected via inline keyboard during Transform flow. If "No attribution" selected, user attribution is omitted entirely.
+
+**Forward vs Transform:**
+- **Forward:** Uses Telegram's `copyMessage` API to preserve "Forwarded from" attribution
+- **Transform:** Extracts content, adds custom attribution, sends as new message
 
 **Files:**
 - `src/services/transformer.service.ts` - Attribution logic
@@ -63,23 +67,36 @@ For messages with text/caption, users can choose:
 1. User forwards message to bot
 2. Bot shows channel selection buttons
 3. User selects target channel
-4. If message has text → Show text handling options (Keep/Remove/Quote)
-5. User selects text handling
-6. Bot shows Transform/Forward buttons
-7. User selects action
-8. Bot calculates next available slot (hh:00:01 or hh:30:01)
-9. Saves to MongoDB with status='pending'
-10. Background worker posts at scheduled time
+4. Bot checks source:
+   - If GREEN-LISTED → Auto-forward immediately (skip to step 9)
+   - If RED-LISTED → Auto-transform (skip to step 6, no Transform/Forward choice)
+   - Otherwise → Show Transform/Forward buttons (step 5)
+5. User selects Transform or Forward:
+   - FORWARD → Skip to step 9 (uses copyMessage, no modifications)
+   - TRANSFORM → Continue to step 6
+6. If message has text → Show text handling options (Keep/Remove/Quote)
+7. If from channel → Show nickname selection (or "No attribution")
+8. Show custom text option (Add custom text / Skip)
+9. Bot calculates next available slot (hh:00:01 or hh:30:01)
+10. Saves to MongoDB with status='pending'
+11. Background worker posts at scheduled time using:
+    - copyMessage for 'forward' action (preserves "Forwarded from")
+    - sendPhoto/sendVideo/etc for 'transform' action (new message with attribution)
 ```
 
 ### Attribution Logic Flow
 ```
-1. Check if source is green-listed → Return original text
-2. Check if from channel:
-   - If red-listed AND has user → Add user nickname (if set)
-   - If NOT red-listed AND has messageLink → Add channel link
-3. Check if from user:
-   - If has custom nickname → Add nickname
+1. If action is 'forward' → Return original text (no transformation)
+2. Check if source is green-listed → Return original text
+3. Check if from channel:
+   - If red-listed:
+     * Has nickname selected → "via [nickname]" (NO channel reference)
+     * No nickname → No attribution
+   - If NOT red-listed AND has messageLink:
+     * Has nickname selected → "from [nickname] via [channel link]"
+     * No nickname → "via [channel link]"
+4. Check if from user (not via channel):
+   - If has custom nickname → "via [nickname]"
    - Otherwise → No attribution
 ```
 
@@ -179,6 +196,47 @@ const nowInTz = toZonedTime(nowUtc, 'Europe/Kiev');
 const slotUtc = fromZonedTime(nextSlot, 'Europe/Kiev');
 ```
 
+### Media Group Buffering
+Telegram sends media group items as separate messages with shared `media_group_id`. Buffer them before processing:
+```typescript
+// Buffer messages for 1 second to collect all items
+const mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
+
+if (mediaGroupId) {
+  const buffer = mediaGroupBuffers.get(mediaGroupId);
+  if (buffer) {
+    buffer.messages.push(message);
+    clearTimeout(buffer.timeout);
+    buffer.timeout = setTimeout(() => processMediaGroup(mediaGroupId), 1000);
+  } else {
+    const timeout = setTimeout(() => processMediaGroup(mediaGroupId), 1000);
+    mediaGroupBuffers.set(mediaGroupId, { messages: [message], timeout });
+  }
+  return; // Don't process yet
+}
+```
+
+### Forward vs Transform in Post Worker
+The post worker uses different APIs based on the action:
+```typescript
+// For 'forward' action - use copyMessage to preserve attribution
+if (post.action === 'forward') {
+  result = await this.api.copyMessage(
+    post.targetChannelId,
+    post.originalForward.chatId,
+    post.originalForward.messageId
+  );
+}
+
+// For 'transform' action - send as new message with transformed content
+else if (post.content.type === 'photo') {
+  result = await this.api.sendPhoto(post.targetChannelId, post.content.fileId, {
+    caption: post.content.text,
+    parse_mode: 'HTML'
+  });
+}
+```
+
 ## Common Pitfalls
 
 ### ❌ Don't use `schedule_date` parameter
@@ -203,6 +261,12 @@ const name = username ?? title ?? 'Unknown';
 const name = username || title || 'Unknown';
 ```
 
+### ❌ Don't show Transform/Forward choice for red-listed channels
+Red-listed channels should auto-transform without asking. Check `isRedListed` before showing the action buttons.
+
+### ❌ Don't re-send content for forward action
+Use `copyMessage` API to preserve "Forwarded from" attribution, not `sendPhoto`/`sendVideo`/etc.
+
 ### ✅ Do verify builds before committing
 Always run `npm run build` to catch TypeScript errors.
 
@@ -218,7 +282,13 @@ AUTHORIZED_USER_ID=     # Single user allowed to use bot
 NODE_ENV=production     # Environment mode
 TZ=Europe/Kiev          # Timezone for scheduling
 PORT=3000               # HTTP health check port
+WEBHOOK_URL=            # Webhook URL for production (e.g., https://yourdomain.onrender.com)
 ```
+
+**Webhook vs Long Polling:**
+- Production uses webhooks (`WEBHOOK_URL` set) to prevent 409 Conflict errors during deployments
+- Development uses long polling (no `WEBHOOK_URL`) for easier testing
+- Webhooks allow multiple instances during zero-downtime deployments
 
 ## Deployment (Render)
 
@@ -258,9 +328,17 @@ npm start
 - `src/bot/handlers/command.handler.ts` - All bot commands
 - `src/utils/time-slots.ts` - Time slot calculation (hh:00:01 or hh:30:01)
 
+## Implemented Features
+
+- [x] Media group support (albums with multiple photos/videos)
+- [x] Inline nickname selection with "No attribution" option
+- [x] Custom text feature (prepend text to posts)
+- [x] Multi-channel support with channel selection
+- [x] Webhooks deployment (prevents 409 conflicts)
+- [x] True forwarding via copyMessage (preserves "Forwarded from")
+
 ## Future Improvements
 
-- [ ] Media group support (albums with multiple photos)
 - [ ] Edit scheduled posts before they're published
 - [ ] Cancel/delete scheduled posts
 - [ ] Statistics dashboard
