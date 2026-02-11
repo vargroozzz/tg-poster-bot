@@ -1,6 +1,16 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import type { ForwardInfo, MessageContent, TransformAction } from '../../types/message.types.js';
 
+/**
+ * Metadata for tracking retry attempts
+ */
+export interface RetryMetadata {
+  attemptCount: number;
+  lastAttemptAt?: Date;
+  nextRetryAt?: Date;
+  lastError?: string;
+}
+
 export interface IScheduledPost extends Document {
   scheduledTime: Date;
   targetChannelId: string;
@@ -11,6 +21,7 @@ export interface IScheduledPost extends Document {
   status: 'pending' | 'posted' | 'failed';
   postedAt?: Date;
   error?: string;
+  retryMetadata?: RetryMetadata;
   createdAt: Date;
 }
 
@@ -75,6 +86,15 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
   },
   error: {
     type: String,
+  },
+  retryMetadata: {
+    attemptCount: {
+      type: Number,
+      default: 0,
+    },
+    lastAttemptAt: Date,
+    nextRetryAt: Date,
+    lastError: String,
   },
   createdAt: {
     type: Date,

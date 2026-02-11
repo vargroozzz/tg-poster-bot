@@ -6,12 +6,13 @@ import { transformerService } from '../../services/transformer.service.js';
 import { SchedulerService } from '../../services/scheduler.service.js';
 import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
 import { createTextHandlingKeyboard } from '../keyboards/text-handling.keyboard.js';
-import { createNicknameSelectKeyboard } from '../keyboards/nickname-select.keyboard.js';
 import { createCustomTextKeyboard } from '../keyboards/custom-text.keyboard.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
-import { listUserNicknames } from '../../database/models/user-nickname.model.js';
+import { PendingForwardHelper, type PendingForward } from '../../shared/helpers/pending-forward-finder.js';
+import { ErrorMessages } from '../../shared/constants/error-messages.js';
+import { NicknameHelper } from '../../shared/helpers/nickname.helper.js';
 
 const schedulerService = new SchedulerService(bot.api);
 
@@ -32,22 +33,19 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
 
     if (!originalMessage) {
-      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      await ErrorMessages.originalMessageNotFound(ctx);
       return;
     }
 
     // Find and update the pending forward with selected channel
-    let foundKey: string | undefined;
-    for (const [key, value] of pendingForwards.entries()) {
-      if (value.message.message_id === originalMessage.message_id) {
-        value.selectedChannel = selectedChannelId;
-        foundKey = key;
-        break;
-      }
-    }
+    const foundKey = await PendingForwardHelper.updateOrExpire(
+      ctx,
+      originalMessage.message_id,
+      pendingForwards,
+      { selectedChannel: selectedChannelId }
+    );
 
     if (!foundKey) {
-      await ctx.editMessageText('❌ Session expired. Please forward the message again.');
       return;
     }
 
@@ -57,13 +55,11 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     if (shouldAutoForward) {
       // Get media group messages if available
-      let mediaGroupMessages: Message[] | undefined;
-      for (const [_key, value] of pendingForwards.entries()) {
-        if (value.message.message_id === originalMessage.message_id) {
-          mediaGroupMessages = value.mediaGroupMessages;
-          break;
-        }
-      }
+      const found = PendingForwardHelper.findByMessageId(
+        originalMessage.message_id,
+        pendingForwards
+      );
+      const mediaGroupMessages = found?.[1].mediaGroupMessages;
 
       // Auto-forward green-listed content
       const content = extractMessageContent(originalMessage, mediaGroupMessages);
@@ -98,12 +94,11 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     if (isRedListed) {
       // Store that transform was chosen
-      for (const [_key, value] of pendingForwards.entries()) {
-        if (value.message.message_id === originalMessage.message_id) {
-          value.selectedAction = 'transform';
-          break;
-        }
-      }
+      PendingForwardHelper.updateByMessageId(
+        originalMessage.message_id,
+        pendingForwards,
+        { selectedAction: 'transform' }
+      );
 
       // Auto-transform: proceed directly to text handling or nickname selection
       const content = extractMessageContent(originalMessage);
@@ -116,12 +111,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
         });
       } else {
         // No text - show nickname selection
-        const nicknames = await listUserNicknames();
-        const nicknameOptions = nicknames.map((n) => ({
-          userId: n.userId,
-          nickname: n.nickname,
-        }));
-        const keyboard = createNicknameSelectKeyboard(nicknameOptions);
+        const keyboard = await NicknameHelper.getNicknameKeyboard();
 
         await ctx.editMessageText('Who should be credited for this post?', {
           reply_markup: keyboard,
@@ -140,10 +130,12 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     logger.debug(`Channel ${selectedChannelId} selected for message ${originalMessage.message_id}`);
   } catch (error) {
-    logger.error('Error in channel selection callback:', error);
-    await ctx.editMessageText('❌ Error processing channel selection. Please try again.').catch(() => {
-      ctx.reply('❌ Error processing channel selection. Please try again.');
-    });
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error processing channel selection. Please try again.',
+      'Error in channel selection callback'
+    );
   }
 });
 
@@ -156,36 +148,30 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
     const action = match?.[1];
 
     if (!action) {
-      await ctx.editMessageText('❌ Invalid action.');
+      await ErrorMessages.invalidSelection(ctx, 'action');
       return;
     }
 
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
 
     if (!originalMessage) {
-      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      await ErrorMessages.originalMessageNotFound(ctx);
       return;
     }
 
-    // Find the pending forward
-    let foundKey: string | undefined;
-    for (const [key, value] of pendingForwards.entries()) {
-      if (value.message.message_id === originalMessage.message_id) {
-        if (action === 'add') {
-          // Set waiting flag and ask for text
-          value.waitingForCustomText = true;
-          foundKey = key;
-        } else {
-          // Skip custom text
-          value.customText = undefined;
-          foundKey = key;
-        }
-        break;
-      }
-    }
+    // Find and update the pending forward
+    const updates = action === 'add'
+      ? { waitingForCustomText: true }
+      : { customText: undefined };
+
+    const foundKey = await PendingForwardHelper.updateOrExpire(
+      ctx,
+      originalMessage.message_id,
+      pendingForwards,
+      updates
+    );
 
     if (!foundKey) {
-      await ctx.editMessageText('❌ Session expired. Please forward the message again.');
       return;
     }
 
@@ -201,10 +187,12 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
 
     logger.debug(`Custom text action "${action}" for message ${originalMessage.message_id}`);
   } catch (error) {
-    logger.error('Error in custom text callback:', error);
-    await ctx.editMessageText('❌ Error processing custom text. Please try again.').catch(() => {
-      ctx.reply('❌ Error processing custom text. Please try again.');
-    });
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error processing custom text. Please try again.',
+      'Error in custom text callback'
+    );
   }
 });
 
@@ -212,27 +200,31 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
 async function scheduleTransformPost(ctx: Context, originalMessage: Message, pendingKey?: string) {
   try {
     // Find the pending forward data
-    let selectedChannel: string | undefined;
-    let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
-    let selectedNickname: string | null | undefined;
-    let customText: string | undefined;
-    let mediaGroupMessages: Message[] | undefined;
-    let foundKey: string | undefined = pendingKey;
+    let foundKey = pendingKey;
+    let pending: PendingForward | undefined;
 
-    for (const [key, value] of pendingForwards.entries()) {
-      if (value.message.message_id === originalMessage.message_id) {
-        selectedChannel = value.selectedChannel;
-        textHandling = value.textHandling ?? 'keep';
-        selectedNickname = value.selectedNickname;
-        customText = value.customText;
-        mediaGroupMessages = value.mediaGroupMessages;
-        if (!foundKey) foundKey = key;
-        break;
+    if (pendingKey) {
+      pending = pendingForwards.get(pendingKey);
+    } else {
+      const found = PendingForwardHelper.findByMessageId(originalMessage.message_id, pendingForwards);
+      if (found) {
+        [foundKey, pending] = found;
       }
     }
 
+    if (!pending) {
+      await ErrorMessages.channelSelectionRequired(ctx);
+      return;
+    }
+
+    const selectedChannel = pending.selectedChannel;
+    const textHandling = pending.textHandling ?? 'keep';
+    const selectedNickname = pending.selectedNickname;
+    const customText = pending.customText;
+    const mediaGroupMessages = pending.mediaGroupMessages;
+
     if (!selectedChannel) {
-      await ctx.editMessageText('❌ No channel selected. Please forward the message again.');
+      await ErrorMessages.channelSelectionRequired(ctx);
       return;
     }
 
@@ -243,7 +235,7 @@ async function scheduleTransformPost(ctx: Context, originalMessage: Message, pen
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
 
     if (!content) {
-      await ctx.editMessageText('❌ Unsupported message type.');
+      await ErrorMessages.unsupportedMessageType(ctx);
       return;
     }
 
@@ -287,10 +279,12 @@ async function scheduleTransformPost(ctx: Context, originalMessage: Message, pen
       pendingForwards.delete(foundKey);
     }
   } catch (error) {
-    logger.error('Error scheduling transform post:', error);
-    await ctx.editMessageText('❌ Error scheduling post. Please try again.').catch(() => {
-      ctx.reply('❌ Error scheduling post. Please try again.');
-    });
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error scheduling post. Please try again.',
+      'Error scheduling transform post'
+    );
   }
 }
 
@@ -303,7 +297,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
     const nicknameSelection = match?.[1];
 
     if (!nicknameSelection) {
-      await ctx.editMessageText('❌ Invalid nickname selection.');
+      await ErrorMessages.invalidSelection(ctx, 'nickname');
       return;
     }
 
@@ -311,32 +305,21 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
 
     if (!originalMessage) {
-      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      await ErrorMessages.originalMessageNotFound(ctx);
       return;
     }
 
-    // Update the pending forward with nickname selection
-    let foundKey: string | undefined;
-    for (const [key, value] of pendingForwards.entries()) {
-      if (value.message.message_id === originalMessage.message_id) {
-        // "none" means no attribution, store as null
-        // Otherwise store the nickname text
-        if (nicknameSelection === 'none') {
-          value.selectedNickname = null;
-        } else {
-          // nicknameSelection is userId, need to get the actual nickname
-          const userId = parseInt(nicknameSelection, 10);
-          const nicknames = await listUserNicknames();
-          const found = nicknames.find((n) => n.userId === userId);
-          value.selectedNickname = found?.nickname ?? null;
-        }
-        foundKey = key;
-        break;
-      }
-    }
+    // Parse nickname selection and update pending forward
+    const selectedNickname = await NicknameHelper.parseNicknameSelection(nicknameSelection);
+
+    const foundKey = await PendingForwardHelper.updateOrExpire(
+      ctx,
+      originalMessage.message_id,
+      pendingForwards,
+      { selectedNickname }
+    );
 
     if (!foundKey) {
-      await ctx.editMessageText('❌ Session expired. Please forward the message again.');
       return;
     }
 
@@ -349,10 +332,12 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
 
     logger.debug(`Nickname "${nicknameSelection}" selected for message ${originalMessage.message_id}`);
   } catch (error) {
-    logger.error('Error in nickname selection callback:', error);
-    await ctx.editMessageText('❌ Error processing nickname selection. Please try again.').catch(() => {
-      ctx.reply('❌ Error processing nickname selection. Please try again.');
-    });
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error processing nickname selection. Please try again.',
+      'Error in nickname selection callback'
+    );
   }
 });
 
@@ -365,7 +350,7 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
     const textHandling = match?.[1] as 'keep' | 'remove' | 'quote';
 
     if (!textHandling) {
-      await ctx.editMessageText('❌ Invalid text handling option.');
+      await ErrorMessages.invalidSelection(ctx, 'text handling option');
       return;
     }
 
@@ -373,32 +358,24 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
 
     if (!originalMessage) {
-      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      await ErrorMessages.originalMessageNotFound(ctx);
       return;
     }
 
     // Update the pending forward with text handling choice
-    let foundKey: string | undefined;
-    for (const [key, value] of pendingForwards.entries()) {
-      if (value.message.message_id === originalMessage.message_id) {
-        value.textHandling = textHandling;
-        foundKey = key;
-        break;
-      }
-    }
+    const foundKey = await PendingForwardHelper.updateOrExpire(
+      ctx,
+      originalMessage.message_id,
+      pendingForwards,
+      { textHandling }
+    );
 
     if (!foundKey) {
-      await ctx.editMessageText('❌ Session expired. Please forward the message again.');
       return;
     }
 
     // After text handling, proceed to nickname selection
-    const nicknames = await listUserNicknames();
-    const nicknameOptions = nicknames.map((n) => ({
-      userId: n.userId,
-      nickname: n.nickname,
-    }));
-    const keyboard = createNicknameSelectKeyboard(nicknameOptions);
+    const keyboard = await NicknameHelper.getNicknameKeyboard();
 
     await ctx.editMessageText('Who should be credited for this post?', {
       reply_markup: keyboard,
@@ -406,10 +383,12 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
 
     logger.debug(`Text handling "${textHandling}" selected for message ${originalMessage.message_id}`);
   } catch (error) {
-    logger.error('Error in text handling callback:', error);
-    await ctx.editMessageText('❌ Error processing text handling. Please try again.').catch(() => {
-      ctx.reply('❌ Error processing text handling. Please try again.');
-    });
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error processing text handling. Please try again.',
+      'Error in text handling callback'
+    );
   }
 });
 
@@ -421,17 +400,16 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
 
     if (!originalMessage) {
-      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      await ErrorMessages.originalMessageNotFound(ctx);
       return;
     }
 
     // Store the selected action
-    for (const [_key, value] of pendingForwards.entries()) {
-      if (value.message.message_id === originalMessage.message_id) {
-        value.selectedAction = 'transform';
-        break;
-      }
-    }
+    PendingForwardHelper.updateByMessageId(
+      originalMessage.message_id,
+      pendingForwards,
+      { selectedAction: 'transform' }
+    );
 
     // Check if message has text - if so, show text handling first
     const content = extractMessageContent(originalMessage);
@@ -444,12 +422,7 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       });
     } else {
       // No text - show nickname selection for all messages
-      const nicknames = await listUserNicknames();
-      const nicknameOptions = nicknames.map((n) => ({
-        userId: n.userId,
-        nickname: n.nickname,
-      }));
-      const keyboard = createNicknameSelectKeyboard(nicknameOptions);
+      const keyboard = await NicknameHelper.getNicknameKeyboard();
 
       await ctx.editMessageText('Who should be credited for this post?', {
         reply_markup: keyboard,
@@ -458,10 +431,12 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
 
     logger.debug(`Transform action selected for message ${originalMessage.message_id}`);
   } catch (error) {
-    logger.error('Error in transform callback:', error);
-    await ctx.editMessageText('❌ Error processing transform. Please try again.').catch(() => {
-      ctx.reply('❌ Error processing transform. Please try again.');
-    });
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error processing transform. Please try again.',
+      'Error in transform callback'
+    );
   }
 });
 
@@ -473,26 +448,27 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
 
     if (!originalMessage) {
-      await ctx.editMessageText('❌ Original message not found. Please forward again.');
+      await ErrorMessages.originalMessageNotFound(ctx);
       return;
     }
 
     // Find the pending forward to get selected channel and media group
-    let selectedChannel: string | undefined;
-    let mediaGroupMessages: Message[] | undefined;
-    let foundKey: string | undefined;
+    const found = await PendingForwardHelper.getOrExpire(
+      ctx,
+      originalMessage.message_id,
+      pendingForwards
+    );
 
-    for (const [key, value] of pendingForwards.entries()) {
-      if (value.message.message_id === originalMessage.message_id) {
-        selectedChannel = value.selectedChannel;
-        mediaGroupMessages = value.mediaGroupMessages;
-        foundKey = key;
-        break;
-      }
+    if (!found) {
+      return;
     }
 
+    const [foundKey, pending] = found;
+    const selectedChannel = pending.selectedChannel;
+    const mediaGroupMessages = pending.mediaGroupMessages;
+
     if (!selectedChannel) {
-      await ctx.editMessageText('❌ No channel selected. Please forward the message again.');
+      await ErrorMessages.channelSelectionRequired(ctx);
       return;
     }
 
@@ -503,7 +479,7 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
 
     if (!content) {
-      await ctx.editMessageText('❌ Unsupported message type.');
+      await ErrorMessages.unsupportedMessageType(ctx);
       return;
     }
 
@@ -547,10 +523,11 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       pendingForwards.delete(foundKey);
     }
   } catch (error) {
-    logger.error('Error in forward callback:', error);
-    await ctx.editMessageText('❌ Error scheduling post. Please try again.').catch(() => {
-      // If edit fails, send a new message
-      ctx.reply('❌ Error scheduling post. Please try again.');
-    });
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error scheduling post. Please try again.',
+      'Error in forward callback'
+    );
   }
 });

@@ -9,24 +9,14 @@ import type { MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
 import { SchedulerService } from '../../services/scheduler.service.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
+import type { PendingForward } from '../../shared/helpers/pending-forward-finder.js';
 
 const schedulerService = new SchedulerService(bot.api);
 
 // Store forwarded message data temporarily (in-memory for simplicity)
 // In production, consider using Grammy's conversation plugin or Redis
-interface PendingForward {
-  message: Message;
-  selectedChannel?: string;
-  textHandling?: 'keep' | 'remove' | 'quote';
-  selectedAction?: 'transform' | 'forward'; // Which action was chosen
-  selectedNickname?: string | null; // null = "No attribution", undefined = not selected yet
-  customText?: string; // Optional custom text to prepend
-  waitingForCustomText?: boolean; // Flag to indicate waiting for text input
-  mediaGroupMessages?: Message[]; // For collecting media group items
-  timestamp: number;
-}
-
-const pendingForwards = new Map<string, PendingForward>();
+// TODO: Replace with database-backed session storage in Phase 4
+export const pendingForwards = new Map<string, PendingForward>();
 
 // Store media group buffers temporarily
 interface MediaGroupBuffer {
@@ -66,10 +56,9 @@ bot.on('message:text', async (ctx: Context) => {
 
     // Find if there's a pending forward waiting for custom text
     let foundEntry: [string, PendingForward] | undefined;
-    for (const entry of pendingForwards.entries()) {
-      const [_key, value] = entry;
+    for (const [key, value] of pendingForwards.entries()) {
       if (value.waitingForCustomText) {
-        foundEntry = entry;
+        foundEntry = [key, value];
         break;
       }
     }
@@ -412,6 +401,3 @@ async function scheduleTransformPostFromForwardHandler(
     await ctx.reply('❌ Error scheduling post. Please try again.');
   }
 }
-
-// Export for use in callback handler
-export { pendingForwards };

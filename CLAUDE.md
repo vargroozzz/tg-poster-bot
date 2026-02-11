@@ -1,8 +1,117 @@
 # Telegram Channel Poster Bot - Developer Guide
 
+## Table of Contents
+
+- [Project Overview](#project-overview)
+- [Quick Start](#quick-start)
+- [Key Architecture Decisions](#key-architecture-decisions)
+- [Flow Diagrams](#flow-diagrams)
+- [Database Schema](#database-schema)
+- [Bot Commands](#bot-commands)
+- [Critical Code Patterns](#critical-code-patterns)
+- [Common Pitfalls](#common-pitfalls)
+- [Error Handling & Logging](#error-handling--logging)
+- [Troubleshooting](#troubleshooting)
+- [Environment Variables](#environment-variables)
+- [Deployment](#deployment)
+- [Key Files](#key-files-to-know)
+
 ## Project Overview
 
 This bot schedules Telegram channel posts with automatic attribution. It's designed for a single authorized user who curates content from various sources (users, channels) and schedules them to their channels at specific time slots (hh:00:01 or hh:30:01 in Europe/Kyiv timezone).
+
+**Key Features:**
+- Schedule posts to multiple channels
+- Automatic attribution with customizable nicknames
+- Forward or transform messages
+- Green/red list management for channels
+- Text handling options (keep/remove/quote)
+- Media group (album) support
+- Webhook-based deployment for zero-downtime updates
+
+## Quick Start
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Set up environment variables (copy from .env.example)
+cp .env.example .env
+# Edit .env with your BOT_TOKEN, MONGODB_URI, and AUTHORIZED_USER_ID
+
+# 3. Run in development mode
+npm run dev
+
+# 4. Send a message to your bot to test scheduling
+```
+
+**First-time setup commands:**
+1. `/addchannel` - Add your posting channel(s)
+2. Forward a message - Test the scheduling flow
+3. `/list` - View scheduled posts
+
+## System Architecture
+
+```
+┌─────────────────┐
+│  Telegram API   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────┐
+│              Grammy Bot (index.ts)                  │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Message Handler (forward.handler.ts)        │   │
+│  │  - Receives messages (forwarded or original) │   │
+│  │  - Shows channel selection                   │   │
+│  │  - Shows Transform/Forward/Text options      │   │
+│  │  - Calls SchedulerService                    │   │
+│  └──────────────────────────────────────────────┘   │
+│                                                      │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Callback Handler (callback.handler.ts)      │   │
+│  │  - Processes inline button clicks            │   │
+│  │  - Manages flow state                        │   │
+│  └──────────────────────────────────────────────┘   │
+│                                                      │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Command Handler (command.handler.ts)        │   │
+│  │  - /addchannel, /greenlist, /list, etc.     │   │
+│  └──────────────────────────────────────────────┘   │
+└──────────────────┬───────────────────────────────────┘
+                   │
+                   ▼
+         ┌─────────────────────┐
+         │  SchedulerService   │
+         │  - Calculate slots  │
+         │  - Save to MongoDB  │
+         └─────────┬───────────┘
+                   │
+                   ▼
+         ┌─────────────────────┐         ┌──────────────────┐
+         │   MongoDB Atlas     │◄────────┤ PostWorkerService│
+         │  - ScheduledPost    │         │  (runs every 30s)│
+         │  - PostingChannel   │         │                  │
+         │  - UserNickname     │         │  1. Query pending│
+         │  - ChannelList      │         │  2. Check time   │
+         └─────────────────────┘         │  3. Post to TG   │
+                                         │  4. Update status│
+                                         └──────────────────┘
+```
+
+**Key Components:**
+- **Grammy Bot**: Handles incoming messages and commands via webhooks or polling
+- **SchedulerService**: Calculates next available time slot, saves to database
+- **PostWorkerService**: Background cron job that publishes scheduled posts
+- **TransformerService**: Applies attribution and text transformations
+- **MongoDB**: Stores scheduled posts, configuration, nicknames
+
+**Data Flow:**
+1. User sends message → Bot receives it
+2. User makes choices (channel, transform/forward, text handling, nickname)
+3. SchedulerService calculates next slot and saves to DB
+4. PostWorkerService runs every 30s, finds due posts, publishes them
+5. Status updated to 'posted' or 'failed'
 
 ## Key Architecture Decisions
 
@@ -154,6 +263,36 @@ For messages with text/caption, users can choose:
 }
 ```
 
+## Bot Commands
+
+### Posting Channel Management
+- `/addchannel` - Add a new posting channel (must be admin of the channel)
+- `/listchannels` - List all configured posting channels
+- `/removechannel <channelId>` - Remove a posting channel
+
+### Schedule Management
+- `/list` - View all scheduled posts
+- `/stats` - View posting statistics
+- Forward any message - Start the scheduling flow
+
+### Channel Lists (Attribution Control)
+- `/greenlist [reply]` - Add channel to green list (auto-forward without changes)
+- `/redlist [reply]` - Add channel to red list (auto-transform, hide channel link)
+- `/removelist [reply]` - Remove channel from green/red lists
+- `/listgreen` - Show all green-listed channels
+- `/listred` - Show all red-listed channels
+
+**Tip:** Use reply-to-message for list commands to auto-extract channel ID
+
+### Nickname Management
+- `/addnickname <userId> <nickname>` - Add a custom nickname for a user
+- `/listnicknames` - Show all configured nicknames
+- `/removenickname <userId>` - Remove a nickname
+
+### Other
+- `/start` - Show welcome message
+- `/help` - Show help text
+
 ## Critical Code Patterns
 
 ### Using Grammy Raw API
@@ -196,10 +335,12 @@ All times stored as UTC in MongoDB, converted to Europe/Kyiv for slot calculatio
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 
 const nowUtc = new Date();
-const nowInTz = toZonedTime(nowUtc, 'Europe/Kiev');
+const nowInTz = toZonedTime(nowUtc, 'Europe/Kyiv');
 // Calculate slot in Kyiv timezone
-const slotUtc = fromZonedTime(nextSlot, 'Europe/Kiev');
+const slotUtc = fromZonedTime(nextSlot, 'Europe/Kyiv');
 ```
+
+**Note:** Use `'Europe/Kyiv'` (not `'Europe/Kiev'`) consistently throughout the codebase.
 
 ### Media Group Buffering
 Telegram sends media group items as separate messages with shared `media_group_id`. Buffer them before processing:
@@ -310,22 +451,185 @@ Always run `npm run build` to catch TypeScript errors.
 ### ✅ Do check if code has already been deployed
 Check logs to verify if new code is running before debugging.
 
+## Error Handling & Logging
+
+### Error Handling Strategy
+
+**Post Worker Errors:**
+- Failed posts are marked with `status: 'failed'` and `error` field in database
+- Worker continues processing other posts even if one fails
+- Errors are logged with full context for debugging
+
+**Telegram API Errors:**
+- Rate limit errors (429): Implement exponential backoff
+- Permission errors: Log and mark post as failed
+- Network errors: Retry with timeout
+
+**Pattern:**
+```typescript
+try {
+  await this.api.sendPhoto(channelId, fileId, options);
+  await post.updateOne({ status: 'posted', postedAt: new Date() });
+} catch (error) {
+  console.error(`Failed to post: ${error.message}`, { postId: post._id });
+  await post.updateOne({
+    status: 'failed',
+    error: error.message
+  });
+}
+```
+
+### Logging
+
+**Production Logging:**
+- Use `console.log` for normal operations
+- Use `console.error` for errors with context
+- Include relevant IDs (postId, channelId, userId) in logs
+- Render captures stdout/stderr automatically
+
+**What to Log:**
+- Post scheduling events
+- Post publishing events (success/failure)
+- Worker execution cycles (at INFO level, not every cycle)
+- Telegram API errors
+- Authorization failures
+
+**What NOT to Log:**
+- Full message content (privacy)
+- Bot token or sensitive credentials
+- Every webhook request (too noisy)
+
+### Telegram API Rate Limits
+
+**Limits:**
+- 30 messages per second to the same group
+- 20 messages per minute to different users
+- Webhooks: 1 request per second
+
+**Handling:**
+- Post worker runs every 30 seconds (well under rate limits)
+- For bulk operations, add delays between API calls
+- Catch 429 errors and implement retry with backoff
+
+## Troubleshooting
+
+### Bot Not Responding
+
+1. **Check authorization:**
+   ```bash
+   # Verify AUTHORIZED_USER_ID matches your Telegram user ID
+   # Send /start to bot, check logs for authorization errors
+   ```
+
+2. **Check webhook status:**
+   ```bash
+   # View Render logs for webhook errors
+   # Verify WEBHOOK_URL is set correctly in production
+   ```
+
+3. **Check if bot is running:**
+   ```bash
+   curl https://your-app.onrender.com/health
+   # Should return {"status": "ok"}
+   ```
+
+### Posts Not Publishing
+
+1. **Check post worker logs:**
+   ```bash
+   # Look for "Post worker running..." messages
+   # Check for error messages during post processing
+   ```
+
+2. **Query database:**
+   ```javascript
+   // Check pending posts in MongoDB
+   db.scheduledposts.find({ status: 'pending' })
+
+   // Check failed posts
+   db.scheduledposts.find({ status: 'failed' })
+   ```
+
+3. **Verify bot permissions:**
+   - Bot must be admin of target channel
+   - Bot needs permission to post messages
+
+### 409 Conflict Errors
+
+**Cause:** Multiple bot instances running (old deployment still alive)
+
+**Solution:**
+- Use webhooks in production (set `WEBHOOK_URL`)
+- Webhooks prevent multiple instances from polling
+- Render's zero-downtime deployment handles graceful shutdown
+
+### Timezone Issues
+
+**Symptom:** Posts scheduled at wrong time
+
+**Solution:**
+- All times in DB are UTC
+- Display times converted to Europe/Kyiv
+- Verify `TZ=Europe/Kyiv` environment variable is set
+- Check server time: `date` command should show correct timezone
+
+### Media Group Not Working
+
+**Symptom:** Album posts as individual messages
+
+**Cause:** Media group buffer timeout too short or messages not grouped
+
+**Debug:**
+```typescript
+// Add logging in media group handler
+console.log('Media group received:', {
+  mediaGroupId,
+  messageCount: buffer.messages.length
+});
+```
+
+### TypeScript Build Errors
+
+**Always verify builds before committing:**
+```bash
+npm run build
+# Fix all TypeScript errors before pushing
+```
+
+**Common issues:**
+- Missing type imports
+- Incorrect use of `as any` (should only be used for Grammy API limitations)
+- Null safety violations (use `??` operator)
+
 ## Environment Variables
 
 ```env
 BOT_TOKEN=              # From @BotFather
 MONGODB_URI=            # MongoDB Atlas connection string
-AUTHORIZED_USER_ID=     # Single user allowed to use bot
+AUTHORIZED_USER_ID=     # Single user allowed to use bot (Telegram user ID)
 NODE_ENV=production     # Environment mode
-TZ=Europe/Kiev          # Timezone for scheduling
+TZ=Europe/Kyiv          # Timezone for scheduling (use Kyiv, not Kiev)
 PORT=3000               # HTTP health check port
 WEBHOOK_URL=            # Webhook URL for production (e.g., https://yourdomain.onrender.com)
 ```
+
+**Security Notes:**
+- Never commit `.env` file to git (included in `.gitignore`)
+- `BOT_TOKEN` must be kept secret - revoke and regenerate if exposed
+- `AUTHORIZED_USER_ID` restricts bot to single user - all other requests are rejected
+- Use environment variables in Render dashboard, not hardcoded values
 
 **Webhook vs Long Polling:**
 - Production uses webhooks (`WEBHOOK_URL` set) to prevent 409 Conflict errors during deployments
 - Development uses long polling (no `WEBHOOK_URL`) for easier testing
 - Webhooks allow multiple instances during zero-downtime deployments
+
+**Finding Your User ID:**
+```
+1. Send any message to @userinfobot on Telegram
+2. It will reply with your user ID
+3. Use this number for AUTHORIZED_USER_ID
+```
 
 ## Deployment (Render)
 
@@ -344,15 +648,69 @@ The bot runs continuously and has an HTTP endpoint for health checks, so it's co
 # Install dependencies
 npm install
 
-# Run in development mode
+# Run in development mode (uses long polling)
 npm run dev
 
-# Build
+# Build TypeScript
 npm run build
 
 # Run production build
 npm start
+
+# Run linting
+npm run lint
 ```
+
+### Testing Strategy
+
+**Manual Testing:**
+1. Start bot in development mode (`npm run dev`)
+2. Send test messages to bot
+3. Verify scheduling flow works
+4. Check database for scheduled posts
+5. Wait for post worker to publish (or adjust scheduledTime manually)
+6. Verify posts appear in channel
+
+**Testing Commands:**
+```bash
+# Test channel management
+/addchannel
+/listchannels
+
+# Test list management (reply to a forwarded message)
+/greenlist
+/redlist
+
+# Test scheduling
+# Forward a message, follow the flow
+
+# Test post worker (check logs)
+# Posts should appear at hh:00:01 or hh:30:01
+```
+
+**Database Queries for Debugging:**
+```javascript
+// View pending posts
+db.scheduledposts.find({ status: 'pending' }).sort({ scheduledTime: 1 })
+
+// View recent posted messages
+db.scheduledposts.find({ status: 'posted' }).sort({ postedAt: -1 }).limit(10)
+
+// View failed posts
+db.scheduledposts.find({ status: 'failed' })
+
+// Manually trigger a post (set time to past)
+db.scheduledposts.updateOne(
+  { _id: ObjectId('...') },
+  { $set: { scheduledTime: new Date() } }
+)
+```
+
+**Unit Testing:**
+Currently no automated tests. Future improvement: add Jest tests for:
+- Time slot calculation logic
+- Attribution transformation logic
+- Message parsing utilities
 
 ## Key Files to Know
 
