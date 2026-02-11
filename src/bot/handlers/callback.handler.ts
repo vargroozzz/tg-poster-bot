@@ -51,7 +51,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Parse forward info to check if it's green-listed
+    // Parse forward info to check if it's green-listed or red-listed
     const forwardInfo = parseForwardInfo(originalMessage);
     const shouldAutoForward = forwardInfo
       ? await transformerService.shouldAutoForward(forwardInfo)
@@ -93,7 +93,48 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Show transform/forward options
+    // Check if red-listed - auto-transform without asking
+    const isRedListed = forwardInfo?.fromChannelId
+      ? await transformerService.isRedListed(String(forwardInfo.fromChannelId))
+      : false;
+
+    if (isRedListed) {
+      // Store that transform was chosen
+      for (const [_key, value] of pendingForwards.entries()) {
+        if (value.message.message_id === originalMessage.message_id) {
+          value.selectedAction = 'transform';
+          break;
+        }
+      }
+
+      // Auto-transform: proceed directly to text handling or nickname selection
+      const content = extractMessageContent(originalMessage);
+      const hasText = content?.text && content.text.trim().length > 0;
+
+      if (hasText) {
+        const keyboard = createTextHandlingKeyboard();
+        await ctx.editMessageText('How should the text be handled?', {
+          reply_markup: keyboard,
+        });
+      } else {
+        // No text - show nickname selection
+        const nicknames = await listUserNicknames();
+        const nicknameOptions = nicknames.map((n) => ({
+          userId: n.userId,
+          nickname: n.nickname,
+        }));
+        const keyboard = createNicknameSelectKeyboard(nicknameOptions);
+
+        await ctx.editMessageText('Who should be credited for this post?', {
+          reply_markup: keyboard,
+        });
+      }
+
+      logger.debug(`Red-listed channel - auto-transforming message ${originalMessage.message_id}`);
+      return;
+    }
+
+    // Neither green nor red listed - show transform/forward options
     const keyboard = createForwardActionKeyboard();
     await ctx.editMessageText('Choose how to post this message:', {
       reply_markup: keyboard,

@@ -78,9 +78,9 @@ export class TransformerService {
 
       // From channel, red-listed - OMIT channel reference
       if (isRed) {
-        // If nickname selected/found, show only "from [nickname]" (no channel)
+        // If nickname selected/found, show only "via [nickname]" (no channel)
         if (userNickname) {
-          const attribution = `\n\nfrom ${userNickname}`;
+          const attribution = `\n\nvia ${userNickname}`;
           return processedText + attribution;
         }
 
@@ -127,6 +127,13 @@ export class TransformerService {
 
     const channelId = String(forwardInfo.fromChannelId);
     return await channelListService.isGreenListed(channelId);
+  }
+
+  /**
+   * Check if a channel is red-listed (should omit channel reference)
+   */
+  async isRedListed(channelId: string): Promise<boolean> {
+    return await channelListService.isRedListed(channelId);
   }
 }
 
