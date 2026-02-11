@@ -93,39 +93,11 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Check if message has text - if so, show text handling options first
-    const content = extractMessageContent(originalMessage);
-    const hasText = content?.text && content.text.trim().length > 0;
-
-    if (hasText) {
-      const keyboard = createTextHandlingKeyboard();
-      await ctx.editMessageText('How should the text be handled?', {
-        reply_markup: keyboard,
-      });
-    } else {
-      // No text - check if from channel to show nickname selection
-      const isFromChannel = forwardInfo?.fromChannelId !== undefined;
-
-      if (isFromChannel) {
-        // Show nickname selection
-        const nicknames = await listUserNicknames();
-        const nicknameOptions = nicknames.map((n) => ({
-          userId: n.userId,
-          nickname: n.nickname,
-        }));
-        const keyboard = createNicknameSelectKeyboard(nicknameOptions);
-
-        await ctx.editMessageText('Who should be credited for this post?', {
-          reply_markup: keyboard,
-        });
-      } else {
-        // Not from channel, go straight to transform/forward options
-        const keyboard = createForwardActionKeyboard();
-        await ctx.editMessageText('Choose how to post this message:', {
-          reply_markup: keyboard,
-        });
-      }
-    }
+    // Show transform/forward options
+    const keyboard = createForwardActionKeyboard();
+    await ctx.editMessageText('Choose how to post this message:', {
+      reply_markup: keyboard,
+    });
 
     logger.debug(`Channel ${selectedChannelId} selected for message ${originalMessage.message_id}`);
   } catch (error) {
@@ -184,11 +156,8 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
           'This text will be added at the beginning of your post.'
       );
     } else {
-      // Show transform/forward buttons
-      const keyboard = createForwardActionKeyboard();
-      await ctx.editMessageText('Choose how to post this message:', {
-        reply_markup: keyboard,
-      });
+      // Skip custom text - schedule the post now
+      await scheduleTransformPost(ctx, originalMessage, foundKey);
     }
 
     logger.debug(`Custom text action "${action}" for message ${originalMessage.message_id}`);
@@ -199,6 +168,97 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
     });
   }
 });
+
+// Helper function to schedule a transform post
+async function scheduleTransformPost(ctx: Context, originalMessage: Message, pendingKey?: string) {
+  try {
+    // Find the pending forward data
+    let selectedChannel: string | undefined;
+    let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
+    let selectedNickname: string | null | undefined;
+    let customText: string | undefined;
+    let mediaGroupMessages: Message[] | undefined;
+    let foundKey: string | undefined = pendingKey;
+
+    for (const [key, value] of pendingForwards.entries()) {
+      if (value.message.message_id === originalMessage.message_id) {
+        selectedChannel = value.selectedChannel;
+        textHandling = value.textHandling ?? 'keep';
+        selectedNickname = value.selectedNickname;
+        customText = value.customText;
+        mediaGroupMessages = value.mediaGroupMessages;
+        if (!foundKey) foundKey = key;
+        break;
+      }
+    }
+
+    if (!selectedChannel) {
+      await ctx.editMessageText('❌ No channel selected. Please forward the message again.');
+      return;
+    }
+
+    // Parse forward info
+    const forwardInfo = parseForwardInfo(originalMessage);
+
+    if (!forwardInfo) {
+      await ctx.editMessageText('❌ Could not parse forward information.');
+      return;
+    }
+
+    // Extract message content
+    const content = extractMessageContent(originalMessage, mediaGroupMessages);
+
+    if (!content) {
+      await ctx.editMessageText('❌ Unsupported message type.');
+      return;
+    }
+
+    // Transform the message
+    const originalText = content.text ?? '';
+    const transformedText = await transformerService.transformMessage(
+      originalText,
+      forwardInfo,
+      'transform',
+      textHandling,
+      selectedNickname,
+      customText
+    );
+
+    const transformedContent = {
+      ...content,
+      text: transformedText,
+    };
+
+    // Schedule the post
+    const result = await schedulerService.schedulePost(
+      originalMessage,
+      forwardInfo,
+      'transform',
+      transformedContent,
+      selectedChannel
+    );
+
+    await ctx.editMessageText(
+      `✅ Post scheduled with transformation\n` +
+        `📍 Target: ${selectedChannel}\n` +
+        `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`
+    );
+
+    logger.info(
+      `Successfully scheduled transformed post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
+    );
+
+    // Clean up
+    if (foundKey) {
+      pendingForwards.delete(foundKey);
+    }
+  } catch (error) {
+    logger.error('Error scheduling transform post:', error);
+    await ctx.editMessageText('❌ Error scheduling post. Please try again.').catch(() => {
+      ctx.reply('❌ Error scheduling post. Please try again.');
+    });
+  }
+}
 
 // Handle nickname selection
 bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
@@ -298,7 +358,7 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       return;
     }
 
-    // Check if message is from a channel - if so, show nickname selection
+    // After text handling, proceed to nickname selection (if from channel) or custom text
     const forwardInfo = parseForwardInfo(originalMessage);
     const isFromChannel = forwardInfo?.fromChannelId !== undefined;
 
@@ -315,9 +375,9 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
         reply_markup: keyboard,
       });
     } else {
-      // Not from channel, go straight to transform/forward options
-      const keyboard = createForwardActionKeyboard();
-      await ctx.editMessageText('Choose how to post this message:', {
+      // Not from channel, show custom text option
+      const keyboard = createCustomTextKeyboard();
+      await ctx.editMessageText('Do you want to add custom text to this post?', {
         reply_markup: keyboard,
       });
     }
@@ -343,92 +403,54 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel, text handling, nickname, custom text, and media group
-    let selectedChannel: string | undefined;
-    let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
-    let selectedNickname: string | null | undefined;
-    let customText: string | undefined;
-    let mediaGroupMessages: Message[] | undefined;
-    let foundKey: string | undefined;
-
-    for (const [key, value] of pendingForwards.entries()) {
+    // Store the selected action
+    for (const [_key, value] of pendingForwards.entries()) {
       if (value.message.message_id === originalMessage.message_id) {
-        selectedChannel = value.selectedChannel;
-        textHandling = value.textHandling ?? 'keep';
-        selectedNickname = value.selectedNickname;
-        customText = value.customText;
-        mediaGroupMessages = value.mediaGroupMessages;
-        foundKey = key;
+        value.selectedAction = 'transform';
         break;
       }
     }
 
-    if (!selectedChannel) {
-      await ctx.editMessageText('❌ No channel selected. Please forward the message again.');
-      return;
+    // Check if message has text - if so, show text handling first
+    const content = extractMessageContent(originalMessage);
+    const hasText = content?.text && content.text.trim().length > 0;
+
+    if (hasText) {
+      const keyboard = createTextHandlingKeyboard();
+      await ctx.editMessageText('How should the text be handled?', {
+        reply_markup: keyboard,
+      });
+    } else {
+      // No text - check if from channel to show nickname selection
+      const forwardInfo = parseForwardInfo(originalMessage);
+      const isFromChannel = forwardInfo?.fromChannelId !== undefined;
+
+      if (isFromChannel) {
+        // Show nickname selection
+        const nicknames = await listUserNicknames();
+        const nicknameOptions = nicknames.map((n) => ({
+          userId: n.userId,
+          nickname: n.nickname,
+        }));
+        const keyboard = createNicknameSelectKeyboard(nicknameOptions);
+
+        await ctx.editMessageText('Who should be credited for this post?', {
+          reply_markup: keyboard,
+        });
+      } else {
+        // Not from channel, show custom text option
+        const keyboard = createCustomTextKeyboard();
+        await ctx.editMessageText('Do you want to add custom text to this post?', {
+          reply_markup: keyboard,
+        });
+      }
     }
 
-    // Parse forward info
-    const forwardInfo = parseForwardInfo(originalMessage);
-
-    if (!forwardInfo) {
-      await ctx.editMessageText('❌ Could not parse forward information.');
-      return;
-    }
-
-    // Extract message content (including media group if present)
-    const content = extractMessageContent(originalMessage, mediaGroupMessages);
-
-    if (!content) {
-      await ctx.editMessageText('❌ Unsupported message type.');
-      return;
-    }
-
-    // Transform the message text with text handling, selected nickname, and custom text
-    const originalText = content.text ?? '';
-    const transformedText = await transformerService.transformMessage(
-      originalText,
-      forwardInfo,
-      'transform',
-      textHandling,
-      selectedNickname,
-      customText
-    );
-
-    // Update content with transformed text
-    const transformedContent = {
-      ...content,
-      text: transformedText,
-    };
-
-    // Schedule the post
-    const result = await schedulerService.schedulePost(
-      originalMessage,
-      forwardInfo,
-      'transform',
-      transformedContent,
-      selectedChannel
-    );
-
-    await ctx.editMessageText(
-      `✅ Post scheduled with transformation\n` +
-        `📍 Target: ${selectedChannel}\n` +
-        `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`
-    );
-
-    logger.info(
-      `Successfully scheduled transformed post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
-    );
-
-    // Clean up
-    if (foundKey) {
-      pendingForwards.delete(foundKey);
-    }
+    logger.debug(`Transform action selected for message ${originalMessage.message_id}`);
   } catch (error) {
     logger.error('Error in transform callback:', error);
-    await ctx.editMessageText('❌ Error scheduling post. Please try again.').catch(() => {
-      // If edit fails, send a new message
-      ctx.reply('❌ Error scheduling post. Please try again.');
+    await ctx.editMessageText('❌ Error processing transform. Please try again.').catch(() => {
+      ctx.reply('❌ Error processing transform. Please try again.');
     });
   }
 });
@@ -445,20 +467,14 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel, text handling, nickname, custom text, and media group
+    // Find the pending forward to get selected channel and media group
     let selectedChannel: string | undefined;
-    let textHandling: 'keep' | 'remove' | 'quote' = 'keep';
-    let selectedNickname: string | null | undefined;
-    let customText: string | undefined;
     let mediaGroupMessages: Message[] | undefined;
     let foundKey: string | undefined;
 
     for (const [key, value] of pendingForwards.entries()) {
       if (value.message.message_id === originalMessage.message_id) {
         selectedChannel = value.selectedChannel;
-        textHandling = value.textHandling ?? 'keep';
-        selectedNickname = value.selectedNickname;
-        customText = value.customText;
         mediaGroupMessages = value.mediaGroupMessages;
         foundKey = key;
         break;
@@ -486,15 +502,14 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Apply text handling and custom text even for forward as-is (but nickname is ignored for forward action)
-    const originalText = content.text ?? '';
+    // Forward schedules with original text, no modifications
     const processedText = await transformerService.transformMessage(
-      originalText,
+      content.text ?? '',
       forwardInfo,
       'forward',
-      textHandling,
-      selectedNickname,
-      customText
+      'keep', // Always keep text for forward
+      undefined, // No nickname
+      undefined // No custom text
     );
 
     // Update content with processed text
