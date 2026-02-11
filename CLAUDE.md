@@ -143,7 +143,7 @@ Users can manage multiple posting channels and select destination per message.
 
 Three types of sources with different attribution rules:
 
-1. **Green-listed channels:** Auto-forward as-is using `copyMessage` (no transformation, no user interaction)
+1. **Green-listed channels:** Auto-forward as-is using `forwardMessage` (no transformation, no user interaction)
 2. **Red-listed channels:** Auto-transform (skips Transform/Forward choice), omits channel reference, shows only "via [nickname]" if user selected
 3. **Regular channels/users/non-forwarded:** Show Transform/Forward choice, add attribution based on channel link and/or nickname
 
@@ -155,7 +155,7 @@ Three types of sources with different attribution rules:
 - **Original content (non-forwarded):** Can show nickname attribution
 
 **Forward vs Transform:**
-- **Forward:** Uses Telegram's `copyMessage` API to preserve "Forwarded from" attribution (only for forwarded messages)
+- **Forward:** Uses Telegram's `forwardMessage` API to preserve "Forwarded from" attribution (only for forwarded messages)
 - **Transform:** Extracts content, adds custom attribution, sends as new message
 
 **Files:**
@@ -186,7 +186,7 @@ For messages with text/caption, users can choose:
    - If RED-LISTED → Auto-transform (skip to step 6, no Transform/Forward choice)
    - Otherwise (or non-forwarded) → Show Transform/Forward buttons (step 5)
 5. User selects Transform or Forward:
-   - FORWARD → Skip to step 9 (uses copyMessage, no modifications)
+   - FORWARD → Skip to step 9 (uses forwardMessage, no modifications)
    - TRANSFORM → Continue to step 6
 6. If message has text → Show text handling options (Keep/Remove/Quote)
 7. Show nickname selection (or "No attribution") - ALWAYS shown during Transform
@@ -194,7 +194,7 @@ For messages with text/caption, users can choose:
 9. Bot calculates next available slot (hh:00:01 or hh:30:01)
 10. Saves to MongoDB with status='pending'
 11. Background worker posts at scheduled time using:
-    - copyMessage for 'forward' action (preserves "Forwarded from")
+    - forwardMessage for 'forward' action (preserves "Forwarded from")
     - sendPhoto/sendVideo/etc for 'transform' action (new message with attribution)
 ```
 
@@ -365,9 +365,9 @@ if (mediaGroupId) {
 ### Forward vs Transform in Post Worker
 The post worker uses different APIs based on the action:
 ```typescript
-// For 'forward' action - use copyMessage to preserve attribution
+// For 'forward' action - use forwardMessage to preserve attribution
 if (post.action === 'forward') {
-  result = await this.api.copyMessage(
+  result = await this.api.forwardMessage(
     post.targetChannelId,
     post.originalForward.chatId,
     post.originalForward.messageId
@@ -437,7 +437,7 @@ const name = username || title || 'Unknown';
 Red-listed channels should auto-transform without asking. Check `isRedListed` before showing the action buttons.
 
 ### ❌ Don't re-send content for forward action
-Use `copyMessage` API to preserve "Forwarded from" attribution, not `sendPhoto`/`sendVideo`/etc.
+Use `forwardMessage` API to preserve "Forwarded from" attribution, not `sendPhoto`/`sendVideo`/etc.
 
 ### ❌ Don't check for null on parseForwardInfo
 `parseForwardInfo` always returns a ForwardInfo object (never null). For non-forwarded messages, it returns minimal info (messageId, chatId only).
@@ -730,7 +730,7 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - [x] Custom text feature (prepend text to posts)
 - [x] Multi-channel support with channel selection
 - [x] Webhooks deployment (prevents 409 conflicts)
-- [x] True forwarding via copyMessage (preserves "Forwarded from")
+- [x] True forwarding via forwardMessage (preserves "Forwarded from")
 - [x] Non-forwarded message support (original photos, videos, documents can be scheduled)
 - [x] User attribution for any message type (forwarded or original)
 
