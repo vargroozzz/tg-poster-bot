@@ -91,7 +91,25 @@ export class PostWorkerService {
 
       let result: any;
 
-      // Post based on content type
+      // For 'forward' action, use copyMessage to preserve "Forwarded from" attribution
+      if (post.action === 'forward' && post.originalForward.chatId && post.originalForward.messageId) {
+        result = await this.api.copyMessage(
+          post.targetChannelId,
+          post.originalForward.chatId,
+          post.originalForward.messageId
+        );
+
+        // Mark as posted
+        post.status = 'posted';
+        post.postedAt = new Date();
+        post.telegramScheduledMessageId = result.message_id;
+        await post.save();
+
+        logger.info(`Successfully forwarded message ${post._id} with message_id ${result.message_id}`);
+        return;
+      }
+
+      // For 'transform' action or when copyMessage not applicable, post based on content type
       if (post.content.type === 'media_group' && post.content.mediaGroup) {
         // Build media array for sendMediaGroup
         const media = post.content.mediaGroup.map((item: any, index: number) => {
