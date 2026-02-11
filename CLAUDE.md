@@ -36,12 +36,17 @@ Three types of sources with different attribution rules:
 
 1. **Green-listed channels:** Auto-forward as-is using `copyMessage` (no transformation, no user interaction)
 2. **Red-listed channels:** Auto-transform (skips Transform/Forward choice), omits channel reference, shows only "via [nickname]" if user selected
-3. **Regular channels/users:** Show Transform/Forward choice, add attribution based on channel link and/or nickname
+3. **Regular channels/users/non-forwarded:** Show Transform/Forward choice, add attribution based on channel link and/or nickname
 
-**Custom Nicknames:** Users can set friendly names for people (stored in `user-nickname` collection). Nicknames are selected via inline keyboard during Transform flow. If "No attribution" selected, user attribution is omitted entirely.
+**Custom Nicknames:** Users can set friendly names for people (stored in `user-nickname` collection). Nicknames are **always** selected via inline keyboard during Transform flow, regardless of whether the message is forwarded or original content. If "No attribution" selected, user attribution is omitted entirely.
+
+**Message Sources:**
+- **Forwarded from channels:** Can show channel link + nickname
+- **Forwarded from users:** Can show nickname
+- **Original content (non-forwarded):** Can show nickname attribution
 
 **Forward vs Transform:**
-- **Forward:** Uses Telegram's `copyMessage` API to preserve "Forwarded from" attribution
+- **Forward:** Uses Telegram's `copyMessage` API to preserve "Forwarded from" attribution (only for forwarded messages)
 - **Transform:** Extracts content, adds custom attribution, sends as new message
 
 **Files:**
@@ -64,18 +69,18 @@ For messages with text/caption, users can choose:
 
 ### Message Scheduling Flow
 ```
-1. User forwards message to bot
+1. User sends message to bot (forwarded OR original content - photos, videos, documents, etc.)
 2. Bot shows channel selection buttons
 3. User selects target channel
-4. Bot checks source:
+4. Bot checks source (only for forwarded messages):
    - If GREEN-LISTED → Auto-forward immediately (skip to step 9)
    - If RED-LISTED → Auto-transform (skip to step 6, no Transform/Forward choice)
-   - Otherwise → Show Transform/Forward buttons (step 5)
+   - Otherwise (or non-forwarded) → Show Transform/Forward buttons (step 5)
 5. User selects Transform or Forward:
    - FORWARD → Skip to step 9 (uses copyMessage, no modifications)
    - TRANSFORM → Continue to step 6
 6. If message has text → Show text handling options (Keep/Remove/Quote)
-7. If from channel → Show nickname selection (or "No attribution")
+7. Show nickname selection (or "No attribution") - ALWAYS shown during Transform
 8. Show custom text option (Add custom text / Skip)
 9. Bot calculates next available slot (hh:00:01 or hh:30:01)
 10. Saves to MongoDB with status='pending'
@@ -237,6 +242,32 @@ else if (post.content.type === 'photo') {
 }
 ```
 
+### Handling Both Forwarded and Non-Forwarded Messages
+Bot listens to multiple message types, not just forwards:
+```typescript
+// Handle both forwarded and non-forwarded messages
+bot.on([
+  'message:forward_origin',  // Forwarded messages
+  'message:photo',           // Original photos
+  'message:video',           // Original videos
+  'message:document',        // Original documents
+  'message:animation'        // Original GIFs/animations
+], async (ctx: Context) => {
+  // Process all types uniformly
+});
+```
+
+**parseForwardInfo always returns ForwardInfo:**
+```typescript
+// For forwarded messages: full info with fromChannelId, fromUserId, etc.
+// For non-forwarded messages: minimal info with just messageId and chatId
+const forwardInfo = parseForwardInfo(message); // Never null
+
+// Check if it's actually a forward
+const isForwarded = forwardInfo.fromChannelId !== undefined ||
+                    forwardInfo.fromUserId !== undefined;
+```
+
 ## Common Pitfalls
 
 ### ❌ Don't use `schedule_date` parameter
@@ -266,6 +297,12 @@ Red-listed channels should auto-transform without asking. Check `isRedListed` be
 
 ### ❌ Don't re-send content for forward action
 Use `copyMessage` API to preserve "Forwarded from" attribution, not `sendPhoto`/`sendVideo`/etc.
+
+### ❌ Don't check for null on parseForwardInfo
+`parseForwardInfo` always returns a ForwardInfo object (never null). For non-forwarded messages, it returns minimal info (messageId, chatId only).
+
+### ❌ Don't limit nickname selection to forwarded messages only
+Nickname selection should **always** show during Transform flow, even for non-forwarded original content.
 
 ### ✅ Do verify builds before committing
 Always run `npm run build` to catch TypeScript errors.
@@ -331,11 +368,13 @@ npm start
 ## Implemented Features
 
 - [x] Media group support (albums with multiple photos/videos)
-- [x] Inline nickname selection with "No attribution" option
+- [x] Inline nickname selection with "No attribution" option (always shown in Transform flow)
 - [x] Custom text feature (prepend text to posts)
 - [x] Multi-channel support with channel selection
 - [x] Webhooks deployment (prevents 409 conflicts)
 - [x] True forwarding via copyMessage (preserves "Forwarded from")
+- [x] Non-forwarded message support (original photos, videos, documents can be scheduled)
+- [x] User attribution for any message type (forwarded or original)
 
 ## Future Improvements
 
