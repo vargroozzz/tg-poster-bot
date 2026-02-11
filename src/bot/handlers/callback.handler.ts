@@ -3,7 +3,6 @@ import { Message } from 'grammy/types';
 import { extractMessageContent, pendingForwards } from './forward.handler.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
-import { SchedulerService } from '../../services/scheduler.service.js';
 import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
 import { createTextHandlingKeyboard } from '../keyboards/text-handling.keyboard.js';
 import { createCustomTextKeyboard } from '../keyboards/custom-text.keyboard.js';
@@ -20,7 +19,6 @@ import type { ISession } from '../../database/models/session.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
 import { SessionStateMachine } from '../../core/session/session-state-machine.js';
 
-const schedulerService = new SchedulerService(bot.api);
 const postScheduler = new PostSchedulerService();
 
 // Get SessionService from DI container (will be initialized in index.ts)
@@ -173,13 +171,12 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
         return;
       }
 
-      const result = await schedulerService.schedulePost(
+      const result = await postScheduler.scheduleForwardPost({
+        targetChannelId: selectedChannelId,
         originalMessage,
         forwardInfo,
-        'forward',
         content,
-        selectedChannelId
-      );
+      });
 
       await ctx.editMessageText(
         `✅ Auto-scheduled (green-listed channel)\n` +
