@@ -13,8 +13,10 @@ import { bot } from '../bot.js';
 import { PendingForwardHelper, type PendingForward } from '../../shared/helpers/pending-forward-finder.js';
 import { ErrorMessages } from '../../shared/constants/error-messages.js';
 import { NicknameHelper } from '../../shared/helpers/nickname.helper.js';
+import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
 
 const schedulerService = new SchedulerService(bot.api);
+const postScheduler = new PostSchedulerService();
 
 // Handle channel selection
 bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
@@ -239,30 +241,16 @@ async function scheduleTransformPost(ctx: Context, originalMessage: Message, pen
       return;
     }
 
-    // Transform the message
-    const originalText = content.text ?? '';
-    const transformedText = await transformerService.transformMessage(
-      originalText,
-      forwardInfo,
-      'transform',
-      textHandling,
-      selectedNickname,
-      customText
-    );
-
-    const transformedContent = {
-      ...content,
-      text: transformedText,
-    };
-
-    // Schedule the post
-    const result = await schedulerService.schedulePost(
+    // Schedule using the unified scheduler service
+    const result = await postScheduler.scheduleTransformPost({
+      targetChannelId: selectedChannel,
       originalMessage,
       forwardInfo,
-      'transform',
-      transformedContent,
-      selectedChannel
-    );
+      content,
+      textHandling,
+      selectedNickname,
+      customText,
+    });
 
     await ctx.editMessageText(
       `✅ Post scheduled with transformation\n` +
@@ -483,30 +471,13 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Forward schedules with original text, no modifications
-    const processedText = await transformerService.transformMessage(
-      content.text ?? '',
-      forwardInfo,
-      'forward',
-      'keep', // Always keep text for forward
-      undefined, // No nickname
-      undefined // No custom text
-    );
-
-    // Update content with processed text
-    const processedContent = {
-      ...content,
-      text: processedText,
-    };
-
-    // Schedule the post
-    const result = await schedulerService.schedulePost(
+    // Schedule using the unified scheduler service
+    const result = await postScheduler.scheduleForwardPost({
+      targetChannelId: selectedChannel,
       originalMessage,
       forwardInfo,
-      'forward',
-      processedContent,
-      selectedChannel
-    );
+      content,
+    });
 
     await ctx.editMessageText(
       `✅ Post scheduled as-is\n` +

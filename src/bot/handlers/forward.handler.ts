@@ -7,11 +7,11 @@ import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
 import type { MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
-import { SchedulerService } from '../../services/scheduler.service.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
 import type { PendingForward } from '../../shared/helpers/pending-forward-finder.js';
+import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
 
-const schedulerService = new SchedulerService(bot.api);
+const postScheduler = new PostSchedulerService();
 
 // Store forwarded message data temporarily (in-memory for simplicity)
 // In production, consider using Grammy's conversation plugin or Redis
@@ -356,30 +356,16 @@ async function scheduleTransformPostFromForwardHandler(
       return;
     }
 
-    // Transform the message
-    const originalText = content.text ?? '';
-    const transformedText = await transformerService.transformMessage(
-      originalText,
-      forwardInfo,
-      'transform',
-      textHandling,
-      selectedNickname,
-      customText
-    );
-
-    const transformedContent = {
-      ...content,
-      text: transformedText,
-    };
-
-    // Schedule the post
-    const result = await schedulerService.schedulePost(
+    // Schedule using the unified scheduler service
+    const result = await postScheduler.scheduleTransformPost({
+      targetChannelId: selectedChannel,
       originalMessage,
       forwardInfo,
-      'transform',
-      transformedContent,
-      selectedChannel
-    );
+      content,
+      textHandling,
+      selectedNickname,
+      customText,
+    });
 
     await ctx.reply(
       `✅ Post scheduled with transformation\n` +
