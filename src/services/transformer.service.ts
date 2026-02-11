@@ -76,13 +76,11 @@ export class TransformerService {
         return processedText + attribution;
       }
 
-      // From channel, red-listed
+      // From channel, red-listed - OMIT channel reference
       if (isRed) {
-        // If nickname selected/found, show "from [nickname] via [channel name]"
+        // If nickname selected/found, show only "from [nickname]" (no channel)
         if (userNickname) {
-          const channelReference =
-            forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
-          const attribution = `\n\nfrom ${userNickname} via ${channelReference}`;
+          const attribution = `\n\nfrom ${userNickname}`;
           return processedText + attribution;
         }
 

@@ -3,11 +3,14 @@ import { Message } from 'grammy/types';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { createChannelSelectKeyboard } from '../keyboards/channel-select.keyboard.js';
-import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
 import type { MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
+import { SchedulerService } from '../../services/scheduler.service.js';
+import { formatSlotTime } from '../../utils/time-slots.js';
+
+const schedulerService = new SchedulerService(bot.api);
 
 // Store forwarded message data temporarily (in-memory for simplicity)
 // In production, consider using Grammy's conversation plugin or Redis
@@ -15,6 +18,7 @@ interface PendingForward {
   message: Message;
   selectedChannel?: string;
   textHandling?: 'keep' | 'remove' | 'quote';
+  selectedAction?: 'transform' | 'forward'; // Which action was chosen
   selectedNickname?: string | null; // null = "No attribution", undefined = not selected yet
   customText?: string; // Optional custom text to prepend
   waitingForCustomText?: boolean; // Flag to indicate waiting for text input
@@ -80,14 +84,10 @@ bot.on('message:text', async (ctx: Context) => {
     pendingForward.customText = message.text;
     pendingForward.waitingForCustomText = false;
 
-    // Show transform/forward buttons
-    const keyboard = createForwardActionKeyboard();
-    await ctx.reply('✅ Custom text added!\n\nChoose how to post this message:', {
-      reply_markup: keyboard,
-      reply_to_message_id: pendingForward.message.message_id,
-    });
+    // Schedule the post now (custom text is the final step)
+    await scheduleTransformPostFromForwardHandler(ctx, pendingForward, _foundKey);
 
-    logger.debug(`Custom text added for message ${pendingForward.message.message_id}`);
+    logger.debug(`Custom text added and post scheduled for message ${pendingForward.message.message_id}`);
   } catch (error) {
     logger.error('Error handling custom text input:', error);
   }
@@ -343,6 +343,87 @@ export function extractMessageContent(
   }
 
   return null;
+}
+
+// Helper function to schedule a transform post
+async function scheduleTransformPostFromForwardHandler(
+  ctx: Context,
+  pendingForward: PendingForward,
+  pendingKey: string
+) {
+  try {
+    const originalMessage = pendingForward.message;
+    const selectedChannel = pendingForward.selectedChannel;
+    const textHandling = pendingForward.textHandling ?? 'keep';
+    const selectedNickname = pendingForward.selectedNickname;
+    const customText = pendingForward.customText;
+    const mediaGroupMessages = pendingForward.mediaGroupMessages;
+
+    if (!selectedChannel) {
+      await ctx.reply('❌ No channel selected. Please forward the message again.');
+      return;
+    }
+
+    // Parse forward info
+    const forwardInfo = parseForwardInfo(originalMessage);
+
+    if (!forwardInfo) {
+      await ctx.reply('❌ Could not parse forward information.');
+      return;
+    }
+
+    // Extract message content
+    const content = extractMessageContent(originalMessage, mediaGroupMessages);
+
+    if (!content) {
+      await ctx.reply('❌ Unsupported message type.');
+      return;
+    }
+
+    // Transform the message
+    const originalText = content.text ?? '';
+    const transformedText = await transformerService.transformMessage(
+      originalText,
+      forwardInfo,
+      'transform',
+      textHandling,
+      selectedNickname,
+      customText
+    );
+
+    const transformedContent = {
+      ...content,
+      text: transformedText,
+    };
+
+    // Schedule the post
+    const result = await schedulerService.schedulePost(
+      originalMessage,
+      forwardInfo,
+      'transform',
+      transformedContent,
+      selectedChannel
+    );
+
+    await ctx.reply(
+      `✅ Post scheduled with transformation\n` +
+        `📍 Target: ${selectedChannel}\n` +
+        `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`,
+      {
+        reply_to_message_id: originalMessage.message_id,
+      }
+    );
+
+    logger.info(
+      `Successfully scheduled transformed post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
+    );
+
+    // Clean up
+    pendingForwards.delete(pendingKey);
+  } catch (error) {
+    logger.error('Error scheduling transform post:', error);
+    await ctx.reply('❌ Error scheduling post. Please try again.');
+  }
 }
 
 // Export for use in callback handler
