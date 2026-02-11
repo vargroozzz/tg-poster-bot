@@ -2,15 +2,17 @@ import { Message } from 'grammy/types';
 import type { ForwardInfo } from '../types/message.types.js';
 import { logger } from './logger.js';
 
-export function parseForwardInfo(message: Message): ForwardInfo | null {
-  if (!message.forward_origin) {
-    return null;
-  }
-
+export function parseForwardInfo(message: Message): ForwardInfo {
   const forwardInfo: ForwardInfo = {
     messageId: message.message_id,
     chatId: message.chat.id,
   };
+
+  // If not a forward, return minimal info (original message)
+  if (!message.forward_origin) {
+    logger.debug('Non-forwarded message, using original message info');
+    return forwardInfo;
+  }
 
   const origin = message.forward_origin;
 

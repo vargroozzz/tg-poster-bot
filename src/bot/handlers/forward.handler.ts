@@ -93,7 +93,8 @@ bot.on('message:text', async (ctx: Context) => {
   }
 });
 
-bot.on('message:forward_origin', async (ctx: Context) => {
+// Handle both forwarded and non-forwarded messages
+bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation'], async (ctx: Context) => {
   try {
     const message = ctx.message;
 
@@ -138,8 +139,8 @@ bot.on('message:forward_origin', async (ctx: Context) => {
     // Single message (not part of media group)
     await processSingleMessage(ctx, message);
   } catch (error) {
-    logger.error('Error handling forward:', error);
-    await ctx.reply('❌ Error processing forward. Please try again.');
+    logger.error('Error handling message:', error);
+    await ctx.reply('❌ Error processing message. Please try again.');
   }
 });
 
@@ -156,15 +157,10 @@ async function processSingleMessage(ctx: Context, message: Message) {
     return;
   }
 
-  // Parse forward information
+  // Parse forward information (will have minimal info for non-forwarded messages)
   const forwardInfo = parseForwardInfo(message);
 
-  if (!forwardInfo) {
-    await ctx.reply('❌ Could not parse forward information.');
-    return;
-  }
-
-  // Check if from a green-listed channel - show channels but mark as auto-forward
+  // Check if from a green-listed channel
   const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
   // Create channel selection keyboard
@@ -187,7 +183,8 @@ async function processSingleMessage(ctx: Context, message: Message) {
     ? '\n\n🟢 This is from a green-listed channel - will be forwarded as-is.'
     : '';
 
-  await ctx.reply(`📍 Select target channel for this post:${greenListNote}`, {
+  const messageType = forwardInfo ? 'post' : 'message';
+  await ctx.reply(`📍 Select target channel for this ${messageType}:${greenListNote}`, {
     reply_markup: keyboard,
     reply_to_message_id: message.message_id,
   });
@@ -228,11 +225,6 @@ async function processMediaGroup(mediaGroupId: string) {
 
   // Parse forward information from primary message
   const forwardInfo = parseForwardInfo(primaryMessage);
-
-  if (!forwardInfo) {
-    await bot.api.sendMessage(primaryMessage.chat.id, '❌ Could not parse forward information.');
-    return;
-  }
 
   // Check if from a green-listed channel
   const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
@@ -366,11 +358,6 @@ async function scheduleTransformPostFromForwardHandler(
 
     // Parse forward info
     const forwardInfo = parseForwardInfo(originalMessage);
-
-    if (!forwardInfo) {
-      await ctx.reply('❌ Could not parse forward information.');
-      return;
-    }
 
     // Extract message content
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
