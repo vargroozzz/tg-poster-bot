@@ -24,9 +24,9 @@ const getSessionService = () => {
   return sessionService;
 };
 
-// Store forwarded message data temporarily (in-memory for simplicity)
-// In production, consider using Grammy's conversation plugin or Redis
-// TODO: Replace with database-backed session storage in Phase 4
+// Store forwarded message data temporarily (in-memory Map)
+// Note: Database-backed sessions are now implemented (see SessionService)
+// This Map is kept for dual-write compatibility during migration
 export const pendingForwards = new Map<string, PendingForward>();
 
 // Store media group buffers temporarily
