@@ -1,7 +1,8 @@
 import { Api } from 'grammy';
-import { ScheduledPost } from '../database/models/scheduled-post.model.js';
+import { ScheduledPost, type IScheduledPost } from '../database/models/scheduled-post.model.js';
 import { logger } from '../utils/logger.js';
 import { formatSlotTime } from '../utils/time-slots.js';
+import type { MediaGroupItem } from '../types/message.types.js';
 
 export class PostWorkerService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -83,13 +84,13 @@ export class PostWorkerService {
   /**
    * Publish a single post to Telegram
    */
-  private async publishPost(post: any) {
+  private async publishPost(post: IScheduledPost) {
     try {
       logger.info(
         `Publishing ${post.content.type} post to ${post.targetChannelId} (scheduled for ${formatSlotTime(post.scheduledTime)})`
       );
 
-      let result: any;
+      let result: { message_id: number } | Array<{ message_id: number }>;
 
       // For 'forward' action, use copyMessage to preserve "Forwarded from" attribution
       if (post.action === 'forward' && post.originalForward.chatId && post.originalForward.messageId) {
@@ -112,7 +113,7 @@ export class PostWorkerService {
       // For 'transform' action or when copyMessage not applicable, post based on content type
       if (post.content.type === 'media_group' && post.content.mediaGroup) {
         // Build media array for sendMediaGroup
-        const media = post.content.mediaGroup.map((item: any, index: number) => {
+        const media = post.content.mediaGroup.map((item: MediaGroupItem, index: number) => {
           const baseMedia = {
             media: item.fileId,
             // Only first item gets caption
