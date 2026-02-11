@@ -5,6 +5,7 @@ import { config } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './database/connection.js';
 import { initBot, bot } from './bot/bot.js';
 import { PostWorkerService } from './services/post-worker.service.js';
+import { DIContainer } from './shared/di/container.js';
 
 // Import handlers to register them
 import './bot/handlers/command.handler.js';
@@ -25,6 +26,10 @@ async function main() {
 
     // Initialize the bot
     await initBot();
+
+    // Initialize DI container with all services
+    DIContainer.initialize(bot.api);
+    logger.info('DI Container initialized with all services');
 
     // Set webhook if WEBHOOK_URL is provided, otherwise use long polling
     const webhookUrl = process.env.WEBHOOK_URL;

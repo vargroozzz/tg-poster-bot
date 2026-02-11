@@ -10,8 +10,19 @@ import { getActivePostingChannels } from '../../database/models/posting-channel.
 import { formatSlotTime } from '../../utils/time-slots.js';
 import type { PendingForward } from '../../shared/helpers/pending-forward-finder.js';
 import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
+import { DIContainer } from '../../shared/di/container.js';
+import type { SessionService } from '../../core/session/session.service.js';
 
 const postScheduler = new PostSchedulerService();
+
+// Get SessionService from DI container (will be initialized in index.ts)
+let sessionService: SessionService;
+const getSessionService = () => {
+  if (!sessionService && DIContainer.has('SessionService')) {
+    sessionService = DIContainer.resolve<SessionService>('SessionService');
+  }
+  return sessionService;
+};
 
 // Store forwarded message data temporarily (in-memory for simplicity)
 // In production, consider using Grammy's conversation plugin or Redis
@@ -161,12 +172,23 @@ async function processSingleMessage(ctx: Context, message: Message) {
 
   const keyboard = createChannelSelectKeyboard(channels);
 
-  // Store message data with unique key
+  // DUAL WRITE: Store in both Map (legacy) and Database (new)
   const callbackKey = `${ctx.from?.id}_${message.message_id}_${Date.now()}`;
   pendingForwards.set(callbackKey, {
     message,
     timestamp: Date.now(),
   });
+
+  // Also write to database for session persistence
+  const sessionSvc = getSessionService();
+  if (sessionSvc && ctx.from?.id) {
+    try {
+      await sessionSvc.create(ctx.from.id, message);
+      logger.debug(`Session created in DB for message ${message.message_id}`);
+    } catch (error) {
+      logger.error('Failed to create session in DB, using Map fallback:', error);
+    }
+  }
 
   const greenListNote = shouldAutoForward
     ? '\n\n🟢 This is from a green-listed channel - will be forwarded as-is.'
@@ -227,13 +249,28 @@ async function processMediaGroup(mediaGroupId: string) {
 
   const keyboard = createChannelSelectKeyboard(channels);
 
-  // Store message data with all media group messages
+  // DUAL WRITE: Store in both Map (legacy) and Database (new)
   const callbackKey = `${primaryMessage.from?.id}_${primaryMessage.message_id}_${Date.now()}`;
   pendingForwards.set(callbackKey, {
     message: primaryMessage,
     mediaGroupMessages: messages,
     timestamp: Date.now(),
   });
+
+  // Also write to database for session persistence
+  const sessionSvc = getSessionService();
+  if (sessionSvc && primaryMessage.from?.id) {
+    try {
+      const session = await sessionSvc.create(primaryMessage.from.id, primaryMessage);
+      // Store media group messages in session
+      await sessionSvc.update(session._id.toString(), {
+        mediaGroupMessages: messages,
+      });
+      logger.debug(`Session created in DB for media group ${primaryMessage.message_id}`);
+    } catch (error) {
+      logger.error('Failed to create session in DB, using Map fallback:', error);
+    }
+  }
 
   const greenListNote = shouldAutoForward
     ? '\n\n🟢 This is from a green-listed channel - will be forwarded as-is.'

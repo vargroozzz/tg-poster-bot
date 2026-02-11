@@ -14,9 +14,71 @@ import { PendingForwardHelper, type PendingForward } from '../../shared/helpers/
 import { ErrorMessages } from '../../shared/constants/error-messages.js';
 import { NicknameHelper } from '../../shared/helpers/nickname.helper.js';
 import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
+import { DIContainer } from '../../shared/di/container.js';
+import type { SessionService } from '../../core/session/session.service.js';
+import type { ISession } from '../../database/models/session.model.js';
 
 const schedulerService = new SchedulerService(bot.api);
 const postScheduler = new PostSchedulerService();
+
+// Get SessionService from DI container (will be initialized in index.ts)
+let sessionService: SessionService;
+const getSessionService = () => {
+  if (!sessionService && DIContainer.has('SessionService')) {
+    sessionService = DIContainer.resolve<SessionService>('SessionService');
+  }
+  return sessionService;
+};
+
+/**
+ * Convert Session to PendingForward for compatibility
+ */
+function sessionToPendingForward(session: ISession): PendingForward {
+  return {
+    message: session.originalMessage,
+    selectedChannel: session.selectedChannel,
+    textHandling: session.textHandling,
+    selectedAction: session.selectedAction,
+    selectedNickname: session.selectedNickname,
+    customText: session.customText,
+    waitingForCustomText: session.waitingForCustomText,
+    mediaGroupMessages: session.mediaGroupMessages,
+    timestamp: session.createdAt.getTime(),
+  };
+}
+
+/**
+ * Helper to get pending forward from either DB or Map (dual-read pattern)
+ * Tries DB first for persistence, falls back to Map for compatibility
+ */
+async function getPendingForward(
+  userId: number,
+  messageId: number
+): Promise<{ session?: ISession; pending?: [string, PendingForward] }> {
+  const sessionSvc = getSessionService();
+
+  // Try database first
+  if (sessionSvc) {
+    try {
+      const session = await sessionSvc.findByMessage(userId, messageId);
+      if (session) {
+        logger.debug(`Found session in DB for message ${messageId}`);
+        return { session };
+      }
+    } catch (error) {
+      logger.error('Error fetching session from DB, falling back to Map:', error);
+    }
+  }
+
+  // Fall back to Map
+  const pending = PendingForwardHelper.findByMessageId(messageId, pendingForwards);
+  if (pending) {
+    logger.debug(`Found session in Map for message ${messageId}`);
+    return { pending };
+  }
+
+  return {};
+}
 
 // Handle channel selection
 bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
@@ -39,15 +101,32 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Find and update the pending forward with selected channel
-    const foundKey = await PendingForwardHelper.updateOrExpire(
-      ctx,
-      originalMessage.message_id,
-      pendingForwards,
-      { selectedChannel: selectedChannelId }
+    // DUAL READ: Try to find session in DB first, fall back to Map
+    const { session, pending } = await getPendingForward(
+      ctx.from?.id ?? 0,
+      originalMessage.message_id
     );
 
+    let foundKey: string | undefined;
+
+    if (session) {
+      // Update session in DB
+      const sessionSvc = getSessionService();
+      if (sessionSvc) {
+        await sessionSvc.update(session._id.toString(), {
+          selectedChannel: selectedChannelId,
+        });
+        foundKey = session._id.toString();
+      }
+    } else if (pending) {
+      // Update Map (legacy path)
+      const [key, pendingData] = pending;
+      pendingData.selectedChannel = selectedChannelId;
+      foundKey = key;
+    }
+
     if (!foundKey) {
+      await ErrorMessages.sessionExpired(ctx);
       return;
     }
 
@@ -57,11 +136,13 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     if (shouldAutoForward) {
       // Get media group messages if available
-      const found = PendingForwardHelper.findByMessageId(
-        originalMessage.message_id,
-        pendingForwards
-      );
-      const mediaGroupMessages = found?.[1].mediaGroupMessages;
+      let mediaGroupMessages: Message[] | undefined;
+
+      if (session) {
+        mediaGroupMessages = session.mediaGroupMessages;
+      } else if (pending) {
+        mediaGroupMessages = pending[1].mediaGroupMessages;
+      }
 
       // Auto-forward green-listed content
       const content = extractMessageContent(originalMessage, mediaGroupMessages);
@@ -85,7 +166,13 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
           `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`
       );
 
-      pendingForwards.delete(foundKey);
+      // Cleanup: Delete from both DB and Map
+      if (session && getSessionService()) {
+        await getSessionService().complete(session._id.toString());
+      }
+      if (pending) {
+        pendingForwards.delete(pending[0]);
+      }
       return;
     }
 
@@ -95,12 +182,14 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       : false;
 
     if (isRedListed) {
-      // Store that transform was chosen
-      PendingForwardHelper.updateByMessageId(
-        originalMessage.message_id,
-        pendingForwards,
-        { selectedAction: 'transform' }
-      );
+      // Store that transform was chosen - update both DB and Map
+      if (session && getSessionService()) {
+        await getSessionService().update(session._id.toString(), {
+          selectedAction: 'transform',
+        });
+      } else if (pending) {
+        pending[1].selectedAction = 'transform';
+      }
 
       // Auto-transform: proceed directly to text handling or nickname selection
       const content = extractMessageContent(originalMessage);
@@ -161,19 +250,29 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
       return;
     }
 
-    // Find and update the pending forward
+    // DUAL READ: Find session in DB or Map
+    const { session, pending } = await getPendingForward(
+      ctx.from?.id ?? 0,
+      originalMessage.message_id
+    );
+
+    let foundKey: string | undefined;
+
+    // Update based on action
     const updates = action === 'add'
       ? { waitingForCustomText: true }
       : { customText: undefined };
 
-    const foundKey = await PendingForwardHelper.updateOrExpire(
-      ctx,
-      originalMessage.message_id,
-      pendingForwards,
-      updates
-    );
+    if (session && getSessionService()) {
+      await getSessionService().update(session._id.toString(), updates);
+      foundKey = session._id.toString();
+    } else if (pending) {
+      Object.assign(pending[1], updates);
+      foundKey = pending[0];
+    }
 
     if (!foundKey) {
+      await ErrorMessages.sessionExpired(ctx);
       return;
     }
 
@@ -201,17 +300,32 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
 // Helper function to schedule a transform post
 async function scheduleTransformPost(ctx: Context, originalMessage: Message, pendingKey?: string) {
   try {
-    // Find the pending forward data
-    let foundKey = pendingKey;
+    // DUAL READ: Find session or pending forward
+    let session: ISession | undefined;
     let pending: PendingForward | undefined;
+    let foundKey = pendingKey;
 
     if (pendingKey) {
-      pending = pendingForwards.get(pendingKey);
-    } else {
-      const found = PendingForwardHelper.findByMessageId(originalMessage.message_id, pendingForwards);
-      if (found) {
-        [foundKey, pending] = found;
+      // Try to determine if pendingKey is a session ID or Map key
+      const sessionSvc = getSessionService();
+      if (sessionSvc) {
+        session = await sessionSvc.findById(pendingKey) ?? undefined;
       }
+      if (!session) {
+        pending = pendingForwards.get(pendingKey);
+      }
+    } else {
+      const result = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+      session = result.session;
+      if (result.pending) {
+        [foundKey, pending] = result.pending;
+      }
+    }
+
+    // Convert session to pending format if needed
+    if (session && !pending) {
+      pending = sessionToPendingForward(session);
+      foundKey = session._id.toString();
     }
 
     if (!pending) {
@@ -262,8 +376,11 @@ async function scheduleTransformPost(ctx: Context, originalMessage: Message, pen
       `Successfully scheduled transformed post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
     );
 
-    // Clean up
+    // Clean up: Delete from both DB and Map
     if (foundKey) {
+      if (session && getSessionService()) {
+        await getSessionService().complete(session._id.toString());
+      }
       pendingForwards.delete(foundKey);
     }
   } catch (error) {
@@ -297,17 +414,27 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Parse nickname selection and update pending forward
+    // Parse nickname selection
     const selectedNickname = await NicknameHelper.parseNicknameSelection(nicknameSelection);
 
-    const foundKey = await PendingForwardHelper.updateOrExpire(
-      ctx,
-      originalMessage.message_id,
-      pendingForwards,
-      { selectedNickname }
+    // DUAL READ: Find and update session or pending forward
+    const { session, pending } = await getPendingForward(
+      ctx.from?.id ?? 0,
+      originalMessage.message_id
     );
 
+    let foundKey: string | undefined;
+
+    if (session && getSessionService()) {
+      await getSessionService().update(session._id.toString(), { selectedNickname });
+      foundKey = session._id.toString();
+    } else if (pending) {
+      pending[1].selectedNickname = selectedNickname;
+      foundKey = pending[0];
+    }
+
     if (!foundKey) {
+      await ErrorMessages.sessionExpired(ctx);
       return;
     }
 
@@ -350,15 +477,24 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       return;
     }
 
-    // Update the pending forward with text handling choice
-    const foundKey = await PendingForwardHelper.updateOrExpire(
-      ctx,
-      originalMessage.message_id,
-      pendingForwards,
-      { textHandling }
+    // DUAL READ: Find and update session or pending forward
+    const { session, pending } = await getPendingForward(
+      ctx.from?.id ?? 0,
+      originalMessage.message_id
     );
 
+    let foundKey: string | undefined;
+
+    if (session && getSessionService()) {
+      await getSessionService().update(session._id.toString(), { textHandling });
+      foundKey = session._id.toString();
+    } else if (pending) {
+      pending[1].textHandling = textHandling;
+      foundKey = pending[0];
+    }
+
     if (!foundKey) {
+      await ErrorMessages.sessionExpired(ctx);
       return;
     }
 
@@ -392,12 +528,19 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // Store the selected action
-    PendingForwardHelper.updateByMessageId(
-      originalMessage.message_id,
-      pendingForwards,
-      { selectedAction: 'transform' }
+    // DUAL READ: Find and update session or pending forward
+    const { session, pending } = await getPendingForward(
+      ctx.from?.id ?? 0,
+      originalMessage.message_id
     );
+
+    if (session && getSessionService()) {
+      await getSessionService().update(session._id.toString(), {
+        selectedAction: 'transform',
+      });
+    } else if (pending) {
+      pending[1].selectedAction = 'transform';
+    }
 
     // Check if message has text - if so, show text handling first
     const content = extractMessageContent(originalMessage);
@@ -440,20 +583,30 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Find the pending forward to get selected channel and media group
-    const found = await PendingForwardHelper.getOrExpire(
-      ctx,
-      originalMessage.message_id,
-      pendingForwards
+    // DUAL READ: Find session or pending forward
+    const { session, pending } = await getPendingForward(
+      ctx.from?.id ?? 0,
+      originalMessage.message_id
     );
 
-    if (!found) {
-      return;
+    let foundKey: string | undefined;
+    let selectedChannel: string | undefined;
+    let mediaGroupMessages: Message[] | undefined;
+
+    if (session) {
+      foundKey = session._id.toString();
+      selectedChannel = session.selectedChannel;
+      mediaGroupMessages = session.mediaGroupMessages;
+    } else if (pending) {
+      foundKey = pending[0];
+      selectedChannel = pending[1].selectedChannel;
+      mediaGroupMessages = pending[1].mediaGroupMessages;
     }
 
-    const [foundKey, pending] = found;
-    const selectedChannel = pending.selectedChannel;
-    const mediaGroupMessages = pending.mediaGroupMessages;
+    if (!foundKey) {
+      await ErrorMessages.sessionExpired(ctx);
+      return;
+    }
 
     if (!selectedChannel) {
       await ErrorMessages.channelSelectionRequired(ctx);
@@ -489,8 +642,11 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       `Successfully scheduled forward post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
     );
 
-    // Clean up
+    // Clean up: Delete from both DB and Map
     if (foundKey) {
+      if (session && getSessionService()) {
+        await getSessionService().complete(session._id.toString());
+      }
       pendingForwards.delete(foundKey);
     }
   } catch (error) {
