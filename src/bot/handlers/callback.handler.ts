@@ -392,29 +392,17 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       return;
     }
 
-    // After text handling, proceed to nickname selection (if from channel) or custom text
-    const forwardInfo = parseForwardInfo(originalMessage);
-    const isFromChannel = forwardInfo?.fromChannelId !== undefined;
+    // After text handling, proceed to nickname selection
+    const nicknames = await listUserNicknames();
+    const nicknameOptions = nicknames.map((n) => ({
+      userId: n.userId,
+      nickname: n.nickname,
+    }));
+    const keyboard = createNicknameSelectKeyboard(nicknameOptions);
 
-    if (isFromChannel) {
-      // Show nickname selection
-      const nicknames = await listUserNicknames();
-      const nicknameOptions = nicknames.map((n) => ({
-        userId: n.userId,
-        nickname: n.nickname,
-      }));
-      const keyboard = createNicknameSelectKeyboard(nicknameOptions);
-
-      await ctx.editMessageText('Who should be credited for this post?', {
-        reply_markup: keyboard,
-      });
-    } else {
-      // Not from channel, show custom text option
-      const keyboard = createCustomTextKeyboard();
-      await ctx.editMessageText('Do you want to add custom text to this post?', {
-        reply_markup: keyboard,
-      });
-    }
+    await ctx.editMessageText('Who should be credited for this post?', {
+      reply_markup: keyboard,
+    });
 
     logger.debug(`Text handling "${textHandling}" selected for message ${originalMessage.message_id}`);
   } catch (error) {
@@ -455,29 +443,17 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
         reply_markup: keyboard,
       });
     } else {
-      // No text - check if from channel to show nickname selection
-      const forwardInfo = parseForwardInfo(originalMessage);
-      const isFromChannel = forwardInfo?.fromChannelId !== undefined;
+      // No text - show nickname selection for all messages
+      const nicknames = await listUserNicknames();
+      const nicknameOptions = nicknames.map((n) => ({
+        userId: n.userId,
+        nickname: n.nickname,
+      }));
+      const keyboard = createNicknameSelectKeyboard(nicknameOptions);
 
-      if (isFromChannel) {
-        // Show nickname selection
-        const nicknames = await listUserNicknames();
-        const nicknameOptions = nicknames.map((n) => ({
-          userId: n.userId,
-          nickname: n.nickname,
-        }));
-        const keyboard = createNicknameSelectKeyboard(nicknameOptions);
-
-        await ctx.editMessageText('Who should be credited for this post?', {
-          reply_markup: keyboard,
-        });
-      } else {
-        // Not from channel, show custom text option
-        const keyboard = createCustomTextKeyboard();
-        await ctx.editMessageText('Do you want to add custom text to this post?', {
-          reply_markup: keyboard,
-        });
-      }
+      await ctx.editMessageText('Who should be credited for this post?', {
+        reply_markup: keyboard,
+      });
     }
 
     logger.debug(`Transform action selected for message ${originalMessage.message_id}`);
