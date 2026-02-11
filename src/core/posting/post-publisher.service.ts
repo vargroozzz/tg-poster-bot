@@ -14,7 +14,7 @@ export class PostPublisherService {
    * Returns the Telegram message ID of the published message
    */
   async publish(post: IScheduledPost): Promise<number> {
-    // For 'forward' action, use copyMessage to preserve "Forwarded from" attribution
+    // For 'forward' action, use forwardMessage to preserve "Forwarded from" attribution
     if (post.action === 'forward') {
       return await this.copyMessage(post);
     }
@@ -39,14 +39,15 @@ export class PostPublisherService {
   }
 
   /**
-   * Copy message using Telegram's copyMessage API
+   * Forward message using Telegram's forwardMessage API
+   * This preserves the "Forwarded from" attribution
    */
   private async copyMessage(post: IScheduledPost): Promise<number> {
     if (!post.originalForward.chatId || !post.originalForward.messageId) {
-      throw new Error('Missing chatId or messageId for copyMessage');
+      throw new Error('Missing chatId or messageId for forwardMessage');
     }
 
-    const result = await this.api.copyMessage(
+    const result = await this.api.forwardMessage(
       post.targetChannelId,
       post.originalForward.chatId,
       post.originalForward.messageId
