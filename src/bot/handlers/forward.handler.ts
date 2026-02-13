@@ -12,6 +12,8 @@ import type { PendingForward } from '../../shared/helpers/pending-forward-finder
 import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
+import type { ISession } from '../../database/models/session.model.js';
+import { SessionState } from '../../shared/constants/flow-states.js';
 
 const postScheduler = new PostSchedulerService();
 
@@ -23,6 +25,23 @@ const getSessionService = () => {
   }
   return sessionService;
 };
+
+/**
+ * Convert Session to PendingForward for compatibility
+ */
+function sessionToPendingForward(session: ISession): PendingForward {
+  return {
+    message: session.originalMessage,
+    selectedChannel: session.selectedChannel,
+    textHandling: session.textHandling,
+    selectedAction: session.selectedAction,
+    selectedNickname: session.selectedNickname,
+    customText: session.customText,
+    waitingForCustomText: session.waitingForCustomText,
+    mediaGroupMessages: session.mediaGroupMessages,
+    timestamp: session.createdAt.getTime(),
+  };
+}
 
 // Store forwarded message data temporarily (in-memory Map)
 // Note: Database-backed sessions are now implemented (see SessionService)
@@ -65,29 +84,74 @@ bot.on('message:text', async (ctx: Context) => {
       return; // Not a reply or not replying to text message
     }
 
-    // Find if there's a pending forward waiting for custom text
+    const userId = ctx.from?.id;
+    if (!userId) {
+      return;
+    }
+
+    // DUAL READ: Find session waiting for custom text (DB first, then Map)
+    let session: ISession | undefined;
     let foundEntry: [string, PendingForward] | undefined;
-    for (const [key, value] of pendingForwards.entries()) {
-      if (value.waitingForCustomText) {
-        foundEntry = [key, value];
-        break;
+    let foundKey: string | undefined;
+
+    // Try database first
+    const sessionSvc = getSessionService();
+    if (sessionSvc) {
+      try {
+        session = await sessionSvc.findWaitingForCustomText(userId) ?? undefined;
+        if (session) {
+          foundKey = session._id.toString();
+          logger.debug(`Found session waiting for custom text in DB for user ${userId}`);
+        }
+      } catch (error) {
+        logger.error('Error fetching session from DB, falling back to Map:', error);
       }
     }
 
-    if (!foundEntry) {
-      return; // Not waiting for custom text
+    // Fall back to Map if not found in DB
+    if (!session) {
+      for (const [key, value] of pendingForwards.entries()) {
+        if (value.waitingForCustomText) {
+          foundEntry = [key, value];
+          foundKey = key;
+          logger.debug(`Found session waiting for custom text in Map for user ${userId}`);
+          break;
+        }
+      }
+
+      if (!foundEntry) {
+        return; // Not waiting for custom text
+      }
     }
 
-    const [_foundKey, pendingForward] = foundEntry;
+    // Update with custom text
+    const customText = message.text;
 
-    // Store the custom text
-    pendingForward.customText = message.text;
-    pendingForward.waitingForCustomText = false;
+    if (session && sessionSvc && foundKey) {
+      // Update session in DB
+      await sessionSvc.updateState(foundKey, SessionState.COMPLETED, {
+        customText,
+        waitingForCustomText: false,
+      });
 
-    // Schedule the post now (custom text is the final step)
-    await scheduleTransformPostFromForwardHandler(ctx, pendingForward, _foundKey);
+      // Convert to PendingForward for scheduling
+      const pendingForward = sessionToPendingForward(session);
+      pendingForward.customText = customText;
+      pendingForward.waitingForCustomText = false;
 
-    logger.debug(`Custom text added and post scheduled for message ${pendingForward.message.message_id}`);
+      // Schedule the post
+      await scheduleTransformPostFromForwardHandler(ctx, pendingForward, foundKey);
+    } else if (foundEntry) {
+      // Update Map entry (legacy path)
+      const [key, pendingForward] = foundEntry;
+      pendingForward.customText = customText;
+      pendingForward.waitingForCustomText = false;
+
+      // Schedule the post
+      await scheduleTransformPostFromForwardHandler(ctx, pendingForward, key);
+    }
+
+    logger.debug(`Custom text added and post scheduled for user ${userId}`);
   } catch (error) {
     logger.error('Error handling custom text input:', error);
   }
@@ -417,7 +481,19 @@ async function scheduleTransformPostFromForwardHandler(
       `Successfully scheduled transformed post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
     );
 
-    // Clean up
+    // Clean up: Delete from both DB and Map
+    const sessionSvc = getSessionService();
+    if (sessionSvc) {
+      try {
+        // Try to find and complete session in DB (pendingKey might be session ID)
+        const session = await sessionSvc.findById(pendingKey);
+        if (session) {
+          await sessionSvc.complete(pendingKey);
+        }
+      } catch (error) {
+        logger.error('Error cleaning up session from DB:', error);
+      }
+    }
     pendingForwards.delete(pendingKey);
   } catch (error) {
     logger.error('Error scheduling transform post:', error);
