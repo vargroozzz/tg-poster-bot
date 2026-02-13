@@ -209,6 +209,22 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 });
 
 async function processSingleMessage(ctx: Context, message: Message) {
+  // Idempotency check: Skip if we already have a session for this message
+  // This prevents duplicate processing during zero-downtime deployments
+  const sessionSvc = getSessionService();
+  if (sessionSvc && ctx.from?.id) {
+    try {
+      const existingSession = await sessionSvc.findByMessage(ctx.from.id, message.message_id);
+      if (existingSession) {
+        logger.debug(`Session already exists for message ${message.message_id}, skipping duplicate processing`);
+        return;
+      }
+    } catch (error) {
+      logger.error('Error checking for existing session:', error);
+      // Continue processing if check fails (fail open)
+    }
+  }
+
   // Get available posting channels
   const postingChannels = await getActivePostingChannels();
 
@@ -243,8 +259,7 @@ async function processSingleMessage(ctx: Context, message: Message) {
     timestamp: Date.now(),
   });
 
-  // Also write to database for session persistence
-  const sessionSvc = getSessionService();
+  // Also write to database for session persistence (reuse sessionSvc from above)
   if (sessionSvc && ctx.from?.id) {
     try {
       await sessionSvc.create(ctx.from.id, message);
