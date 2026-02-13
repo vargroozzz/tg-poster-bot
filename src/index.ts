@@ -44,7 +44,15 @@ async function main() {
 
     // Start post worker for scheduled publishing
     postWorker = new PostWorkerService(bot.api);
-    postWorker.start();
+
+    // Only run continuous worker in local development (not on Render with cron job)
+    const useCronJob = process.env.USE_CRON_JOB === 'true';
+    if (useCronJob) {
+      logger.info('Using Render Cron Job for scheduled posts (continuous worker disabled)');
+    } else {
+      logger.info('Starting continuous post worker (local development mode)');
+      postWorker.start();
+    }
 
     // Start HTTP server for health checks and webhooks
     const port = process.env.PORT ?? 3000;
@@ -63,6 +71,27 @@ async function main() {
           logger.error('Error handling webhook:', error);
           res.writeHead(500);
           res.end();
+        }
+        return;
+      }
+
+      // Process scheduled posts endpoint (for Render Cron Job)
+      if (req.url === '/process-posts' && req.method === 'POST') {
+        try {
+          logger.info('Processing scheduled posts via HTTP endpoint');
+          if (postWorker) {
+            // Trigger immediate processing
+            await postWorker.processNow();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok', message: 'Posts processed' }));
+          } else {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Post worker not initialized' }));
+          }
+        } catch (error) {
+          logger.error('Error processing posts:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to process posts' }));
         }
         return;
       }

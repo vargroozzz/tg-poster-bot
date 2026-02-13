@@ -53,6 +53,13 @@ export class PostWorkerService {
   }
 
   /**
+   * Process posts immediately (for manual trigger or cron job)
+   */
+  async processNow() {
+    return this.processScheduledPosts();
+  }
+
+  /**
    * Process all pending posts whose time has arrived
    */
   private async processScheduledPosts() {
