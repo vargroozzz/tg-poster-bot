@@ -48,6 +48,52 @@ function sessionToPendingForward(session: ISession): PendingForward {
 }
 
 /**
+ * Handle nickname selection - either auto-select if user has nickname, or show keyboard
+ * Returns true if handled (auto-selected), false if keyboard shown
+ */
+async function handleNicknameSelection(
+  ctx: Context,
+  originalMessage: Message,
+  sessionId?: string
+): Promise<boolean> {
+  // Check if message is from a user with a known nickname
+  const forwardInfo = parseForwardInfo(originalMessage);
+  const fromUserId = forwardInfo?.fromUserId;
+
+  if (fromUserId) {
+    // Look up nickname for this user
+    const nickname = await NicknameHelper.findNicknameByUserId(fromUserId);
+
+    if (nickname) {
+      // Auto-select this nickname and proceed to custom text
+      logger.debug(`Auto-selecting nickname "${nickname}" for user ${fromUserId}`);
+
+      // Update session/pending with selected nickname
+      const sessionSvc = getSessionService();
+      if (sessionId && sessionSvc) {
+        await sessionSvc.update(sessionId, { selectedNickname: nickname });
+      }
+
+      // Show custom text keyboard
+      const keyboard = createCustomTextKeyboard();
+      await ctx.editMessageText('Do you want to add custom text to this post?', {
+        reply_markup: keyboard,
+      });
+
+      return true; // Handled
+    }
+  }
+
+  // No nickname found - show selection keyboard
+  const keyboard = await NicknameHelper.getNicknameKeyboard();
+  await ctx.editMessageText('Who should be credited for this post?', {
+    reply_markup: keyboard,
+  });
+
+  return false; // Not handled, keyboard shown
+}
+
+/**
  * Helper to get pending forward from either DB or Map (dual-read pattern)
  * Tries DB first for persistence, falls back to Map for compatibility
  */
@@ -216,12 +262,9 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
           reply_markup: keyboard,
         });
       } else {
-        // No text - show nickname selection
-        const keyboard = await NicknameHelper.getNicknameKeyboard();
-
-        await ctx.editMessageText('Who should be credited for this post?', {
-          reply_markup: keyboard,
-        });
+        // No text - try auto-selecting nickname or show selection keyboard
+        const sessionId = session?._id.toString();
+        await handleNicknameSelection(ctx, originalMessage, sessionId);
       }
 
       logger.debug(`Red-listed channel - auto-transforming message ${originalMessage.message_id}`);
@@ -541,12 +584,8 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       return;
     }
 
-    // After text handling, proceed to nickname selection
-    const keyboard = await NicknameHelper.getNicknameKeyboard();
-
-    await ctx.editMessageText('Who should be credited for this post?', {
-      reply_markup: keyboard,
-    });
+    // After text handling, try auto-selecting nickname or show selection keyboard
+    await handleNicknameSelection(ctx, originalMessage, foundKey);
 
     logger.debug(`Text handling "${textHandling}" selected for message ${originalMessage.message_id}`);
   } catch (error) {
@@ -605,12 +644,9 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
         reply_markup: keyboard,
       });
     } else {
-      // No text - show nickname selection for all messages
-      const keyboard = await NicknameHelper.getNicknameKeyboard();
-
-      await ctx.editMessageText('Who should be credited for this post?', {
-        reply_markup: keyboard,
-      });
+      // No text - try auto-selecting nickname or show selection keyboard
+      const sessionId = session?._id.toString();
+      await handleNicknameSelection(ctx, originalMessage, sessionId);
     }
 
     logger.debug(`Transform action selected for message ${originalMessage.message_id}`);
