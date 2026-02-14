@@ -317,6 +317,11 @@ async function processMediaGroup(mediaGroupId: string) {
   // Parse forward information from primary message
   const forwardInfo = parseForwardInfo(primaryMessage);
 
+  // For media groups, store all message IDs for proper forwarding
+  if (forwardInfo && messages.length > 1) {
+    forwardInfo.mediaGroupMessageIds = messages.map((msg) => msg.message_id);
+  }
+
   // Check if from a green-listed channel
   const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
