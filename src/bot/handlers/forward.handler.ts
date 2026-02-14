@@ -70,7 +70,8 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 // Handle text messages when waiting for custom text input
-bot.on('message:text', async (ctx: Context) => {
+// Only listen to messages that are replies (to filter out forwarded text messages)
+bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (ctx: Context) => {
   try {
     const message = ctx.message;
 
@@ -78,10 +79,10 @@ bot.on('message:text', async (ctx: Context) => {
       return;
     }
 
-    // Check if this is a reply to our bot message and we're waiting for custom text
+    // Check if this is a reply to a text message (our custom text prompt)
     const replyToMessage = message.reply_to_message;
     if (!replyToMessage || !('text' in replyToMessage)) {
-      return; // Not a reply or not replying to text message
+      return; // Not replying to text message
     }
 
     const userId = ctx.from?.id;
