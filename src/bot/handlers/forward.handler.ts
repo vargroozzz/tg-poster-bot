@@ -166,12 +166,6 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
       return;
     }
 
-    // Skip if this is a custom text reply (handled by custom text handler above)
-    if ('text' in message && message.reply_to_message && 'text' in message.reply_to_message) {
-      // This is handled by the custom text handler
-      return;
-    }
-
     // Check if this is part of a media group
     const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
 
