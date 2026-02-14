@@ -39,14 +39,29 @@ export class PostPublisherService {
   }
 
   /**
-   * Forward message using Telegram's forwardMessage API
+   * Forward message using Telegram's forwardMessage(s) API
    * This preserves the "Forwarded from" attribution
+   * For media groups, forwards all messages atomically to preserve the album
    */
   private async copyMessage(post: IScheduledPost): Promise<number> {
     if (!post.originalForward.chatId || !post.originalForward.messageId) {
       throw new Error('Missing chatId or messageId for forwardMessage');
     }
 
+    // For media groups, use forwardMessages to preserve album grouping
+    if (post.originalForward.mediaGroupMessageIds && post.originalForward.mediaGroupMessageIds.length > 1) {
+      // Use raw API for forwardMessages (Grammy might not have typed wrapper)
+      const result = (await this.api.raw.forwardMessages({
+        chat_id: post.targetChannelId,
+        from_chat_id: post.originalForward.chatId,
+        message_ids: post.originalForward.mediaGroupMessageIds,
+      })) as any;
+
+      // Returns array of MessageId objects
+      return result[0].message_id;
+    }
+
+    // Single message forward
     const result = await this.api.forwardMessage(
       post.targetChannelId,
       post.originalForward.chatId,
