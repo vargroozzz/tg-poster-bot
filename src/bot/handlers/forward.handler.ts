@@ -158,11 +158,17 @@ bot.on('message:text', async (ctx: Context) => {
 });
 
 // Handle both forwarded and non-forwarded messages
-bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation'], async (ctx: Context) => {
+bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:text'], async (ctx: Context) => {
   try {
     const message = ctx.message;
 
     if (!message) {
+      return;
+    }
+
+    // Skip if this is a custom text reply (handled by custom text handler above)
+    if ('text' in message && message.reply_to_message && 'text' in message.reply_to_message) {
+      // This is handled by the custom text handler
       return;
     }
 
