@@ -33,6 +33,11 @@ export class AttributionService {
       return await this.buildUserAttribution(forwardInfo.fromUserId, manualNickname);
     }
 
+    // For original content (no forward info) with manually selected nickname
+    if (manualNickname !== undefined && manualNickname !== null) {
+      return `\n\nvia ${manualNickname}`;
+    }
+
     // No attribution available
     return null;
   }
