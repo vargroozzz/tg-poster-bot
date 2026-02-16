@@ -8,6 +8,7 @@ export enum SessionState {
   TEXT_HANDLING = 'text_handling',
   NICKNAME_SELECT = 'nickname_select',
   CUSTOM_TEXT = 'custom_text',
+  PREVIEW = 'preview',
   COMPLETED = 'completed',
 }
 
