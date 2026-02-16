@@ -409,6 +409,11 @@ async function scheduleTransformPost(ctx: Context, originalMessage: Message, pen
     // Parse forward info
     const forwardInfo = parseForwardInfo(originalMessage);
 
+    // For media groups, store all message IDs for proper forwarding
+    if (mediaGroupMessages && mediaGroupMessages.length > 1) {
+      forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
+    }
+
     // Extract message content
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
 
@@ -704,6 +709,11 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
 
     // Parse forward info
     const forwardInfo = parseForwardInfo(originalMessage);
+
+    // For media groups, store all message IDs for proper forwarding
+    if (mediaGroupMessages && mediaGroupMessages.length > 1) {
+      forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
+    }
 
     // Extract message content (including media group if present)
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
