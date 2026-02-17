@@ -41,7 +41,11 @@ export class SessionStateMachine {
         return SessionState.CUSTOM_TEXT;
 
       case SessionState.CUSTOM_TEXT:
-        // After custom text decision, we're done
+        // After custom text decision, show preview
+        return SessionState.PREVIEW;
+
+      case SessionState.PREVIEW:
+        // After preview, we're done
         return SessionState.COMPLETED;
 
       case SessionState.COMPLETED:
@@ -75,6 +79,8 @@ export class SessionStateMachine {
       case SessionState.NICKNAME_SELECT:
         return [SessionState.CUSTOM_TEXT];
       case SessionState.CUSTOM_TEXT:
+        return [SessionState.PREVIEW];
+      case SessionState.PREVIEW:
         return [SessionState.COMPLETED];
       case SessionState.COMPLETED:
         return [];
