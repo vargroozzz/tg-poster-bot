@@ -18,6 +18,7 @@ export interface ISession extends Document {
   customText?: string;
   waitingForCustomText?: boolean;
   mediaGroupMessages?: Message[];
+  previewMessageId?: number;
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date;
@@ -58,6 +59,10 @@ const sessionSchema = new Schema<ISession>({
   customText: String,
   waitingForCustomText: Boolean,
   mediaGroupMessages: [Schema.Types.Mixed],
+  previewMessageId: {
+    type: Number,
+    required: false,
+  },
   createdAt: {
     type: Date,
     default: Date.now,
