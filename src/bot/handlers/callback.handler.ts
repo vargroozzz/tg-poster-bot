@@ -18,6 +18,8 @@ import type { SessionService } from '../../core/session/session.service.js';
 import type { ISession } from '../../database/models/session.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
 import { SessionStateMachine } from '../../core/session/session-state-machine.js';
+import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
+import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 
 const postScheduler = new PostSchedulerService();
 
@@ -29,23 +31,6 @@ const getSessionService = () => {
   }
   return sessionService;
 };
-
-/**
- * Convert Session to PendingForward for compatibility
- */
-function sessionToPendingForward(session: ISession): PendingForward {
-  return {
-    message: session.originalMessage,
-    selectedChannel: session.selectedChannel,
-    textHandling: session.textHandling,
-    selectedAction: session.selectedAction,
-    selectedNickname: session.selectedNickname,
-    customText: session.customText,
-    waitingForCustomText: session.waitingForCustomText,
-    mediaGroupMessages: session.mediaGroupMessages,
-    timestamp: session.createdAt.getTime(),
-  };
-}
 
 /**
  * Handle nickname selection - either auto-select if user has nickname, or show keyboard
@@ -322,9 +307,9 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
       : { customText: undefined };
 
     if (session && getSessionService()) {
-      // For custom text, we either wait for input or proceed to completion
-      // Keep state as CUSTOM_TEXT while waiting, or transition to COMPLETED
-      const nextState = action === 'add' ? SessionState.CUSTOM_TEXT : SessionState.COMPLETED;
+      // For custom text, we either wait for input or proceed to preview
+      // Keep state as CUSTOM_TEXT while waiting, or transition to PREVIEW
+      const nextState = action === 'add' ? SessionState.CUSTOM_TEXT : SessionState.PREVIEW;
 
       await getSessionService().updateState(session._id.toString(), nextState, updates);
       foundKey = session._id.toString();
@@ -344,8 +329,8 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
           'This text will be added at the beginning of your post.'
       );
     } else {
-      // Skip custom text - schedule the post now
-      await scheduleTransformPost(ctx, originalMessage, foundKey);
+      // Skip custom text - show preview
+      await showPreview(ctx, foundKey);
     }
 
     logger.debug(`Custom text action "${action}" for message ${originalMessage.message_id}`);
@@ -359,104 +344,41 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
   }
 });
 
-// Helper function to schedule a transform post
-async function scheduleTransformPost(ctx: Context, originalMessage: Message, pendingKey?: string) {
+// Helper function to show preview
+async function showPreview(ctx: Context, sessionKey: string) {
   try {
-    // DUAL READ: Find session or pending forward
-    let session: ISession | undefined;
-    let pending: PendingForward | undefined;
-    let foundKey = pendingKey;
-
-    if (pendingKey) {
-      // Try to determine if pendingKey is a session ID or Map key
-      const sessionSvc = getSessionService();
-      if (sessionSvc) {
-        session = await sessionSvc.findById(pendingKey) ?? undefined;
-      }
-      if (!session) {
-        pending = pendingForwards.get(pendingKey);
-      }
-    } else {
-      const result = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      session = result.session;
-      if (result.pending) {
-        [foundKey, pending] = result.pending;
-      }
-    }
-
-    // Convert session to pending format if needed
-    if (session && !pending) {
-      pending = sessionToPendingForward(session);
-      foundKey = session._id.toString();
-    }
-
-    if (!pending) {
-      await ErrorMessages.channelSelectionRequired(ctx);
+    const sessionSvc = getSessionService();
+    if (!sessionSvc) {
+      await ErrorMessages.sessionExpired(ctx);
       return;
     }
 
-    const selectedChannel = pending.selectedChannel;
-    const textHandling = pending.textHandling ?? 'keep';
-    const selectedNickname = pending.selectedNickname;
-    const customText = pending.customText;
-    const mediaGroupMessages = pending.mediaGroupMessages;
-
-    if (!selectedChannel) {
-      await ErrorMessages.channelSelectionRequired(ctx);
+    const session = await sessionSvc.findById(sessionKey);
+    if (!session) {
+      await ErrorMessages.sessionExpired(ctx);
       return;
     }
 
-    // Parse forward info
-    const forwardInfo = parseForwardInfo(originalMessage);
+    // Generate preview content
+    const previewGenerator = new PreviewGeneratorService();
+    const previewContent = await previewGenerator.generatePreview(session);
 
-    // For media groups, store all message IDs for proper forwarding
-    if (mediaGroupMessages && mediaGroupMessages.length > 1) {
-      forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
-    }
+    // Send preview to user's chat
+    const previewSender = new PreviewSenderService(ctx.api);
+    const previewMessageId = await previewSender.sendPreview(ctx.from!.id, previewContent, sessionKey);
 
-    // Extract message content
-    const content = extractMessageContent(originalMessage, mediaGroupMessages);
-
-    if (!content) {
-      await ErrorMessages.unsupportedMessageType(ctx);
-      return;
-    }
-
-    // Schedule using the unified scheduler service
-    const result = await postScheduler.scheduleTransformPost({
-      targetChannelId: selectedChannel,
-      originalMessage,
-      forwardInfo,
-      content,
-      textHandling,
-      selectedNickname,
-      customText,
+    // Update session with preview message ID and transition to PREVIEW state
+    await sessionSvc.updateState(sessionKey, SessionState.PREVIEW, {
+      previewMessageId,
     });
 
-    await ctx.editMessageText(
-      `✅ Post scheduled with transformation\n` +
-        `📍 Target: ${selectedChannel}\n` +
-        `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`
-    );
+    // Edit the flow message to indicate preview sent
+    await ctx.editMessageText('Preview sent above. Click Schedule when ready.');
 
-    logger.info(
-      `Successfully scheduled transformed post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
-    );
-
-    // Clean up: Delete from both DB and Map
-    if (foundKey) {
-      if (session && getSessionService()) {
-        await getSessionService().complete(session._id.toString());
-      }
-      pendingForwards.delete(foundKey);
-    }
+    logger.debug(`Preview shown for session ${sessionKey}`);
   } catch (error) {
-    await ErrorMessages.catchAndReply(
-      ctx,
-      error,
-      'Error scheduling post. Please try again.',
-      'Error scheduling transform post'
-    );
+    logger.error('Error showing preview:', error);
+    await ctx.editMessageText('Preview generation failed. Please try again.');
   }
 }
 
@@ -723,37 +645,172 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Schedule using the unified scheduler service
-    const result = await postScheduler.scheduleForwardPost({
-      targetChannelId: selectedChannel,
-      originalMessage,
-      forwardInfo,
-      content,
-    });
-
-    await ctx.editMessageText(
-      `✅ Post scheduled as-is\n` +
-        `📍 Target: ${selectedChannel}\n` +
-        `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`
-    );
-
-    logger.info(
-      `Successfully scheduled forward post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
-    );
-
-    // Clean up: Delete from both DB and Map
-    if (foundKey) {
-      if (session && getSessionService()) {
-        await getSessionService().complete(session._id.toString());
-      }
-      pendingForwards.delete(foundKey);
+    // Update session with forward action and transition to PREVIEW state
+    if (session && getSessionService()) {
+      await getSessionService().updateState(foundKey, SessionState.PREVIEW, {
+        selectedAction: 'forward',
+      });
+    } else if (pending) {
+      pending[1].selectedAction = 'forward';
     }
+
+    // Show preview instead of scheduling immediately
+    await showPreview(ctx, foundKey);
+
+    logger.debug(`Forward action selected for message ${originalMessage.message_id}`);
   } catch (error) {
     await ErrorMessages.catchAndReply(
       ctx,
       error,
       'Error scheduling post. Please try again.',
       'Error in forward callback'
+    );
+  }
+});
+
+// Handle preview schedule button
+bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const match = ctx.callbackQuery?.data?.match(/^preview:schedule:(.+)$/);
+    const sessionKey = match?.[1];
+
+    if (!sessionKey) {
+      await ctx.reply('Invalid session. Please try again.');
+      return;
+    }
+
+    const sessionSvc = getSessionService();
+    if (!sessionSvc) {
+      await ctx.reply('Service unavailable. Please try again.');
+      return;
+    }
+
+    const session = await sessionSvc.findById(sessionKey);
+    if (!session) {
+      await ctx.reply('Session expired. Please forward the message again.');
+      return;
+    }
+
+    const originalMessage = session.originalMessage;
+    const mediaGroupMessages = session.mediaGroupMessages;
+    const selectedChannel = session.selectedChannel;
+
+    if (!selectedChannel) {
+      await ctx.reply('No channel selected.');
+      return;
+    }
+
+    // Parse forward info
+    const forwardInfo = parseForwardInfo(originalMessage);
+    if (mediaGroupMessages && mediaGroupMessages.length > 1) {
+      forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
+    }
+
+    // Extract message content
+    const content = extractMessageContent(originalMessage, mediaGroupMessages);
+    if (!content) {
+      await ctx.reply('Unsupported message type.');
+      return;
+    }
+
+    let scheduledTime: Date;
+
+    if (session.selectedAction === 'forward') {
+      const result = await postScheduler.scheduleForwardPost({
+        targetChannelId: selectedChannel,
+        originalMessage,
+        forwardInfo,
+        content,
+      });
+      scheduledTime = result.scheduledTime;
+    } else {
+      const result = await postScheduler.scheduleTransformPost({
+        targetChannelId: selectedChannel,
+        originalMessage,
+        forwardInfo,
+        content,
+        textHandling: session.textHandling ?? 'keep',
+        selectedNickname: session.selectedNickname,
+        customText: session.customText,
+      });
+      scheduledTime = result.scheduledTime;
+    }
+
+    // Delete preview message (cleanup)
+    if (session.previewMessageId) {
+      try {
+        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
+      } catch (err) {
+        logger.warn('Could not delete preview message:', err);
+      }
+    }
+
+    // Clean up session
+    await sessionSvc.complete(sessionKey);
+
+    await ctx.reply(
+      `Post scheduled!\nTarget: ${selectedChannel}\nScheduled for: ${formatSlotTime(scheduledTime)}`
+    );
+
+    logger.info(`Post scheduled from preview for session ${sessionKey}`);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Failed to schedule post. Please try again.',
+      'Error in preview:schedule callback'
+    );
+  }
+});
+
+// Handle preview cancel button
+bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const match = ctx.callbackQuery?.data?.match(/^preview:cancel:(.+)$/);
+    const sessionKey = match?.[1];
+
+    if (!sessionKey) {
+      await ctx.reply('Invalid session.');
+      return;
+    }
+
+    const sessionSvc = getSessionService();
+    if (!sessionSvc) {
+      await ctx.reply('Service unavailable.');
+      return;
+    }
+
+    const session = await sessionSvc.findById(sessionKey);
+    if (!session) {
+      await ctx.reply('Session already expired or cancelled.');
+      return;
+    }
+
+    // Delete preview message
+    if (session.previewMessageId) {
+      try {
+        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
+      } catch (err) {
+        logger.warn('Could not delete preview message:', err);
+      }
+    }
+
+    // Delete session
+    await sessionSvc.complete(sessionKey);
+
+    await ctx.reply('Cancelled. Forward a new message to start over.');
+
+    logger.info(`Preview cancelled for session ${sessionKey}`);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error cancelling preview.',
+      'Error in preview:cancel callback'
     );
   }
 });

@@ -11,7 +11,7 @@ export class PreviewSenderService {
     this.mediaSender = new MediaSenderService(api);
   }
 
-  async sendPreview(userId: number, content: MessageContent): Promise<number> {
+  async sendPreview(userId: number, content: MessageContent, sessionId: string): Promise<number> {
     // Send the content first
     await this.mediaSender.sendMessage(userId, content);
 
@@ -19,7 +19,7 @@ export class PreviewSenderService {
     // editMessageReplyMarkup cannot be used on media group messages, and is
     // unreliable for other media types in some clients, so a dedicated text
     // message with the keyboard is the most reliable approach.
-    const keyboard = createPreviewActionKeyboard();
+    const keyboard = createPreviewActionKeyboard(sessionId);
     const controlMessage = await this.api.sendMessage(userId, 'What would you like to do?', {
       reply_markup: keyboard,
     });
