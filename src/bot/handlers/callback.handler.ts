@@ -645,11 +645,9 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Update session with forward action and transition to PREVIEW state
+    // Store forward action in session (showPreview handles state transition to PREVIEW)
     if (session && getSessionService()) {
-      await getSessionService().updateState(foundKey, SessionState.PREVIEW, {
-        selectedAction: 'forward',
-      });
+      await getSessionService().update(foundKey, { selectedAction: 'forward' });
     } else if (pending) {
       pending[1].selectedAction = 'forward';
     }
