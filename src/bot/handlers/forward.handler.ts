@@ -14,6 +14,8 @@ import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
 import type { ISession } from '../../database/models/session.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
+import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
+import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 
 const postScheduler = new PostSchedulerService();
 
@@ -25,23 +27,6 @@ const getSessionService = () => {
   }
   return sessionService;
 };
-
-/**
- * Convert Session to PendingForward for compatibility
- */
-function sessionToPendingForward(session: ISession): PendingForward {
-  return {
-    message: session.originalMessage,
-    selectedChannel: session.selectedChannel,
-    textHandling: session.textHandling,
-    selectedAction: session.selectedAction,
-    selectedNickname: session.selectedNickname,
-    customText: session.customText,
-    waitingForCustomText: session.waitingForCustomText,
-    mediaGroupMessages: session.mediaGroupMessages,
-    timestamp: session.createdAt.getTime(),
-  };
-}
 
 // Store forwarded message data temporarily (in-memory Map)
 // Note: Database-backed sessions are now implemented (see SessionService)
@@ -129,19 +114,32 @@ bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (c
     const customText = message.text;
 
     if (session && sessionSvc && foundKey) {
-      // Update session in DB
-      await sessionSvc.updateState(foundKey, SessionState.COMPLETED, {
+      // Update session with custom text, transition to PREVIEW state
+      await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
         customText,
         waitingForCustomText: false,
       });
 
-      // Convert to PendingForward for scheduling
-      const pendingForward = sessionToPendingForward(session);
-      pendingForward.customText = customText;
-      pendingForward.waitingForCustomText = false;
+      // Fetch updated session for preview generation
+      const updatedSession = await sessionSvc.findById(foundKey);
+      if (!updatedSession) {
+        await ctx.reply('⚠️ Session not found. Please try again.');
+        return;
+      }
 
-      // Schedule the post
-      await scheduleTransformPostFromForwardHandler(ctx, pendingForward, foundKey);
+      // Generate preview content
+      const previewGenerator = new PreviewGeneratorService();
+      const previewContent = await previewGenerator.generatePreview(updatedSession);
+
+      // Send preview to user's chat
+      const previewSender = new PreviewSenderService(ctx.api);
+      const previewMessageId = await previewSender.sendPreview(ctx.from!.id, previewContent, foundKey);
+
+      // Store preview message ID in session
+      await sessionSvc.update(foundKey, { previewMessageId });
+
+      await ctx.reply('👁️ Preview sent above. Click Schedule when ready.');
+      logger.debug(`Preview shown after custom text for session ${foundKey}`);
     } else if (foundEntry) {
       // Update Map entry (legacy path)
       const [key, pendingForward] = foundEntry;
