@@ -45,7 +45,11 @@ const mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
 interface ReplyChainBuffer {
   messages: Message[];
   timeout: NodeJS.Timeout;
-  ctx: Context; // store ctx from first message for sending reply
+  // ctx is stored here to support the single-message fallback path (processSingleMessage
+  // requires a full Grammy Context). Stale entries are cleaned by the periodic interval
+  // below, so this does not cause a long-lived memory leak.
+  ctx: Context;
+  createdAt: number; // epoch ms — used by periodic cleanup
 }
 
 const replyChainBuffers = new Map<string, ReplyChainBuffer>();
@@ -59,6 +63,18 @@ setInterval(() => {
     if (now - value.timestamp > ttl) {
       pendingForwards.delete(key);
       logger.debug(`Cleaned up expired pending forward: ${key}`);
+    }
+  }
+
+  // Also clean up any stale reply-chain buffers (should complete in ~1 s, so
+  // anything older than 5 minutes is leaked — e.g. processReplyChain threw
+  // before reaching replyChainBuffers.delete).
+  const replyChainTtl = 5 * 60 * 1000; // 5 minutes
+  for (const [key, buffer] of replyChainBuffers.entries()) {
+    if (now - buffer.createdAt > replyChainTtl) {
+      clearTimeout(buffer.timeout);
+      replyChainBuffers.delete(key);
+      logger.debug(`Cleaned up stale reply chain buffer: ${key}`);
     }
   }
 }, 5 * 60 * 1000);
@@ -251,6 +267,7 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
         messages: [message],
         timeout,
         ctx,
+        createdAt: Date.now(),
       });
     } else {
       // No reply relationship — process as single message
