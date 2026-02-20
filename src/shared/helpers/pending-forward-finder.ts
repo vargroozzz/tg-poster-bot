@@ -15,6 +15,7 @@ export interface PendingForward {
   customText?: string;
   waitingForCustomText?: boolean;
   mediaGroupMessages?: Message[];
+  replyChainMessages?: Message[];
   timestamp: number;
 }
 

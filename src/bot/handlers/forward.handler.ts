@@ -41,6 +41,15 @@ interface MediaGroupBuffer {
 
 const mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
 
+// Store reply chain buffers temporarily
+interface ReplyChainBuffer {
+  messages: Message[];
+  timeout: NodeJS.Timeout;
+  ctx: Context; // store ctx from first message for sending reply
+}
+
+const replyChainBuffers = new Map<string, ReplyChainBuffer>();
+
 // Clean up old pending forwards every 5 minutes
 setInterval(() => {
   const now = Date.now();
@@ -200,7 +209,53 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
     }
 
     // Single message (not part of media group)
-    await processSingleMessage(ctx, message);
+    // Check if this could be part of a reply chain
+    const replyToMessageId = message.reply_to_message?.message_id;
+    const messageId = message.message_id;
+    const chatId = message.chat.id;
+
+    // Look for existing buffer containing a related message
+    let bufferKey: string | undefined;
+    for (const [key, buffer] of replyChainBuffers.entries()) {
+      for (const bufferedMsg of buffer.messages) {
+        // This message replies to a buffered message, OR a buffered message replies to this one
+        const bufferedMsgReplyTo = bufferedMsg.reply_to_message?.message_id;
+        if (bufferedMsg.message_id === replyToMessageId ||
+            bufferedMsgReplyTo === messageId) {
+          bufferKey = key;
+          break;
+        }
+      }
+      if (bufferKey) break;
+    }
+
+    if (bufferKey) {
+      // Add to existing buffer
+      const buffer = replyChainBuffers.get(bufferKey)!;
+      buffer.messages.push(message);
+      clearTimeout(buffer.timeout);
+      buffer.timeout = setTimeout(() => {
+        processReplyChain(bufferKey!).catch((err) => {
+          logger.error('Error processing reply chain:', err);
+        });
+      }, 1000);
+    } else if (replyToMessageId) {
+      // Start new buffer — this message has a reply relationship
+      const newBufferKey = `${chatId}_${messageId}_${Date.now()}`;
+      const timeout = setTimeout(() => {
+        processReplyChain(newBufferKey).catch((err) => {
+          logger.error('Error processing reply chain:', err);
+        });
+      }, 1000);
+      replyChainBuffers.set(newBufferKey, {
+        messages: [message],
+        timeout,
+        ctx,
+      });
+    } else {
+      // No reply relationship — process as single message
+      await processSingleMessage(ctx, message);
+    }
   } catch (error) {
     logger.error('Error handling message:', error);
     await ctx.reply('❌ Error processing message. Please try again.');
@@ -362,6 +417,96 @@ async function processMediaGroup(mediaGroupId: string) {
   await bot.api.sendMessage(
     primaryMessage.chat.id,
     `📍 Select target channel for this album (${messages.length} items):${greenListNote}`,
+    {
+      reply_markup: keyboard,
+      reply_to_message_id: primaryMessage.message_id,
+    }
+  );
+}
+
+async function processReplyChain(bufferKey: string) {
+  const buffer = replyChainBuffers.get(bufferKey);
+  if (!buffer) return;
+
+  clearTimeout(buffer.timeout);
+  replyChainBuffers.delete(bufferKey);
+
+  const { messages, ctx } = buffer;
+  if (messages.length === 0) return;
+
+  // If only one message ended up in the buffer, treat as single message
+  if (messages.length === 1) {
+    await processSingleMessage(ctx, messages[0]);
+    return;
+  }
+
+  // Sort by message_id for chronological order
+  messages.sort((a, b) => a.message_id - b.message_id);
+  const primaryMessage = messages[0];
+
+  // Get available posting channels
+  const postingChannels = await getActivePostingChannels();
+  if (postingChannels.length === 0) {
+    await ctx.reply(
+      '⚠️ No posting channels configured.\n\nPlease add channels first using /addchannel command.'
+    );
+    return;
+  }
+
+  // Idempotency check using primary message
+  const sessionSvc = getSessionService();
+  if (sessionSvc && ctx.from?.id) {
+    try {
+      const existing = await sessionSvc.findByMessage(ctx.from.id, primaryMessage.message_id);
+      if (existing) {
+        logger.debug(`Session already exists for reply chain primary message ${primaryMessage.message_id}, skipping`);
+        return;
+      }
+    } catch (err) {
+      logger.error('Error checking idempotency for reply chain:', err);
+    }
+  }
+
+  // Create session for primary message
+  let sessionId: string | undefined;
+  if (sessionSvc && ctx.from?.id) {
+    try {
+      const session = await sessionSvc.create(ctx.from.id, primaryMessage);
+      sessionId = session._id.toString();
+      // Store reply chain messages and pre-select forward action
+      await sessionSvc.update(sessionId, {
+        replyChainMessages: messages,
+        selectedAction: 'forward',
+      });
+      logger.debug(`Session ${sessionId} created for reply chain of ${messages.length} messages`);
+    } catch (err) {
+      logger.error('Failed to create session for reply chain:', err);
+    }
+  }
+
+  // Also store in legacy pendingForwards map (dual-write pattern)
+  const forwardInfo = parseForwardInfo(primaryMessage);
+  if (messages.length > 1) {
+    forwardInfo.replyChainMessageIds = messages.map((m) => m.message_id);
+  }
+
+  const callbackKey = sessionId ?? `${primaryMessage.from?.id}_${primaryMessage.message_id}_${Date.now()}`;
+  pendingForwards.set(callbackKey, {
+    message: primaryMessage,
+    replyChainMessages: messages,
+    timestamp: Date.now(),
+  });
+
+  // Build channel selection keyboard
+  const channels = postingChannels.map((ch) => ({
+    id: ch.channelId,
+    title: ch.channelTitle ?? ch.channelId,
+    username: ch.channelUsername,
+  }));
+  const keyboard = createChannelSelectKeyboard(channels);
+
+  await ctx.reply(
+    `📍 Select target channel for this thread (${messages.length} messages):`,
     {
       reply_markup: keyboard,
       reply_to_message_id: primaryMessage.message_id,
