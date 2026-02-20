@@ -66,7 +66,10 @@ const sessionSchema = new Schema<ISession>({
     type: Number,
     required: false,
   },
-  previewMessageIds: [Number],
+  previewMessageIds: {
+    type: [Number],
+    default: undefined,
+  },
   createdAt: {
     type: Date,
     default: Date.now,
