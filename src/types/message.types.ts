@@ -8,6 +8,7 @@ export interface ForwardInfo {
   fromChannelTitle?: string;
   messageLink?: string;
   mediaGroupMessageIds?: number[]; // For forwarding entire albums
+  replyChainMessageIds?: number[]; // For reply chains
 }
 
 export interface MediaGroupItem {
