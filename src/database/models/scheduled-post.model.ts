@@ -47,6 +47,8 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     fromChannelUsername: String,
     fromChannelTitle: String,
     messageLink: String,
+    mediaGroupMessageIds: [Number],
+    replyChainMessageIds: [Number],
   },
   content: {
     type: {
