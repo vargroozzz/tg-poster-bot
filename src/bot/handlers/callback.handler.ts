@@ -391,9 +391,6 @@ async function showPreview(ctx: Context, sessionKey: string) {
       previewMessageId,
     });
 
-    // Edit the flow message to indicate preview sent
-    await ctx.editMessageText('Preview sent above. Click Schedule when ready.');
-
     logger.debug(`Preview shown for session ${sessionKey}`);
   } catch (error) {
     logger.error('Error showing preview:', error);

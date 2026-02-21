@@ -163,7 +163,6 @@ bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (c
       // Store preview message ID in session
       await sessionSvc.update(foundKey, { previewMessageId });
 
-      await ctx.reply('👁️ Preview sent above. Click Schedule when ready.');
       logger.debug(`Preview shown after custom text for session ${foundKey}`);
     } else if (foundEntry) {
       // Update Map entry (legacy path)
