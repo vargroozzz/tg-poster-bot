@@ -7,6 +7,8 @@ import { logger } from '../../utils/logger.js';
 
 /**
  * Generates preview content from session data.
+ * For reply chains (replyChainMessages.length > 1): returns a placeholder;
+ *   actual preview is forwarded via forwardMessages in PreviewSenderService.
  * For 'forward' action: returns original content unchanged.
  * For 'transform' action: applies text transformations and attribution.
  */
