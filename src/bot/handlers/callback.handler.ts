@@ -184,6 +184,16 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
+    // For reply chains, skip action selection (always forward) and go straight to preview
+    const sessionSvc = getSessionService();
+    if (sessionSvc && session) {
+      const updatedSession = await sessionSvc.findById(session._id.toString());
+      if (updatedSession?.replyChainMessages && updatedSession.replyChainMessages.length > 1) {
+        await showPreview(ctx, session._id.toString());
+        return;
+      }
+    }
+
     if (shouldAutoForward) {
       // Get media group messages if available
       let mediaGroupMessages: Message[] | undefined;
