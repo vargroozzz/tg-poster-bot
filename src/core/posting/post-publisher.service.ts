@@ -55,9 +55,8 @@ export class PostPublisherService {
         chat_id: post.targetChannelId,
         from_chat_id: post.originalForward.chatId,
         message_ids: post.originalForward.mediaGroupMessageIds,
-      })) as any;
+      })) as Array<{ message_id: number }>;
 
-      // Returns array of MessageId objects
       return result[0].message_id;
     }
 

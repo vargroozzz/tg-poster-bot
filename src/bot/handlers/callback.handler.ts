@@ -724,6 +724,11 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
     if (mediaGroupMessages && mediaGroupMessages.length > 1) {
       forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
     }
+    // For reply chains, store all message IDs so the post worker forwards the full thread
+    const replyChainMessagesForSchedule = session.replyChainMessages;
+    if (replyChainMessagesForSchedule && replyChainMessagesForSchedule.length > 1) {
+      forwardInfo.replyChainMessageIds = replyChainMessagesForSchedule.map((msg) => msg.message_id);
+    }
 
     // Extract message content
     const content = extractMessageContent(originalMessage, mediaGroupMessages);
