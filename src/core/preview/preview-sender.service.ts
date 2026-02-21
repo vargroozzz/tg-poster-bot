@@ -23,7 +23,16 @@ export class PreviewSenderService {
   async sendPreview(userId: number, content: MessageContent, sessionId: string): Promise<number> {
     // Look up the session to determine the action
     const sessionSvc = this.getSessionService();
+
+    if (!sessionSvc) {
+      logger.warn('SessionService unavailable in PreviewSenderService, falling back to transform preview');
+    }
+
     const session = sessionSvc ? await sessionSvc.findById(sessionId) : null;
+
+    if (sessionSvc && !session) {
+      throw new Error(`Session ${sessionId} not found when generating preview`);
+    }
 
     const previewMessageIds: number[] = [];
 
