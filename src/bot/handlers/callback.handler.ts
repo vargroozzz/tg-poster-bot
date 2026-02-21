@@ -153,6 +153,25 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     let foundKey: string | undefined;
 
+    // Check for reply chain BEFORE state machine transition.
+    // Reply chains always go directly to preview (action selection is skipped).
+    // Checking here avoids writing a transient ACTION_SELECT state to the DB.
+    const replyChainMessages = session?.replyChainMessages ?? pending?.[1].replyChainMessages;
+    const hasReplyChain = (replyChainMessages?.length ?? 0) > 1;
+
+    if (hasReplyChain && session) {
+      const sessionSvc = getSessionService();
+      if (sessionSvc) {
+        // Store selected channel without going through the state machine
+        await sessionSvc.update(session._id.toString(), {
+          selectedChannel: selectedChannelId,
+        });
+        logger.debug(`Reply chain detected, skipping action selection for session ${session._id}`);
+        await showPreview(ctx, session._id.toString());
+        return;
+      }
+    }
+
     if (session) {
       // Update session in DB with proper state transition
       const sessionSvc = getSessionService();
@@ -182,16 +201,6 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     if (!foundKey) {
       await ErrorMessages.sessionExpired(ctx);
       return;
-    }
-
-    // For reply chains, skip action selection (always forward) and go straight to preview
-    const sessionSvc = getSessionService();
-    if (sessionSvc && session) {
-      const updatedSession = await sessionSvc.findById(session._id.toString());
-      if (updatedSession?.replyChainMessages && updatedSession.replyChainMessages.length > 1) {
-        await showPreview(ctx, session._id.toString());
-        return;
-      }
     }
 
     if (shouldAutoForward) {
