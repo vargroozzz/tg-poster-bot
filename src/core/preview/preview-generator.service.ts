@@ -14,6 +14,15 @@ export class PreviewGeneratorService {
   async generatePreview(session: ISession): Promise<MessageContent> {
     logger.debug(`Generating preview for session ${session._id}, action: ${session.selectedAction}`);
 
+    // For reply chains, return placeholder content
+    // Actual preview is sent via forwardMessages in PreviewSenderService
+    if (session.replyChainMessages && session.replyChainMessages.length > 1) {
+      return {
+        type: 'text',
+        text: `🧵 Thread of ${session.replyChainMessages.length} messages (see above)`,
+      };
+    }
+
     const mediaGroupMessages = session.mediaGroupMessages ?? [];
     const content = extractMessageContent(session.originalMessage, mediaGroupMessages);
 
