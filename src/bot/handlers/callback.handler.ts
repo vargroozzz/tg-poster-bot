@@ -737,21 +737,21 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
     }
 
     // Delete all content preview messages (array support for reply chains/media groups)
-    try {
-      if (session.previewMessageIds && session.previewMessageIds.length > 0) {
-        for (const msgId of session.previewMessageIds) {
-          try {
-            await ctx.api.deleteMessage(ctx.from!.id, msgId);
-          } catch (deleteErr) {
-            logger.warn(`Failed to delete preview message ${msgId}:`, deleteErr);
-          }
+    if (session.previewMessageIds && session.previewMessageIds.length > 0) {
+      for (const msgId of session.previewMessageIds) {
+        try {
+          await ctx.api.deleteMessage(ctx.from!.id, msgId);
+        } catch (deleteErr) {
+          logger.warn(`Failed to delete preview message ${msgId}:`, deleteErr);
         }
-      } else if (session.previewMessageId) {
-        // Backward compatibility: single preview message (old sessions)
-        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
       }
-    } catch (cleanupErr) {
-      logger.warn('Failed to delete preview messages:', cleanupErr);
+    } else if (session.previewMessageId) {
+      // Backward compatibility: single preview message (old sessions)
+      try {
+        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
+      } catch (deleteErr) {
+        logger.warn(`Failed to delete preview message ${session.previewMessageId}:`, deleteErr);
+      }
     }
 
     // Delete control message (the one with Schedule/Cancel buttons)
@@ -805,21 +805,21 @@ bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
     }
 
     // Delete all content preview messages (array support for reply chains/media groups)
-    try {
-      if (session.previewMessageIds && session.previewMessageIds.length > 0) {
-        for (const msgId of session.previewMessageIds) {
-          try {
-            await ctx.api.deleteMessage(ctx.from!.id, msgId);
-          } catch (deleteErr) {
-            logger.warn(`Failed to delete preview message ${msgId}:`, deleteErr);
-          }
+    if (session.previewMessageIds && session.previewMessageIds.length > 0) {
+      for (const msgId of session.previewMessageIds) {
+        try {
+          await ctx.api.deleteMessage(ctx.from!.id, msgId);
+        } catch (deleteErr) {
+          logger.warn(`Failed to delete preview message ${msgId}:`, deleteErr);
         }
-      } else if (session.previewMessageId) {
-        // Backward compatibility: single preview message (old sessions)
-        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
       }
-    } catch (cleanupErr) {
-      logger.warn('Failed to delete preview messages:', cleanupErr);
+    } else if (session.previewMessageId) {
+      // Backward compatibility: single preview message (old sessions)
+      try {
+        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
+      } catch (deleteErr) {
+        logger.warn(`Failed to delete preview message ${session.previewMessageId}:`, deleteErr);
+      }
     }
 
     // Delete control message (the one with Schedule/Cancel buttons)
