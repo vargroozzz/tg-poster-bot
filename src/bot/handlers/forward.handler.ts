@@ -16,6 +16,7 @@ import type { ISession } from '../../database/models/session.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
 import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
+import { entitiesToHtml } from '../../utils/entities-to-html.js';
 
 const postScheduler = new PostSchedulerService();
 
@@ -135,8 +136,8 @@ bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (c
       }
     }
 
-    // Update with custom text
-    const customText = message.text;
+    // Update with custom text, preserving Telegram formatting entities as HTML
+    const customText = entitiesToHtml(message.text ?? '', message.entities);
 
     if (session && sessionSvc && foundKey) {
       // Update session with custom text, transition to PREVIEW state
