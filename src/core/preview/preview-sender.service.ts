@@ -112,9 +112,15 @@ export class PreviewSenderService {
         previewMessageIds.push(fallbackId);
       }
     } else {
-      // For transform action (or unknown): use MediaSenderService as before
-      const contentMsgId = await this.mediaSender.sendMessage(userId, content);
-      previewMessageIds.push(contentMsgId);
+      // For transform action (or unknown): use MediaSenderService
+      if (content.type === 'media_group' && content.mediaGroup && content.mediaGroup.length > 0) {
+        // Collect all album message IDs so every item can be deleted on cleanup
+        const ids = await this.mediaSender.sendMediaGroupAll(userId, content.mediaGroup, content.text);
+        previewMessageIds.push(...ids);
+      } else {
+        const contentMsgId = await this.mediaSender.sendMessage(userId, content);
+        previewMessageIds.push(contentMsgId);
+      }
     }
 
     // Update session with previewMessageIds for multi-message cleanup
