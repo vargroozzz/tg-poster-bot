@@ -75,6 +75,19 @@ export class MediaSenderService {
     mediaGroup: MediaGroupItem[],
     caption?: string
   ): Promise<number> {
+    const ids = await this.sendMediaGroupAll(chatId, mediaGroup, caption);
+    return ids[0];
+  }
+
+  /**
+   * Send a media group and return ALL message IDs (one per album item).
+   * Use this when you need to track every message for later cleanup.
+   */
+  async sendMediaGroupAll(
+    chatId: number | string,
+    mediaGroup: MediaGroupItem[],
+    caption?: string
+  ): Promise<number[]> {
     if (!mediaGroup || mediaGroup.length === 0) {
       throw new Error('Media group cannot be empty');
     }
@@ -94,6 +107,6 @@ export class MediaSenderService {
     });
 
     const result = await this.api.sendMediaGroup(chatId, media);
-    return result[0].message_id;
+    return result.map((m) => m.message_id);
   }
 }
