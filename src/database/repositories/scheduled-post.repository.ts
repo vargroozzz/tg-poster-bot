@@ -125,7 +125,7 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
    * Count pending posts for a channel
    */
   async countPendingByChannel(channelId: string): Promise<number> {
-    return await this.model.countDocuments({ targetChannelId: channelId, status: 'pending' });
+    return await this.count({ targetChannelId: channelId, status: 'pending' });
   }
 
   /**
