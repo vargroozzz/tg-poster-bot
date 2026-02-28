@@ -105,4 +105,37 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
 
     return latestPost?.scheduledTime ?? null;
   }
+
+  /**
+   * Find pending posts for a channel with pagination
+   */
+  async findPendingByChannelPaginated(
+    channelId: string,
+    page: number,
+    pageSize: number = 5
+  ): Promise<IScheduledPost[]> {
+    return await this.model
+      .find({ targetChannelId: channelId, status: 'pending' })
+      .sort({ scheduledTime: 1 })
+      .skip((page - 1) * pageSize)
+      .limit(pageSize);
+  }
+
+  /**
+   * Count pending posts for a channel
+   */
+  async countPendingByChannel(channelId: string): Promise<number> {
+    return await this.model.countDocuments({ targetChannelId: channelId, status: 'pending' });
+  }
+
+  /**
+   * Shift all pending posts for a channel earlier by 30 minutes
+   * Used to fill the gap after a post is deleted
+   */
+  async shiftPostsEarlier(channelId: string, afterTime: Date): Promise<void> {
+    await this.model.updateMany(
+      { targetChannelId: channelId, status: 'pending', scheduledTime: { $gt: afterTime } },
+      [{ $set: { scheduledTime: { $subtract: ['$scheduledTime', 30 * 60 * 1000] } } }]
+    );
+  }
 }
