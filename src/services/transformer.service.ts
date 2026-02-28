@@ -34,7 +34,7 @@ export class TransformerService {
     customText?: string
   ): Promise<string> {
     // Apply text transformations (quote/remove/keep) and custom text
-    let processedText = this.textTransformer.transformText(
+    const processedText = this.textTransformer.transformText(
       originalText,
       textHandling,
       customText
@@ -51,12 +51,7 @@ export class TransformerService {
       manualNickname
     );
 
-    // Append attribution if available
-    if (attributionText) {
-      processedText = processedText + attributionText;
-    }
-
-    return processedText;
+    return processedText + (attributionText ?? '');
   }
 
   /**

@@ -1,4 +1,4 @@
-import { addMinutes, setSeconds, setMilliseconds } from 'date-fns';
+import { addMinutes, setMinutes, setSeconds, setMilliseconds } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { ScheduledPost } from '../database/models/scheduled-post.model.js';
 import { config } from '../config/index.js';
@@ -12,41 +12,23 @@ const TIMEZONE = config.timezone;
  * Returns UTC Date object
  */
 export async function findNextAvailableSlot(targetChannelId: string): Promise<Date> {
-  // Get current time in target timezone
-  const nowUtc = new Date();
-  const nowInTz = toZonedTime(nowUtc, TIMEZONE);
+  const nextSlotAfterNow = fromZonedTime(
+    calculateNextSlot(toZonedTime(new Date(), TIMEZONE)),
+    TIMEZONE
+  );
 
-  // Calculate next slot time in target timezone
-  let nextSlot = calculateNextSlot(nowInTz);
+  const latestPending = await ScheduledPost
+    .findOne({ targetChannelId, status: 'pending' })
+    .sort({ scheduledTime: -1 });
 
-  // Keep trying slots until we find one that's not occupied
-  let attempts = 0;
-  const maxAttempts = 48; // Check up to 24 hours ahead
-
-  while (attempts < maxAttempts) {
-    // Convert slot time back to UTC for database query
-    const slotUtc = fromZonedTime(nextSlot, TIMEZONE);
-
-    // Check if this slot is already occupied
-    const existingPost = await ScheduledPost.findOne({
-      scheduledTime: slotUtc,
-      targetChannelId,
-    });
-
-    if (!existingPost) {
-      logger.debug(`Found available slot: ${nextSlot.toISOString()} (${TIMEZONE})`);
-      return slotUtc;
-    }
-
-    logger.debug(`Slot ${nextSlot.toISOString()} is occupied, trying next slot`);
-
-    // Try next slot (30 minutes later)
-    nextSlot = addMinutes(nextSlot, 30);
-    attempts++;
+  if (latestPending && latestPending.scheduledTime >= nextSlotAfterNow) {
+    const slot = addMinutes(latestPending.scheduledTime, 30);
+    logger.debug(`Found available slot: ${slot.toISOString()} (after latest pending)`);
+    return slot;
   }
 
-  // If we couldn't find a slot in 24 hours, something is wrong
-  throw new Error('Could not find available time slot within 24 hours');
+  logger.debug(`Found available slot: ${nextSlotAfterNow.toISOString()} (next slot after now)`);
+  return nextSlotAfterNow;
 }
 
 /**
@@ -55,28 +37,14 @@ export async function findNextAvailableSlot(targetChannelId: string): Promise<Da
 function calculateNextSlot(now: Date): Date {
   const minutes = now.getMinutes();
 
-  let nextSlot: Date;
+  const baseSlot = minutes < 30
+    ? setMinutes(now, 30)                           // hh:30:01
+    : setMinutes(addMinutes(now, 60 - minutes), 0); // (hh+1):00:01
 
-  if (minutes < 30) {
-    // Next slot is at hh:30:01
-    nextSlot = new Date(now);
-    nextSlot.setMinutes(30);
-  } else {
-    // Next slot is at (hh+1):00:01
-    nextSlot = addMinutes(now, 60 - minutes);
-    nextSlot.setMinutes(0);
-  }
-
-  // Set seconds to 01 and milliseconds to 0
-  nextSlot = setSeconds(nextSlot, 1);
-  nextSlot = setMilliseconds(nextSlot, 0);
+  const slot = setMilliseconds(setSeconds(baseSlot, 1), 0);
 
   // If we're already past the calculated slot (e.g., current time is 14:30:05), move to next slot
-  if (nextSlot <= now) {
-    nextSlot = addMinutes(nextSlot, 30);
-  }
-
-  return nextSlot;
+  return slot <= now ? addMinutes(slot, 30) : slot;
 }
 
 /**

@@ -83,11 +83,9 @@ export class PostWorkerService {
 
       if (posts.length > 0) {
         logger.info(`Found ${posts.length} post(s) ready to publish`);
-
-        for (const post of posts) {
-          await this.publishPost(post);
-        }
       }
+
+      await Promise.all(posts.map(async (post) => await this.publishPost(post)));
     } catch (error) {
       logger.error('Error processing scheduled posts:', error);
     } finally {
@@ -107,20 +105,13 @@ export class PostWorkerService {
       // Delegate publishing to the publisher service
       const messageId = await this.publisher.publish(post);
 
-      // Mark as posted
-      post.status = 'posted';
-      post.postedAt = new Date();
-      post.telegramScheduledMessageId = messageId;
-      await post.save();
+      await post.updateOne({ status: 'posted', postedAt: new Date(), telegramScheduledMessageId: messageId });
 
       logger.info(`Successfully published post ${post._id} with message_id ${messageId}`);
     } catch (error) {
       logger.error(`Failed to publish post ${post._id}:`, error);
 
-      // Mark as failed
-      post.status = 'failed';
-      post.error = error instanceof Error ? error.message : String(error);
-      await post.save();
+      await post.updateOne({ status: 'failed', error: error instanceof Error ? error.message : String(error) });
     }
   }
 }

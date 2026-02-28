@@ -1,24 +1,17 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import type { Message } from 'grammy/types';
+import type { PostSelections } from '../../types/message.types.js';
 
 /**
  * Session model for database-backed flow state management
  * Will replace in-memory pendingForwards Map in Phase 4
  */
-export interface ISession extends Document {
+export interface ISession extends Document, PostSelections {
   userId: number;
   messageId: number;
   chatId: number;
   state: string;
   originalMessage: Message;
-  selectedChannel?: string;
-  selectedAction?: 'transform' | 'forward';
-  textHandling?: 'keep' | 'remove' | 'quote';
-  selectedNickname?: string | null;
-  customText?: string;
-  waitingForCustomText?: boolean;
-  mediaGroupMessages?: Message[];
-  replyChainMessages?: Message[];
   previewMessageId?: number;
   previewMessageIds?: number[];
   createdAt: Date;

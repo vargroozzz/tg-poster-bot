@@ -42,11 +42,14 @@ export class PreviewSenderService {
       const replyChain = session.replyChainMessages;
       const mediaGroup = session.mediaGroupMessages;
 
-      let forwarded = false;
+      // Pick the bulk message list (reply chain takes priority over media group)
+      const bulkMessages =
+        (replyChain?.length ?? 0) > 1 ? replyChain :
+        (mediaGroup?.length ?? 0) > 1 ? mediaGroup :
+        null;
 
-      // Priority 1: reply chain (length > 1 means multiple messages to forward)
-      if (replyChain && replyChain.length > 1) {
-        const messageIds = replyChain.map((msg) => msg.message_id);
+      if (bulkMessages) {
+        const messageIds = bulkMessages.map((msg) => msg.message_id);
         try {
           const result = (await this.api.raw.forwardMessages({
             chat_id: userId,
@@ -54,34 +57,11 @@ export class PreviewSenderService {
             message_ids: messageIds,
           })) as Array<{ message_id: number }>;
           previewMessageIds.push(...result.map((r) => r.message_id));
-          forwarded = true;
-          logger.debug(
-            `Forwarded reply chain of ${messageIds.length} messages to user ${userId} for preview`
-          );
+          logger.debug(`Forwarded ${messageIds.length} messages to user ${userId} for preview`);
         } catch (error) {
-          logger.error('Failed to forward reply chain for preview, falling back to placeholder:', error);
+          logger.error('Failed to forward messages for preview, falling back to placeholder:', error);
         }
-      }
-      // Priority 2: media group (length > 1)
-      else if (mediaGroup && mediaGroup.length > 1) {
-        const messageIds = mediaGroup.map((msg) => msg.message_id);
-        try {
-          const result = (await this.api.raw.forwardMessages({
-            chat_id: userId,
-            from_chat_id: sourceChatId,
-            message_ids: messageIds,
-          })) as Array<{ message_id: number }>;
-          previewMessageIds.push(...result.map((r) => r.message_id));
-          forwarded = true;
-          logger.debug(
-            `Forwarded media group of ${messageIds.length} messages to user ${userId} for preview`
-          );
-        } catch (error) {
-          logger.error('Failed to forward media group for preview, falling back to placeholder:', error);
-        }
-      }
-      // Priority 3: single message
-      else {
+      } else {
         try {
           const result = await this.api.forwardMessage(
             userId,
@@ -89,21 +69,15 @@ export class PreviewSenderService {
             session.originalMessage.message_id
           );
           previewMessageIds.push(result.message_id);
-          forwarded = true;
-          logger.debug(
-            `Forwarded single message ${session.originalMessage.message_id} to user ${userId} for preview`
-          );
+          logger.debug(`Forwarded single message ${session.originalMessage.message_id} to user ${userId} for preview`);
         } catch (error) {
           logger.error('Failed to forward single message for preview, falling back to placeholder:', error);
         }
       }
 
       // Fallback: send a text placeholder if forwarding failed
-      if (!forwarded) {
-        const count =
-          replyChain && replyChain.length > 1
-            ? replyChain.length
-            : (mediaGroup && mediaGroup.length > 1 ? mediaGroup.length : 1);
+      if (previewMessageIds.length === 0) {
+        const count = bulkMessages?.length ?? 1;
         const fallbackContent: MessageContent = {
           type: 'text',
           text: `🧵 Thread of ${count} message${count > 1 ? 's' : ''} will be forwarded (preview unavailable)`,

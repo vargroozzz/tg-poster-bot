@@ -40,8 +40,7 @@ export class TextTransformerService {
     handling: TextHandling,
     customText?: string
   ): string {
-    let processedText = this.applyTextHandling(originalText, handling);
-    processedText = this.prependCustomText(processedText, customText);
-    return processedText;
+    const handled = this.applyTextHandling(originalText, handling);
+    return this.prependCustomText(handled, customText);
   }
 }

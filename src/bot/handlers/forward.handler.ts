@@ -60,24 +60,24 @@ setInterval(() => {
   const now = Date.now();
   const ttl = 24 * 60 * 60 * 1000; // 24 hours
 
-  for (const [key, value] of pendingForwards.entries()) {
+  pendingForwards.forEach((value, key) => {
     if (now - value.timestamp > ttl) {
       pendingForwards.delete(key);
       logger.debug(`Cleaned up expired pending forward: ${key}`);
     }
-  }
+  });
 
   // Also clean up any stale reply-chain buffers (should complete in ~1 s, so
   // anything older than 5 minutes is leaked — e.g. processReplyChain threw
   // before reaching replyChainBuffers.delete).
   const replyChainTtl = 5 * 60 * 1000; // 5 minutes
-  for (const [key, buffer] of replyChainBuffers.entries()) {
+  replyChainBuffers.forEach((buffer, key) => {
     if (now - buffer.createdAt > replyChainTtl) {
       clearTimeout(buffer.timeout);
       replyChainBuffers.delete(key);
       logger.debug(`Cleaned up stale reply chain buffer: ${key}`);
     }
-  }
+  });
 }, 5 * 60 * 1000);
 
 // Handle text messages when waiting for custom text input
@@ -102,17 +102,13 @@ bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (c
     }
 
     // DUAL READ: Find session waiting for custom text (DB first, then Map)
-    let session: ISession | undefined;
-    let foundEntry: [string, PendingForward] | undefined;
-    let foundKey: string | undefined;
-
-    // Try database first
     const sessionSvc = getSessionService();
+    let session: ISession | undefined;
+
     if (sessionSvc) {
       try {
         session = await sessionSvc.findWaitingForCustomText(userId) ?? undefined;
         if (session) {
-          foundKey = session._id.toString();
           logger.debug(`Found session waiting for custom text in DB for user ${userId}`);
         }
       } catch (error) {
@@ -120,60 +116,41 @@ bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (c
       }
     }
 
-    // Fall back to Map if not found in DB
-    if (!session) {
-      for (const [key, value] of pendingForwards.entries()) {
-        if (value.waitingForCustomText) {
-          foundEntry = [key, value];
-          foundKey = key;
-          logger.debug(`Found session waiting for custom text in Map for user ${userId}`);
-          break;
-        }
-      }
-
-      if (!foundEntry) {
-        return; // Not waiting for custom text
-      }
-    }
-
     // Update with custom text, preserving Telegram formatting entities as HTML
     const customText = entitiesToHtml(message.text ?? '', message.entities);
 
-    if (session && sessionSvc && foundKey) {
-      // Update session with custom text, transition to PREVIEW state
+    if (session && sessionSvc) {
+      const foundKey = session._id.toString();
       await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
         customText,
         waitingForCustomText: false,
       });
 
-      // Fetch updated session for preview generation
       const updatedSession = await sessionSvc.findById(foundKey);
       if (!updatedSession) {
         await ctx.reply('⚠️ Session not found. Please try again.');
         return;
       }
 
-      // Generate preview content
       const previewGenerator = new PreviewGeneratorService();
       const previewContent = await previewGenerator.generatePreview(updatedSession);
 
-      // Send preview to user's chat
       const previewSender = new PreviewSenderService(ctx.api);
-      const previewMessageId = await previewSender.sendPreview(ctx.from!.id, previewContent, foundKey);
+      const previewMessageId = await previewSender.sendPreview(userId, previewContent, foundKey);
 
-      // Store preview message ID in session
       await sessionSvc.update(foundKey, { previewMessageId });
-
       logger.debug(`Preview shown after custom text for session ${foundKey}`);
-    } else if (foundEntry) {
-      // Update Map entry (legacy path)
-      const [key, pendingForward] = foundEntry;
-      pendingForward.customText = customText;
-      pendingForward.waitingForCustomText = false;
-
-      // Schedule the post
-      await scheduleTransformPostFromForwardHandler(ctx, pendingForward, key);
+      return;
     }
+
+    // Map fallback
+    const foundEntry = [...pendingForwards.entries()].find(([, value]) => value.waitingForCustomText);
+    if (!foundEntry) return; // Not waiting for custom text
+    logger.debug(`Found session waiting for custom text in Map for user ${userId}`);
+    const [key, pendingForward] = foundEntry;
+    pendingForward.customText = customText;
+    pendingForward.waitingForCustomText = false;
+    await scheduleTransformPostFromForwardHandler(ctx, pendingForward, key);
 
     logger.debug(`Custom text added and post scheduled for user ${userId}`);
   } catch (error) {
@@ -231,19 +208,11 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
     const chatId = message.chat.id;
 
     // Look for existing buffer containing a related message
-    let bufferKey: string | undefined;
-    for (const [key, buffer] of replyChainBuffers.entries()) {
-      for (const bufferedMsg of buffer.messages) {
-        // This message replies to a buffered message, OR a buffered message replies to this one
-        const bufferedMsgReplyTo = bufferedMsg.reply_to_message?.message_id;
-        if (bufferedMsg.message_id === replyToMessageId ||
-            bufferedMsgReplyTo === messageId) {
-          bufferKey = key;
-          break;
-        }
-      }
-      if (bufferKey) break;
-    }
+    const bufferKey = [...replyChainBuffers.entries()].find(([, buffer]) =>
+      buffer.messages.some(
+        (msg) => msg.message_id === replyToMessageId || msg.reply_to_message?.message_id === messageId
+      )
+    )?.[0];
 
     if (bufferKey) {
       // Add to existing buffer
@@ -537,30 +506,20 @@ export function extractMessageContent(
 ): MessageContent | null {
   // If media group messages provided, create media group content
   if (mediaGroupMessages && mediaGroupMessages.length > 1) {
-    const mediaItems: Array<{ type: 'photo' | 'video'; fileId: string }> = [];
-    let caption: string | undefined;
-
-    for (const msg of mediaGroupMessages) {
+    const mediaItems = mediaGroupMessages.flatMap((msg): Array<{ type: 'photo' | 'video'; fileId: string }> => {
       if ('photo' in msg && msg.photo && msg.photo.length > 0) {
-        const photo = msg.photo[msg.photo.length - 1];
-        mediaItems.push({ type: 'photo', fileId: photo.file_id });
-        if (!caption && msg.caption) {
-          caption = msg.caption;
-        }
-      } else if ('video' in msg && msg.video) {
-        mediaItems.push({ type: 'video', fileId: msg.video.file_id });
-        if (!caption && msg.caption) {
-          caption = msg.caption;
-        }
+        return [{ type: 'photo', fileId: msg.photo[msg.photo.length - 1].file_id }];
       }
-    }
+      if ('video' in msg && msg.video) {
+        return [{ type: 'video', fileId: msg.video.file_id }];
+      }
+      return [];
+    });
+
+    const caption = mediaGroupMessages.find((msg) => msg.caption)?.caption;
 
     if (mediaItems.length > 0) {
-      return {
-        type: 'media_group',
-        mediaGroup: mediaItems,
-        text: caption,
-      };
+      return { type: 'media_group', mediaGroup: mediaItems, text: caption };
     }
   }
 
@@ -615,12 +574,7 @@ async function scheduleTransformPostFromForwardHandler(
   pendingKey: string
 ) {
   try {
-    const originalMessage = pendingForward.message;
-    const selectedChannel = pendingForward.selectedChannel;
-    const textHandling = pendingForward.textHandling ?? 'keep';
-    const selectedNickname = pendingForward.selectedNickname;
-    const customText = pendingForward.customText;
-    const mediaGroupMessages = pendingForward.mediaGroupMessages;
+    const { message: originalMessage, selectedChannel, selectedNickname, customText, mediaGroupMessages, textHandling = 'keep' } = pendingForward;
 
     if (!selectedChannel) {
       await ctx.reply('❌ No channel selected. Please forward the message again.');
