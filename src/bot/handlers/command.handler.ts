@@ -15,6 +15,7 @@ import {
   listUserNicknames,
 } from '../../database/models/user-nickname.model.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
+import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
 
 const schedulerService = new SchedulerService(bot.api);
 
@@ -427,6 +428,23 @@ bot.command('listnicknames', async (ctx: Context) => {
   } catch (error) {
     logger.error('Error listing nicknames:', error);
     await ctx.reply('❌ Error fetching nicknames. Please try again.');
+  }
+});
+
+bot.command('queue', async (ctx: Context) => {
+  try {
+    const channels = await getActivePostingChannels();
+
+    if (channels.length === 0) {
+      await ctx.reply('⚠️ No posting channels configured. Use /addchannel first.');
+      return;
+    }
+
+    const keyboard = createQueueChannelSelectKeyboard(channels);
+    await ctx.reply('📋 Select a channel to view its queue:', { reply_markup: keyboard });
+  } catch (error) {
+    logger.error('Error in /queue command:', error);
+    await ctx.reply('❌ Error loading queue. Please try again.');
   }
 });
 
