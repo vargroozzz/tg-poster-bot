@@ -44,7 +44,7 @@ export class QueueService {
   private async getSourceLabel(post: IScheduledPost): Promise<string> {
     const { fromChannelTitle, fromChannelUsername, fromUserId } = post.originalForward;
 
-    if (fromChannelTitle ?? fromChannelUsername) {
+    if (fromChannelTitle != null || fromChannelUsername != null) {
       return `via ${fromChannelTitle ?? `@${fromChannelUsername}`}`;
     }
 
