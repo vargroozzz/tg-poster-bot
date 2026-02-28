@@ -1,21 +1,14 @@
 import { Context } from 'grammy';
 import type { Message } from 'grammy/types';
 import { ErrorMessages } from '../constants/error-messages.js';
+import type { PostSelections } from '../../types/message.types.js';
 
 /**
  * Interface for pending forward data structure
  * Extracted from forward.handler.ts
  */
-export interface PendingForward {
+export interface PendingForward extends PostSelections {
   message: Message;
-  selectedChannel?: string;
-  textHandling?: 'keep' | 'remove' | 'quote';
-  selectedAction?: 'transform' | 'forward';
-  selectedNickname?: string | null;
-  customText?: string;
-  waitingForCustomText?: boolean;
-  mediaGroupMessages?: Message[];
-  replyChainMessages?: Message[];
   timestamp: number;
 }
 

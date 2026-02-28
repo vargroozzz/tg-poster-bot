@@ -37,24 +37,19 @@ export class PostPublisherService {
       throw new Error('Missing chatId or messageId for forwardMessage');
     }
 
-    // For reply chains, use forwardMessages to preserve reply structure
-    if (post.originalForward.replyChainMessageIds && post.originalForward.replyChainMessageIds.length > 1) {
+    // For reply chains or media groups, forward all messages atomically
+    const bulkMessageIds =
+      (post.originalForward.replyChainMessageIds?.length ?? 0) > 1
+        ? post.originalForward.replyChainMessageIds
+        : (post.originalForward.mediaGroupMessageIds?.length ?? 0) > 1
+          ? post.originalForward.mediaGroupMessageIds
+          : null;
+
+    if (bulkMessageIds) {
       const result = (await this.api.raw.forwardMessages({
         chat_id: post.targetChannelId,
         from_chat_id: post.originalForward.chatId,
-        message_ids: post.originalForward.replyChainMessageIds,
-      })) as Array<{ message_id: number }>;
-
-      return result[0].message_id;
-    }
-
-    // For media groups, use forwardMessages to preserve album grouping
-    if (post.originalForward.mediaGroupMessageIds && post.originalForward.mediaGroupMessageIds.length > 1) {
-      // Use raw API for forwardMessages (Grammy might not have typed wrapper)
-      const result = (await this.api.raw.forwardMessages({
-        chat_id: post.targetChannelId,
-        from_chat_id: post.originalForward.chatId,
-        message_ids: post.originalForward.mediaGroupMessageIds,
+        message_ids: bulkMessageIds,
       })) as Array<{ message_id: number }>;
 
       return result[0].message_id;

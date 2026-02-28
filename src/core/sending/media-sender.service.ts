@@ -92,19 +92,12 @@ export class MediaSenderService {
       throw new Error('Media group cannot be empty');
     }
 
-    const media = mediaGroup.map((item: MediaGroupItem, index: number) => {
-      const baseMedia = {
-        media: item.fileId,
-        caption: index === 0 ? caption : undefined,
-        parse_mode: index === 0 ? ('HTML' as const) : undefined,
-      };
-
-      if (item.type === 'photo') {
-        return { type: 'photo' as const, ...baseMedia };
-      } else {
-        return { type: 'video' as const, ...baseMedia };
-      }
-    });
+    const media = mediaGroup.map((item: MediaGroupItem, index: number) => ({
+      type: item.type,
+      media: item.fileId,
+      caption: index === 0 ? caption : undefined,
+      parse_mode: index === 0 ? ('HTML' as const) : undefined,
+    }));
 
     const result = await this.api.sendMediaGroup(chatId, media);
     return result.map((m) => m.message_id);

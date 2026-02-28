@@ -181,37 +181,28 @@ bot.command('listchannels', async (ctx: Context) => {
     const greenChannels = channels.filter((ch) => ch.listType === 'green');
     const redChannels = channels.filter((ch) => ch.listType === 'red');
 
-    let message = '📋 Channel Lists:\n';
+    const postingSection = postingChannels.length > 0
+      ? '\n📍 Posting Channels (where bot can post):\n' + postingChannels.map((ch) => {
+          const username = ch.channelUsername ? ` @${ch.channelUsername}` : '';
+          return `  • ${ch.channelTitle ?? ch.channelId}${username}\n    ID: ${ch.channelId}\n`;
+        }).join('')
+      : '\n⚠️ No posting channels configured. Use /addchannel to add channels.\n';
 
-    if (postingChannels.length > 0) {
-      message += '\n📍 Posting Channels (where bot can post):\n';
-      postingChannels.forEach((ch) => {
-        const username = ch.channelUsername ? ` @${ch.channelUsername}` : '';
-        message += `  • ${ch.channelTitle ?? ch.channelId}${username}\n    ID: ${ch.channelId}\n`;
-      });
-    } else {
-      message += '\n⚠️ No posting channels configured. Use /addchannel to add channels.\n';
-    }
+    const formatListChannel = (ch: { channelId: string; channelUsername?: string | null; channelTitle?: string | null }) => {
+      const title = ch.channelTitle ? ` (${ch.channelTitle})` : '';
+      const username = ch.channelUsername ? ` @${ch.channelUsername}` : '';
+      return `  • ${ch.channelId}${username}${title}\n`;
+    };
 
-    if (greenChannels.length > 0) {
-      message += '\n🟢 Green List (auto-forward):\n';
-      greenChannels.forEach((ch) => {
-        const title = ch.channelTitle ? ` (${ch.channelTitle})` : '';
-        const username = ch.channelUsername ? ` @${ch.channelUsername}` : '';
-        message += `  • ${ch.channelId}${username}${title}\n`;
-      });
-    }
+    const greenSection = greenChannels.length > 0
+      ? '\n🟢 Green List (auto-forward):\n' + greenChannels.map(formatListChannel).join('')
+      : '';
 
-    if (redChannels.length > 0) {
-      message += '\n🔴 Red List (omit channel reference):\n';
-      redChannels.forEach((ch) => {
-        const title = ch.channelTitle ? ` (${ch.channelTitle})` : '';
-        const username = ch.channelUsername ? ` @${ch.channelUsername}` : '';
-        message += `  • ${ch.channelId}${username}${title}\n`;
-      });
-    }
+    const redSection = redChannels.length > 0
+      ? '\n🔴 Red List (omit channel reference):\n' + redChannels.map(formatListChannel).join('')
+      : '';
 
-    await ctx.reply(message);
+    await ctx.reply(`📋 Channel Lists:\n${postingSection}${greenSection}${redSection}`);
   } catch (error) {
     logger.error('Error listing channels:', error);
     await ctx.reply('❌ Error fetching channel lists. Please try again.');
@@ -223,49 +214,44 @@ bot.command('status', async (ctx: Context) => {
     const count = await schedulerService.getPendingPostsCount();
     const nextPosts = await schedulerService.getNextPendingPosts(5);
 
-    let message = `📊 Pending posts: ${count}\n`;
+    const postsSection = nextPosts.length > 0
+      ? '\n📅 Next scheduled posts:\n' + nextPosts.map((post, index) => {
+          const preview = post.content.text
+            ? post.content.text.substring(0, 30) + (post.content.text.length > 30 ? '...' : '')
+            : '';
+          return `${index + 1}. ${formatSlotTime(post.scheduledTime)} - ${post.content.type}${preview ? `: ${preview}` : ''}\n`;
+        }).join('')
+      : '';
 
-    if (nextPosts.length > 0) {
-      message += '\n📅 Next scheduled posts:\n';
-      nextPosts.forEach((post, index) => {
-        const time = formatSlotTime(post.scheduledTime);
-        const contentType = post.content.type;
-        const preview =
-          post.content.text?.substring(0, 30) + (post.content.text && post.content.text.length > 30 ? '...' : '');
-        message += `${index + 1}. ${time} - ${contentType}${preview ? `: ${preview}` : ''}\n`;
-      });
-    }
-
-    await ctx.reply(message);
+    await ctx.reply(`📊 Pending posts: ${count}\n${postsSection}`);
   } catch (error) {
     logger.error('Error in /status command:', error);
     await ctx.reply('❌ Error fetching status. Please try again.');
   }
 });
 
-bot.command('addgreen', async (ctx: Context) => {
-  let channelId = typeof ctx.match === 'string' ? ctx.match.trim() : undefined;
+async function resolveChannelId(ctx: Context, usageText: string): Promise<string | null> {
+  const directArg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
+  if (directArg) return directArg;
 
-  // Check if replying to a forwarded message
   const replyToMessage = ctx.message?.reply_to_message;
-  if (!channelId && replyToMessage) {
+  if (replyToMessage) {
     const forwardInfo = parseForwardInfo(replyToMessage);
-    if (forwardInfo?.fromChannelId) {
-      channelId = String(forwardInfo.fromChannelId);
-    } else {
-      await ctx.reply('❌ The replied message must be forwarded from a channel (not a user).');
-      return;
-    }
+    if (forwardInfo?.fromChannelId) return String(forwardInfo.fromChannelId);
+    await ctx.reply('❌ The replied message must be forwarded from a channel (not a user).');
+    return null;
   }
 
-  if (!channelId) {
-    await ctx.reply(
-      'Usage: /addgreen <channel_id>\n' +
-        'Example: /addgreen -1001234567890\n\n' +
-        '💡 Or reply to a forwarded message with /addgreen'
-    );
-    return;
-  }
+  await ctx.reply(usageText);
+  return null;
+}
+
+bot.command('addgreen', async (ctx: Context) => {
+  const channelId = await resolveChannelId(
+    ctx,
+    'Usage: /addgreen <channel_id>\nExample: /addgreen -1001234567890\n\n💡 Or reply to a forwarded message with /addgreen'
+  );
+  if (!channelId) return;
 
   if (!channelId.match(/^-\d+$/)) {
     await ctx.reply('❌ Invalid channel ID format. It should start with - and be numeric.');
@@ -282,28 +268,11 @@ bot.command('addgreen', async (ctx: Context) => {
 });
 
 bot.command('addred', async (ctx: Context) => {
-  let channelId = typeof ctx.match === 'string' ? ctx.match.trim() : undefined;
-
-  // Check if replying to a forwarded message
-  const replyToMessage = ctx.message?.reply_to_message;
-  if (!channelId && replyToMessage) {
-    const forwardInfo = parseForwardInfo(replyToMessage);
-    if (forwardInfo?.fromChannelId) {
-      channelId = String(forwardInfo.fromChannelId);
-    } else {
-      await ctx.reply('❌ The replied message must be forwarded from a channel (not a user).');
-      return;
-    }
-  }
-
-  if (!channelId) {
-    await ctx.reply(
-      'Usage: /addred <channel_id>\n' +
-        'Example: /addred -1001234567890\n\n' +
-        '💡 Or reply to a forwarded message with /addred'
-    );
-    return;
-  }
+  const channelId = await resolveChannelId(
+    ctx,
+    'Usage: /addred <channel_id>\nExample: /addred -1001234567890\n\n💡 Or reply to a forwarded message with /addred'
+  );
+  if (!channelId) return;
 
   if (!channelId.match(/^-\d+$/)) {
     await ctx.reply('❌ Invalid channel ID format. It should start with - and be numeric.');
@@ -322,26 +291,11 @@ bot.command('addred', async (ctx: Context) => {
 });
 
 bot.command('remove', async (ctx: Context) => {
-  let channelId = typeof ctx.match === 'string' ? ctx.match.trim() : undefined;
-
-  // Check if replying to a forwarded message
-  const replyToMessage = ctx.message?.reply_to_message;
-  if (!channelId && replyToMessage) {
-    const forwardInfo = parseForwardInfo(replyToMessage);
-    if (forwardInfo?.fromChannelId) {
-      channelId = String(forwardInfo.fromChannelId);
-    } else {
-      await ctx.reply('❌ The replied message must be forwarded from a channel (not a user).');
-      return;
-    }
-  }
-
-  if (!channelId) {
-    await ctx.reply(
-      'Usage: /remove <channel_id>\n' + 'Example: /remove -1001234567890\n\n' + '💡 Or reply to a forwarded message with /remove'
-    );
-    return;
-  }
+  const channelId = await resolveChannelId(
+    ctx,
+    'Usage: /remove <channel_id>\nExample: /remove -1001234567890\n\n💡 Or reply to a forwarded message with /remove'
+  );
+  if (!channelId) return;
 
   try {
     const removed = await channelListService.removeChannel(channelId);

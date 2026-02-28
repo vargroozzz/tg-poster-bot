@@ -1,3 +1,5 @@
+import type { Message } from 'grammy/types';
+
 export interface ForwardInfo {
   messageId: number;
   chatId: number;
@@ -26,3 +28,14 @@ export interface MessageContent {
 export type TransformAction = 'transform' | 'forward';
 
 export type TextHandling = 'keep' | 'remove' | 'quote';
+
+export interface PostSelections {
+  selectedChannel?: string;
+  selectedAction?: TransformAction;
+  textHandling?: TextHandling;
+  selectedNickname?: string | null;
+  customText?: string;
+  waitingForCustomText?: boolean;
+  mediaGroupMessages?: Message[];
+  replyChainMessages?: Message[];
+}

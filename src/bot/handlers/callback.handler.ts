@@ -151,13 +151,13 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       originalMessage.message_id
     );
 
-    let foundKey: string | undefined;
+    const foundKey = session?._id.toString() ?? pending?.[0];
+    const data = session ?? pending?.[1];
 
     // Check for reply chain BEFORE state machine transition.
     // Reply chains always go directly to preview (action selection is skipped).
     // Checking here avoids writing a transient ACTION_SELECT state to the DB.
-    const replyChainMessages = session?.replyChainMessages ?? pending?.[1].replyChainMessages;
-    const hasReplyChain = (replyChainMessages?.length ?? 0) > 1;
+    const hasReplyChain = (data?.replyChainMessages?.length ?? 0) > 1;
 
     if (hasReplyChain && session) {
       const sessionSvc = getSessionService();
@@ -176,26 +176,20 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       // Update session in DB with proper state transition
       const sessionSvc = getSessionService();
       if (sessionSvc) {
-        // Determine next state based on ACTUAL context
-        const context = {
+        const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, {
           isGreenListed: shouldAutoForward,
           isRedListed,
           hasText,
           isForward: false,
-        };
-
-        const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, context);
+        });
 
         await sessionSvc.updateState(session._id.toString(), nextState, {
           selectedChannel: selectedChannelId,
         });
-        foundKey = session._id.toString();
       }
     } else if (pending) {
       // Update Map (legacy path)
-      const [key, pendingData] = pending;
-      pendingData.selectedChannel = selectedChannelId;
-      foundKey = key;
+      pending[1].selectedChannel = selectedChannelId;
     }
 
     if (!foundKey) {
@@ -204,17 +198,8 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     }
 
     if (shouldAutoForward) {
-      // Get media group messages if available
-      let mediaGroupMessages: Message[] | undefined;
-
-      if (session) {
-        mediaGroupMessages = session.mediaGroupMessages;
-      } else if (pending) {
-        mediaGroupMessages = pending[1].mediaGroupMessages;
-      }
-
       // Auto-forward green-listed content
-      const content = extractMessageContent(originalMessage, mediaGroupMessages);
+      const content = extractMessageContent(originalMessage, data?.mediaGroupMessages);
 
       if (!content || !forwardInfo) {
         await ctx.editMessageText('❌ Could not process message.');
@@ -257,9 +242,6 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       }
 
       // Auto-transform: proceed directly to text handling or nickname selection
-      const content = extractMessageContent(originalMessage);
-      const hasText = content?.text && content.text.trim().length > 0;
-
       if (hasText) {
         const keyboard = createTextHandlingKeyboard();
         await ctx.editMessageText('How should the text be handled?', {
@@ -318,7 +300,7 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
       originalMessage.message_id
     );
 
-    let foundKey: string | undefined;
+    const foundKey = session?._id.toString() ?? pending?.[0];
 
     // Update based on action
     const updates = action === 'add'
@@ -331,10 +313,8 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
       const nextState = action === 'add' ? SessionState.CUSTOM_TEXT : SessionState.PREVIEW;
 
       await getSessionService().updateState(session._id.toString(), nextState, updates);
-      foundKey = session._id.toString();
     } else if (pending) {
       Object.assign(pending[1], updates);
-      foundKey = pending[0];
     }
 
     if (!foundKey) {
@@ -363,9 +343,29 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
   }
 });
 
+// Helper to delete all preview messages for a session
+async function deletePreviewMessages(ctx: Context, fromId: number, session: { previewMessageIds?: number[]; previewMessageId?: number }) {
+  const messageIds = (session.previewMessageIds?.length ?? 0) > 0
+    ? (session.previewMessageIds ?? [])
+    : session.previewMessageId
+      ? [session.previewMessageId]
+      : [];
+
+  await Promise.all(
+    messageIds.map(async (msgId) =>
+      await ctx.api.deleteMessage(fromId, msgId).catch((err) =>
+        logger.warn(`Failed to delete preview message ${msgId}:`, err)
+      )
+    )
+  );
+}
+
 // Helper function to show preview
 async function showPreview(ctx: Context, sessionKey: string) {
   try {
+    const fromId = ctx.from?.id;
+    if (!fromId) return;
+
     const sessionSvc = getSessionService();
     if (!sessionSvc) {
       await ErrorMessages.sessionExpired(ctx);
@@ -384,7 +384,7 @@ async function showPreview(ctx: Context, sessionKey: string) {
 
     // Send preview to user's chat
     const previewSender = new PreviewSenderService(ctx.api);
-    const previewMessageId = await previewSender.sendPreview(ctx.from!.id, previewContent, sessionKey);
+    const previewMessageId = await previewSender.sendPreview(fromId, previewContent, sessionKey);
 
     // Update session with preview message ID and transition to PREVIEW state
     await sessionSvc.updateState(sessionKey, SessionState.PREVIEW, {
@@ -428,7 +428,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       originalMessage.message_id
     );
 
-    let foundKey: string | undefined;
+    const foundKey = session?._id.toString() ?? pending?.[0];
 
     if (session && getSessionService()) {
       // Transition from NICKNAME_SELECT to CUSTOM_TEXT
@@ -444,10 +444,8 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       await getSessionService().updateState(session._id.toString(), nextState, {
         selectedNickname,
       });
-      foundKey = session._id.toString();
     } else if (pending) {
       pending[1].selectedNickname = selectedNickname;
-      foundKey = pending[0];
     }
 
     if (!foundKey) {
@@ -500,7 +498,7 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       originalMessage.message_id
     );
 
-    let foundKey: string | undefined;
+    const foundKey = session?._id.toString() ?? pending?.[0];
 
     if (session && getSessionService()) {
       // Transition from TEXT_HANDLING to NICKNAME_SELECT
@@ -516,10 +514,8 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       await getSessionService().updateState(session._id.toString(), nextState, {
         textHandling,
       });
-      foundKey = session._id.toString();
     } else if (pending) {
       pending[1].textHandling = textHandling;
-      foundKey = pending[0];
     }
 
     if (!foundKey) {
@@ -621,19 +617,9 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       originalMessage.message_id
     );
 
-    let foundKey: string | undefined;
-    let selectedChannel: string | undefined;
-    let mediaGroupMessages: Message[] | undefined;
-
-    if (session) {
-      foundKey = session._id.toString();
-      selectedChannel = session.selectedChannel;
-      mediaGroupMessages = session.mediaGroupMessages;
-    } else if (pending) {
-      foundKey = pending[0];
-      selectedChannel = pending[1].selectedChannel;
-      mediaGroupMessages = pending[1].mediaGroupMessages;
-    }
+    const foundKey = session?._id.toString() ?? pending?.[0];
+    const data = session ?? pending?.[1];
+    const { selectedChannel, mediaGroupMessages } = data ?? {};
 
     if (!foundKey) {
       await ErrorMessages.sessionExpired(ctx);
@@ -734,53 +720,20 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    let scheduledTime: Date;
+    const { textHandling = 'keep', selectedNickname, customText } = session;
 
-    if (session.selectedAction === 'forward') {
-      const result = await postScheduler.scheduleForwardPost({
-        targetChannelId: selectedChannel,
-        originalMessage,
-        forwardInfo,
-        content,
-      });
-      scheduledTime = result.scheduledTime;
-    } else {
-      const result = await postScheduler.scheduleTransformPost({
-        targetChannelId: selectedChannel,
-        originalMessage,
-        forwardInfo,
-        content,
-        textHandling: session.textHandling ?? 'keep',
-        selectedNickname: session.selectedNickname,
-        customText: session.customText,
-      });
-      scheduledTime = result.scheduledTime;
+    const baseParams = { targetChannelId: selectedChannel, originalMessage, forwardInfo, content };
+
+    const { scheduledTime } = session.selectedAction === 'forward'
+      ? await postScheduler.scheduleForwardPost(baseParams)
+      : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedNickname, customText });
+
+    const fromId = ctx.from?.id;
+    if (fromId) {
+      await deletePreviewMessages(ctx, fromId, session);
     }
 
-    // Delete all content preview messages (array support for reply chains/media groups)
-    if (session.previewMessageIds && session.previewMessageIds.length > 0) {
-      for (const msgId of session.previewMessageIds) {
-        try {
-          await ctx.api.deleteMessage(ctx.from!.id, msgId);
-        } catch (deleteErr) {
-          logger.warn(`Failed to delete preview message ${msgId}:`, deleteErr);
-        }
-      }
-    } else if (session.previewMessageId) {
-      // Backward compatibility: single preview message (old sessions)
-      try {
-        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
-      } catch (deleteErr) {
-        logger.warn(`Failed to delete preview message ${session.previewMessageId}:`, deleteErr);
-      }
-    }
-
-    // Delete control message (the one with Schedule/Cancel buttons)
-    try {
-      await ctx.deleteMessage();
-    } catch (deleteErr) {
-      logger.warn('Failed to delete control message:', deleteErr);
-    }
+    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
 
     // Clean up session
     await sessionSvc.complete(sessionKey);
@@ -825,32 +778,13 @@ bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Delete all content preview messages (array support for reply chains/media groups)
-    if (session.previewMessageIds && session.previewMessageIds.length > 0) {
-      for (const msgId of session.previewMessageIds) {
-        try {
-          await ctx.api.deleteMessage(ctx.from!.id, msgId);
-        } catch (deleteErr) {
-          logger.warn(`Failed to delete preview message ${msgId}:`, deleteErr);
-        }
-      }
-    } else if (session.previewMessageId) {
-      // Backward compatibility: single preview message (old sessions)
-      try {
-        await ctx.api.deleteMessage(ctx.from!.id, session.previewMessageId);
-      } catch (deleteErr) {
-        logger.warn(`Failed to delete preview message ${session.previewMessageId}:`, deleteErr);
-      }
+    const fromId = ctx.from?.id;
+    if (fromId) {
+      await deletePreviewMessages(ctx, fromId, session);
     }
 
-    // Delete control message (the one with Schedule/Cancel buttons)
-    try {
-      await ctx.deleteMessage();
-    } catch (deleteErr) {
-      logger.warn('Failed to delete control message:', deleteErr);
-    }
+    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
 
-    // Delete session
     await sessionSvc.complete(sessionKey);
 
     await ctx.reply('Cancelled. Forward a new message to start over.');
