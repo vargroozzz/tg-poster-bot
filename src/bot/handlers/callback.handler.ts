@@ -970,20 +970,19 @@ bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
     queuePreviewStateMap.delete(userId);
 
     const result = await queueService.deleteAndCascade(postId);
-    if (!result) {
-      await ctx.reply('❌ Post not found — it may have already been published or deleted.');
-      return;
-    }
 
-    // Clean up preview content messages
+    // Always clean up preview messages regardless of whether the post was found
     for (const msgId of previewMessageIds) {
       await ctx.api.deleteMessage(userId, msgId).catch((err) =>
         logger.warn(`Failed to delete preview message ${msgId}:`, err)
       );
     }
-
-    // Delete the control message (this message)
     await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+
+    if (!result) {
+      await ctx.reply('❌ Post not found — it may have already been published or deleted.');
+      return;
+    }
 
     // Refresh the queue list message
     await renderQueuePage(ctx, channelId, page, queueMessageId);
