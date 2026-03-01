@@ -20,8 +20,25 @@ import { SessionState } from '../../shared/constants/flow-states.js';
 import { SessionStateMachine } from '../../core/session/session-state-machine.js';
 import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
+import { QueueService } from '../../core/queue/queue.service.js';
+import { QueuePreviewSenderService } from '../../core/queue/queue-preview-sender.service.js';
+import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
+import { createQueueListKeyboard } from '../keyboards/queue-list.keyboard.js';
+import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
+import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
+import { InlineKeyboard } from 'grammy';
 
 const postScheduler = new PostSchedulerService();
+const queueService = new QueueService();
+
+interface QueuePreviewState {
+  previewMessageIds: number[];
+  controlMessageId: number;
+  queueMessageId: number;
+  channelId: string;
+  page: number;
+}
+const queuePreviewStateMap = new Map<number, QueuePreviewState>();
 
 // Get SessionService from DI container (will be initialized in index.ts)
 let sessionService: SessionService;
@@ -109,6 +126,62 @@ async function getPendingForward(
   }
 
   return {};
+}
+
+async function renderQueuePage(
+  ctx: Context,
+  channelId: string,
+  page: number,
+  messageId?: number
+): Promise<void> {
+  const channels = await getActivePostingChannels();
+  const channel = channels.find((ch) => ch.channelId === channelId);
+  const channelTitle = channel?.channelTitle ?? channelId;
+
+  const { posts, labels, totalCount, totalPages } = await queueService.getChannelQueuePage(
+    channelId,
+    page
+  );
+
+  // Clamp page if it's now beyond the last page (e.g. after deletion)
+  const clampedPage = Math.min(page, totalPages);
+  if (clampedPage !== page) {
+    return renderQueuePage(ctx, channelId, clampedPage, messageId);
+  }
+
+  const header = `📋 ${channelTitle} — Queue (${totalCount} post${totalCount !== 1 ? 's' : ''})`;
+
+  if (posts.length === 0) {
+    const text = `${header}\n\nNo pending posts.`;
+    const keyboard = new InlineKeyboard().text('← Channels', 'queue:channels');
+    if (messageId) {
+      await ctx.api.editMessageText(ctx.chat!.id, messageId, text, { reply_markup: keyboard });
+    } else {
+      await ctx.editMessageText(text, { reply_markup: keyboard });
+    }
+    return;
+  }
+
+  const postLines = posts
+    .map((post, i) => {
+      const time = formatSlotTime(post.scheduledTime);
+      return `${(clampedPage - 1) * 5 + i + 1}. ${time} — ${labels[i]}`;
+    })
+    .join('\n');
+
+  const text = `${header}\n\n${postLines}`;
+  const keyboard = createQueueListKeyboard({
+    postIds: posts.map((p) => p._id.toString()),
+    channelId,
+    page: clampedPage,
+    totalPages,
+  });
+
+  if (messageId) {
+    await ctx.api.editMessageText(ctx.chat!.id, messageId, text, { reply_markup: keyboard });
+  } else {
+    await ctx.editMessageText(text, { reply_markup: keyboard });
+  }
 }
 
 // Handle channel selection
@@ -797,5 +870,153 @@ bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
       'Error cancelling preview.',
       'Error in preview:cancel callback'
     );
+  }
+});
+
+// queue:noop — pagination label button, does nothing
+bot.callbackQuery('queue:noop', async (ctx: Context) => {
+  await ctx.answerCallbackQuery();
+});
+
+// queue:channels — back to channel selection screen
+bot.callbackQuery('queue:channels', async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const channels = await getActivePostingChannels();
+
+    if (channels.length === 0) {
+      await ctx.editMessageText('⚠️ No posting channels configured. Use /addchannel first.');
+      return;
+    }
+
+    const keyboard = createQueueChannelSelectKeyboard(channels);
+    await ctx.editMessageText('📋 Select a channel to view its queue:', { reply_markup: keyboard });
+  } catch (error) {
+    await ErrorMessages.catchAndReply(ctx, error, '❌ Error loading channels.', 'queue:channels');
+  }
+});
+
+// queue:ch:{channelId}:{page} — show paginated queue for a channel
+bot.callbackQuery(/^queue:ch:(.+):(\d+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const match = ctx.callbackQuery?.data?.match(/^queue:ch:(.+):(\d+)$/);
+    if (!match) return;
+
+    const channelId = match[1];
+    const page = parseInt(match[2], 10);
+
+    await renderQueuePage(ctx, channelId, page);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(ctx, error, '❌ Error loading queue.', 'queue:ch callback');
+  }
+});
+
+// queue:preview:{postId}:{channelId}:{page} — send preview of a scheduled post
+bot.callbackQuery(/^queue:preview:([^:]+):(.+):(\d+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const match = ctx.callbackQuery?.data?.match(/^queue:preview:([^:]+):(.+):(\d+)$/);
+    if (!match) return;
+
+    const postId = match[1];
+    const channelId = match[2];
+    const page = parseInt(match[3], 10);
+    const userId = ctx.from?.id;
+    const queueMessageId = ctx.callbackQuery?.message?.message_id;
+
+    if (!userId || !queueMessageId) return;
+
+    const repository = new ScheduledPostRepository();
+    const post = await repository.findById(postId);
+    if (!post) {
+      await ctx.reply('❌ Post not found — it may have already been published or deleted.');
+      return;
+    }
+
+    const previewSender = new QueuePreviewSenderService(ctx.api);
+    const { previewMessageIds, controlMessageId } = await previewSender.sendPreview(userId, post);
+
+    queuePreviewStateMap.set(userId, {
+      previewMessageIds,
+      controlMessageId,
+      queueMessageId,
+      channelId,
+      page,
+    });
+  } catch (error) {
+    await ErrorMessages.catchAndReply(ctx, error, '❌ Error generating preview.', 'queue:preview callback');
+  }
+});
+
+// queue:del:{postId} — delete post, cascade reschedule, refresh queue
+bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const match = ctx.callbackQuery?.data?.match(/^queue:del:(.+)$/);
+    if (!match) return;
+
+    const postId = match[1];
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const state = queuePreviewStateMap.get(userId);
+    if (!state) {
+      await ctx.reply('❌ Preview state expired. Please use /queue again.');
+      return;
+    }
+
+    const { previewMessageIds, queueMessageId, channelId, page } = state;
+    queuePreviewStateMap.delete(userId);
+
+    const result = await queueService.deleteAndCascade(postId);
+    if (!result) {
+      await ctx.reply('❌ Post not found — it may have already been published or deleted.');
+      return;
+    }
+
+    // Clean up preview content messages
+    for (const msgId of previewMessageIds) {
+      await ctx.api.deleteMessage(userId, msgId).catch((err) =>
+        logger.warn(`Failed to delete preview message ${msgId}:`, err)
+      );
+    }
+
+    // Delete the control message (this message)
+    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+
+    // Refresh the queue list message
+    await renderQueuePage(ctx, channelId, page, queueMessageId);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(ctx, error, '❌ Error deleting post.', 'queue:del callback');
+  }
+});
+
+// queue:back — clean up preview messages, leave queue list unchanged
+bot.callbackQuery('queue:back', async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const state = queuePreviewStateMap.get(userId);
+    if (!state) {
+      // State gone (bot restarted) — just delete the control message
+      await ctx.deleteMessage().catch(() => {});
+      return;
+    }
+
+    const { previewMessageIds } = state;
+    queuePreviewStateMap.delete(userId);
+
+    for (const msgId of previewMessageIds) {
+      await ctx.api.deleteMessage(userId, msgId).catch((err) =>
+        logger.warn(`Failed to delete preview message ${msgId}:`, err)
+      );
+    }
+
+    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+  } catch (error) {
+    await ErrorMessages.catchAndReply(ctx, error, '❌ Error going back.', 'queue:back callback');
   }
 });
