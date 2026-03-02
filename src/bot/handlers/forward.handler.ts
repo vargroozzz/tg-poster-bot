@@ -202,44 +202,45 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
     }
 
     // Single message (not part of media group)
-    // Check if this could be part of a reply chain
-    const replyToMessageId = message.reply_to_message?.message_id;
-    const messageId = message.message_id;
-    const chatId = message.chat.id;
+    // Group forwarded messages from the same source chat arriving within 1 second.
+    // When the user batch-forwards a thread, messages arrive independently with no
+    // reply_to_message link — the only shared identifier is the source chat ID.
+    const forwardOrigin = message.forward_origin;
+    const sourceChatId =
+      forwardOrigin?.type === 'channel'
+        ? String(forwardOrigin.chat.id)
+        : forwardOrigin?.type === 'chat'
+          ? String(forwardOrigin.sender_chat.id)
+          : undefined;
+    const userId = ctx.from?.id;
 
-    // Look for existing buffer containing a related message
-    const bufferKey = [...replyChainBuffers.entries()].find(([, buffer]) =>
-      buffer.messages.some(
-        (msg) => msg.message_id === replyToMessageId || msg.reply_to_message?.message_id === messageId
-      )
-    )?.[0];
+    if (sourceChatId && userId) {
+      const batchKey = `${userId}_${sourceChatId}`;
+      const buffer = replyChainBuffers.get(batchKey);
 
-    if (bufferKey) {
-      // Add to existing buffer
-      const buffer = replyChainBuffers.get(bufferKey)!;
-      buffer.messages.push(message);
-      clearTimeout(buffer.timeout);
-      buffer.timeout = setTimeout(() => {
-        processReplyChain(bufferKey!).catch((err) => {
-          logger.error('Error processing reply chain:', err);
+      if (buffer) {
+        buffer.messages.push(message);
+        clearTimeout(buffer.timeout);
+        buffer.timeout = setTimeout(() => {
+          processReplyChain(batchKey).catch((err) => {
+            logger.error('Error processing forward batch:', err);
+          });
+        }, 1000);
+      } else {
+        const timeout = setTimeout(() => {
+          processReplyChain(batchKey).catch((err) => {
+            logger.error('Error processing forward batch:', err);
+          });
+        }, 1000);
+        replyChainBuffers.set(batchKey, {
+          messages: [message],
+          timeout,
+          ctx,
+          createdAt: Date.now(),
         });
-      }, 1000);
-    } else if (replyToMessageId) {
-      // Start new buffer — this message has a reply relationship
-      const newBufferKey = `${chatId}_${messageId}_${Date.now()}`;
-      const timeout = setTimeout(() => {
-        processReplyChain(newBufferKey).catch((err) => {
-          logger.error('Error processing reply chain:', err);
-        });
-      }, 1000);
-      replyChainBuffers.set(newBufferKey, {
-        messages: [message],
-        timeout,
-        ctx,
-        createdAt: Date.now(),
-      });
+      }
     } else {
-      // No reply relationship — process as single message
+      // Non-forwarded or user-forwarded message: process immediately
       await processSingleMessage(ctx, message);
     }
   } catch (error) {
