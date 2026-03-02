@@ -33,7 +33,6 @@ const queueService = new QueueService();
 
 interface QueuePreviewState {
   previewMessageIds: number[];
-  controlMessageId: number;
   queueMessageId: number;
   channelId: string;
   page: number;
@@ -935,11 +934,10 @@ bot.callbackQuery(/^queue:preview:([^:]+):(.+):(\d+)$/, async (ctx: Context) => 
     }
 
     const previewSender = new QueuePreviewSenderService(ctx.api);
-    const { previewMessageIds, controlMessageId } = await previewSender.sendPreview(userId, post);
+    const { previewMessageIds } = await previewSender.sendPreview(userId, post);
 
     queuePreviewStateMap.set(userId, {
       previewMessageIds,
-      controlMessageId,
       queueMessageId,
       channelId,
       page,
@@ -981,10 +979,9 @@ bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
 
     if (!result) {
       await ctx.reply('❌ Post not found — it may have already been published or deleted.');
-      return;
     }
 
-    // Refresh the queue list message
+    // Refresh the queue list message (even if post was already gone, to show current state)
     await renderQueuePage(ctx, channelId, page, queueMessageId);
   } catch (error) {
     await ErrorMessages.catchAndReply(ctx, error, '❌ Error deleting post.', 'queue:del callback');
