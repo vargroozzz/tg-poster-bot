@@ -19,7 +19,7 @@ export interface MediaGroupItem {
 }
 
 export interface MessageContent {
-  type: 'text' | 'photo' | 'video' | 'document' | 'animation' | 'media_group';
+  type: 'text' | 'photo' | 'video' | 'document' | 'animation' | 'media_group' | 'poll';
   text?: string;
   fileId?: string;
   mediaGroup?: MediaGroupItem[];
