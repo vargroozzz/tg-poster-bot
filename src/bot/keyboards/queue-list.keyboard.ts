@@ -16,8 +16,9 @@ export function createQueueListKeyboard({
   const keyboard = new InlineKeyboard();
 
   // One preview button per post on this page
+  const pageOffset = (page - 1) * 5;
   postIds.forEach((postId, index) => {
-    keyboard.text(`👁 ${index + 1}`, `queue:preview:${postId}:${channelId}:${page}`);
+    keyboard.text(`👁 ${pageOffset + index + 1}`, `queue:preview:${postId}:${channelId}:${page}`);
   });
   keyboard.row();
 
