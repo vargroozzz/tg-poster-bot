@@ -159,7 +159,7 @@ bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (c
 });
 
 // Handle both forwarded and non-forwarded messages
-bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:text'], async (ctx: Context) => {
+bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:text', 'message:poll'], async (ctx: Context) => {
   try {
     const message = ctx.message;
 
@@ -563,6 +563,10 @@ export function extractMessageContent(
       type: 'text',
       text: message.text,
     };
+  }
+
+  if ('poll' in message && message.poll) {
+    return { type: 'poll' };
   }
 
   return null;

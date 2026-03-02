@@ -329,6 +329,18 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
+    // Polls cannot be transformed — always forward regardless of origin
+    if (content?.type === 'poll') {
+      if (session && getSessionService()) {
+        await getSessionService().update(session._id.toString(), { selectedAction: 'forward' });
+        await showPreview(ctx, session._id.toString());
+      } else if (pending) {
+        pending[1].selectedAction = 'forward';
+      }
+      logger.debug(`Poll message ${originalMessage.message_id}: auto-selected forward`);
+      return;
+    }
+
     // Neither green nor red listed
     const isForwarded = !!originalMessage.forward_origin;
 
