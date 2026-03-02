@@ -329,7 +329,38 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Neither green nor red listed - show transform/forward options
+    // Neither green nor red listed
+    const isForwarded = !!originalMessage.forward_origin;
+
+    if (!isForwarded) {
+      // Non-forwarded message: forward option makes no sense, auto-select transform
+      if (session && getSessionService()) {
+        const nextState = SessionStateMachine.getNextState(SessionState.ACTION_SELECT, {
+          isGreenListed: false,
+          isRedListed: false,
+          hasText,
+          isForward: false,
+        });
+        await getSessionService().updateState(session._id.toString(), nextState, {
+          selectedAction: 'transform',
+        });
+      } else if (pending) {
+        pending[1].selectedAction = 'transform';
+      }
+
+      if (hasText) {
+        await ctx.editMessageText('How should the text be handled?', {
+          reply_markup: createTextHandlingKeyboard(),
+        });
+      } else {
+        await handleNicknameSelection(ctx, originalMessage, session?._id.toString());
+      }
+
+      logger.debug(`Non-forwarded message ${originalMessage.message_id}: auto-selected transform`);
+      return;
+    }
+
+    // Forwarded message - show transform/forward options
     const keyboard = createForwardActionKeyboard();
     await ctx.editMessageText('Choose how to post this message:', {
       reply_markup: keyboard,
