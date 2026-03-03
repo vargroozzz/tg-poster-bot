@@ -1,6 +1,6 @@
 import { Context } from 'grammy';
 import { Message } from 'grammy/types';
-import { extractMessageContent, pendingForwards } from './forward.handler.js';
+import { extractMessageContent } from './forward.handler.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
@@ -9,7 +9,6 @@ import { createCustomTextKeyboard } from '../keyboards/custom-text.keyboard.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
-import { PendingForwardHelper, type PendingForward } from '../../shared/helpers/pending-forward-finder.js';
 import { ErrorMessages } from '../../shared/constants/error-messages.js';
 import { NicknameHelper } from '../../shared/helpers/nickname.helper.js';
 import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
@@ -94,37 +93,17 @@ async function handleNicknameSelection(
   return false; // Not handled, keyboard shown
 }
 
-/**
- * Helper to get pending forward from either DB or Map (dual-read pattern)
- * Tries DB first for persistence, falls back to Map for compatibility
- */
-async function getPendingForward(
-  userId: number,
-  messageId: number
-): Promise<{ session?: ISession; pending?: [string, PendingForward] }> {
+async function getPendingForward(userId: number, messageId: number): Promise<ISession | undefined> {
   const sessionSvc = getSessionService();
-
-  // Try database first
-  if (sessionSvc) {
-    try {
-      const session = await sessionSvc.findByMessage(userId, messageId);
-      if (session) {
-        logger.debug(`Found session in DB for message ${messageId}`);
-        return { session };
-      }
-    } catch (error) {
-      logger.error('Error fetching session from DB, falling back to Map:', error);
-    }
+  if (!sessionSvc) return undefined;
+  try {
+    const session = await sessionSvc.findByMessage(userId, messageId);
+    if (session) logger.debug(`Found session in DB for message ${messageId}`);
+    return session ?? undefined;
+  } catch (error) {
+    logger.error('Error fetching session from DB:', error);
+    return undefined;
   }
-
-  // Fall back to Map
-  const pending = PendingForwardHelper.findByMessageId(messageId, pendingForwards);
-  if (pending) {
-    logger.debug(`Found session in Map for message ${messageId}`);
-    return { pending };
-  }
-
-  return {};
 }
 
 async function renderQueuePage(
@@ -218,50 +197,35 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     const hasText = !!(content?.text && content.text.trim().length > 0);
 
     // DUAL READ: Try to find session in DB first, fall back to Map
-    const { session, pending } = await getPendingForward(
-      ctx.from?.id ?? 0,
-      originalMessage.message_id
-    );
-
-    const foundKey = session?._id.toString() ?? pending?.[0];
-    const data = session ?? pending?.[1];
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+    const foundKey = session?._id.toString();
 
     // Check for reply chain BEFORE state machine transition.
     // Reply chains always go directly to preview (action selection is skipped).
     // Checking here avoids writing a transient ACTION_SELECT state to the DB.
-    const hasReplyChain = (data?.replyChainMessages?.length ?? 0) > 1;
+    const hasReplyChain = (session?.replyChainMessages?.length ?? 0) > 1;
 
     if (hasReplyChain && session) {
       const sessionSvc = getSessionService();
       if (sessionSvc) {
-        // Store selected channel without going through the state machine
-        await sessionSvc.update(session._id.toString(), {
-          selectedChannel: selectedChannelId,
-        });
+        await sessionSvc.update(session._id.toString(), { selectedChannel: selectedChannelId });
         logger.debug(`Reply chain detected, skipping action selection for session ${session._id}`);
         await showPreview(ctx, session._id.toString());
         return;
       }
     }
 
-    if (session) {
-      // Update session in DB with proper state transition
-      const sessionSvc = getSessionService();
-      if (sessionSvc) {
-        const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, {
-          isGreenListed: shouldAutoForward,
-          isRedListed,
-          hasText,
-          isForward: false,
-        });
-
-        await sessionSvc.updateState(session._id.toString(), nextState, {
-          selectedChannel: selectedChannelId,
-        });
-      }
-    } else if (pending) {
-      // Update Map (legacy path)
-      pending[1].selectedChannel = selectedChannelId;
+    const sessionSvc = getSessionService();
+    if (session && sessionSvc) {
+      const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, {
+        isGreenListed: shouldAutoForward,
+        isRedListed,
+        hasText,
+        isForward: false,
+      });
+      await sessionSvc.updateState(session._id.toString(), nextState, {
+        selectedChannel: selectedChannelId,
+      });
     }
 
     if (!foundKey) {
@@ -270,51 +234,34 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     }
 
     if (shouldAutoForward) {
-      if (session && getSessionService()) {
-        await getSessionService().update(session._id.toString(), { selectedAction: 'forward' });
-      } else if (pending) {
-        pending[1].selectedAction = 'forward';
+      if (session && sessionSvc) {
+        await sessionSvc.update(session._id.toString(), { selectedAction: 'forward' });
       }
-
       await showPreview(ctx, foundKey);
       return;
     }
 
     // Red-listed channels auto-transform without asking
     if (isRedListed) {
-      // Store that transform was chosen (state already updated above)
-      if (session && getSessionService()) {
-        // Just update the action field (state was already transitioned above)
-        await getSessionService().update(session._id.toString(), {
-          selectedAction: 'transform',
-        });
-      } else if (pending) {
-        pending[1].selectedAction = 'transform';
+      if (session && sessionSvc) {
+        await sessionSvc.update(session._id.toString(), { selectedAction: 'transform' });
       }
-
-      // Auto-transform: proceed directly to text handling or nickname selection
       if (hasText) {
-        const keyboard = createTextHandlingKeyboard();
         await ctx.editMessageText('How should the text be handled?', {
-          reply_markup: keyboard,
+          reply_markup: createTextHandlingKeyboard(),
         });
       } else {
-        // No text - try auto-selecting nickname or show selection keyboard
-        const sessionId = session?._id.toString();
-        await handleNicknameSelection(ctx, originalMessage, sessionId);
+        await handleNicknameSelection(ctx, originalMessage, session?._id.toString());
       }
-
       logger.debug(`Red-listed channel - auto-transforming message ${originalMessage.message_id}`);
       return;
     }
 
     // Polls cannot be transformed — always forward regardless of origin
     if (content?.type === 'poll') {
-      if (session && getSessionService()) {
-        await getSessionService().update(session._id.toString(), { selectedAction: 'forward' });
+      if (session && sessionSvc) {
+        await sessionSvc.update(session._id.toString(), { selectedAction: 'forward' });
         await showPreview(ctx, session._id.toString());
-      } else if (pending) {
-        pending[1].selectedAction = 'forward';
       }
       logger.debug(`Poll message ${originalMessage.message_id}: auto-selected forward`);
       return;
@@ -325,20 +272,17 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     if (!isForwarded) {
       // Non-forwarded message: forward option makes no sense, auto-select transform
-      if (session && getSessionService()) {
+      if (session && sessionSvc) {
         const nextState = SessionStateMachine.getNextState(SessionState.ACTION_SELECT, {
           isGreenListed: false,
           isRedListed: false,
           hasText,
           isForward: false,
         });
-        await getSessionService().updateState(session._id.toString(), nextState, {
+        await sessionSvc.updateState(session._id.toString(), nextState, {
           selectedAction: 'transform',
         });
-      } else if (pending) {
-        pending[1].selectedAction = 'transform';
       }
-
       if (hasText) {
         await ctx.editMessageText('How should the text be handled?', {
           reply_markup: createTextHandlingKeyboard(),
@@ -346,7 +290,6 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       } else {
         await handleNicknameSelection(ctx, originalMessage, session?._id.toString());
       }
-
       logger.debug(`Non-forwarded message ${originalMessage.message_id}: auto-selected transform`);
       return;
     }
@@ -388,33 +331,17 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
       return;
     }
 
-    // DUAL READ: Find session in DB or Map
-    const { session, pending } = await getPendingForward(
-      ctx.from?.id ?? 0,
-      originalMessage.message_id
-    );
-
-    const foundKey = session?._id.toString() ?? pending?.[0];
-
-    // Update based on action
-    const updates = action === 'add'
-      ? { waitingForCustomText: true }
-      : { customText: undefined };
-
-    if (session && getSessionService()) {
-      // For custom text, we either wait for input or proceed to preview
-      // Keep state as CUSTOM_TEXT while waiting, or transition to PREVIEW
-      const nextState = action === 'add' ? SessionState.CUSTOM_TEXT : SessionState.PREVIEW;
-
-      await getSessionService().updateState(session._id.toString(), nextState, updates);
-    } else if (pending) {
-      Object.assign(pending[1], updates);
-    }
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+    const foundKey = session?._id.toString();
 
     if (!foundKey) {
       await ErrorMessages.sessionExpired(ctx);
       return;
     }
+
+    const updates = action === 'add' ? { waitingForCustomText: true } : { customText: undefined };
+    const nextState = action === 'add' ? SessionState.CUSTOM_TEXT : SessionState.PREVIEW;
+    await getSessionService()?.updateState(foundKey, nextState, updates);
 
     if (action === 'add') {
       await ctx.editMessageText(
@@ -516,36 +443,18 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
     // Parse nickname selection
     const selectedNickname = await NicknameHelper.parseNicknameSelection(nicknameSelection);
 
-    // DUAL READ: Find and update session or pending forward
-    const { session, pending } = await getPendingForward(
-      ctx.from?.id ?? 0,
-      originalMessage.message_id
-    );
-
-    const foundKey = session?._id.toString() ?? pending?.[0];
-
-    if (session && getSessionService()) {
-      // Transition from NICKNAME_SELECT to CUSTOM_TEXT
-      const context = {
-        isGreenListed: false,
-        isRedListed: false,
-        hasText: false,
-        isForward: false,
-      };
-
-      const nextState = SessionStateMachine.getNextState(SessionState.NICKNAME_SELECT, context);
-
-      await getSessionService().updateState(session._id.toString(), nextState, {
-        selectedNickname,
-      });
-    } else if (pending) {
-      pending[1].selectedNickname = selectedNickname;
-    }
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+    const foundKey = session?._id.toString();
 
     if (!foundKey) {
       await ErrorMessages.sessionExpired(ctx);
       return;
     }
+
+    const nextState = SessionStateMachine.getNextState(SessionState.NICKNAME_SELECT, {
+      isGreenListed: false, isRedListed: false, hasText: false, isForward: false,
+    });
+    await getSessionService()?.updateState(foundKey, nextState, { selectedNickname });
 
     // Show custom text keyboard
     const keyboard = createCustomTextKeyboard();
@@ -586,36 +495,18 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       return;
     }
 
-    // DUAL READ: Find and update session or pending forward
-    const { session, pending } = await getPendingForward(
-      ctx.from?.id ?? 0,
-      originalMessage.message_id
-    );
-
-    const foundKey = session?._id.toString() ?? pending?.[0];
-
-    if (session && getSessionService()) {
-      // Transition from TEXT_HANDLING to NICKNAME_SELECT
-      const context = {
-        isGreenListed: false,
-        isRedListed: false,
-        hasText: true,
-        isForward: false,
-      };
-
-      const nextState = SessionStateMachine.getNextState(SessionState.TEXT_HANDLING, context);
-
-      await getSessionService().updateState(session._id.toString(), nextState, {
-        textHandling,
-      });
-    } else if (pending) {
-      pending[1].textHandling = textHandling;
-    }
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+    const foundKey = session?._id.toString();
 
     if (!foundKey) {
       await ErrorMessages.sessionExpired(ctx);
       return;
     }
+
+    const nextState = SessionStateMachine.getNextState(SessionState.TEXT_HANDLING, {
+      isGreenListed: false, isRedListed: false, hasText: true, isForward: false,
+    });
+    await getSessionService()?.updateState(foundKey, nextState, { textHandling });
 
     // After text handling, try auto-selecting nickname or show selection keyboard
     await handleNicknameSelection(ctx, originalMessage, foundKey);
@@ -643,43 +534,26 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
       return;
     }
 
-    // DUAL READ: Find and update session or pending forward
-    const { session, pending } = await getPendingForward(
-      ctx.from?.id ?? 0,
-      originalMessage.message_id
-    );
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
 
-    // Check if message has text - if so, show text handling first
     const content = extractMessageContent(originalMessage);
     const hasText = !!(content?.text && content.text.trim().length > 0);
 
-    if (session && getSessionService()) {
-      // Determine next state after selecting transform
-      const context = {
-        isGreenListed: false,
-        isRedListed: false,
-        hasText,
-        isForward: false,
-      };
-
-      const nextState = SessionStateMachine.getNextState(SessionState.ACTION_SELECT, context);
-
-      await getSessionService().updateState(session._id.toString(), nextState, {
+    if (session) {
+      const nextState = SessionStateMachine.getNextState(SessionState.ACTION_SELECT, {
+        isGreenListed: false, isRedListed: false, hasText, isForward: false,
+      });
+      await getSessionService()?.updateState(session._id.toString(), nextState, {
         selectedAction: 'transform',
       });
-    } else if (pending) {
-      pending[1].selectedAction = 'transform';
     }
 
     if (hasText) {
-      const keyboard = createTextHandlingKeyboard();
       await ctx.editMessageText('How should the text be handled?', {
-        reply_markup: keyboard,
+        reply_markup: createTextHandlingKeyboard(),
       });
     } else {
-      // No text - try auto-selecting nickname or show selection keyboard
-      const sessionId = session?._id.toString();
-      await handleNicknameSelection(ctx, originalMessage, sessionId);
+      await handleNicknameSelection(ctx, originalMessage, session?._id.toString());
     }
 
     logger.debug(`Transform action selected for message ${originalMessage.message_id}`);
@@ -705,15 +579,9 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // DUAL READ: Find session or pending forward
-    const { session, pending } = await getPendingForward(
-      ctx.from?.id ?? 0,
-      originalMessage.message_id
-    );
-
-    const foundKey = session?._id.toString() ?? pending?.[0];
-    const data = session ?? pending?.[1];
-    const { selectedChannel, mediaGroupMessages } = data ?? {};
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+    const foundKey = session?._id.toString();
+    const { selectedChannel } = session ?? {};
 
     if (!foundKey) {
       await ErrorMessages.sessionExpired(ctx);
@@ -725,30 +593,7 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
       return;
     }
 
-    // Parse forward info
-    const forwardInfo = parseForwardInfo(originalMessage);
-
-    // For media groups, store all message IDs for proper forwarding
-    if (mediaGroupMessages && mediaGroupMessages.length > 1) {
-      forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
-    }
-
-    // Extract message content (including media group if present)
-    const content = extractMessageContent(originalMessage, mediaGroupMessages);
-
-    if (!content) {
-      await ErrorMessages.unsupportedMessageType(ctx);
-      return;
-    }
-
-    // Store forward action in session (showPreview handles state transition to PREVIEW)
-    if (session && getSessionService()) {
-      await getSessionService().update(foundKey, { selectedAction: 'forward' });
-    } else if (pending) {
-      pending[1].selectedAction = 'forward';
-    }
-
-    // Show preview instead of scheduling immediately
+    await getSessionService()?.update(foundKey, { selectedAction: 'forward' });
     await showPreview(ctx, foundKey);
 
     logger.debug(`Forward action selected for message ${originalMessage.message_id}`);
