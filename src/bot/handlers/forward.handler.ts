@@ -7,18 +7,12 @@ import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
 import type { MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
-import { formatSlotTime } from '../../utils/time-slots.js';
-import type { PendingForward } from '../../shared/helpers/pending-forward-finder.js';
-import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
-import type { ISession } from '../../database/models/session.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
 import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 import { entitiesToHtml } from '../../utils/entities-to-html.js';
-
-const postScheduler = new PostSchedulerService();
 
 // Get SessionService from DI container (will be initialized in index.ts)
 let sessionService: SessionService;
@@ -28,11 +22,6 @@ const getSessionService = () => {
   }
   return sessionService;
 };
-
-// Store forwarded message data temporarily (in-memory Map)
-// Note: Database-backed sessions are now implemented (see SessionService)
-// This Map is kept for dual-write compatibility during migration
-export const pendingForwards = new Map<string, PendingForward>();
 
 // Store media group buffers temporarily
 interface MediaGroupBuffer {
@@ -55,21 +44,9 @@ interface ReplyChainBuffer {
 
 const replyChainBuffers = new Map<string, ReplyChainBuffer>();
 
-// Clean up old pending forwards every 5 minutes
+// Clean up stale reply-chain buffers every 5 minutes
 setInterval(() => {
   const now = Date.now();
-  const ttl = 24 * 60 * 60 * 1000; // 24 hours
-
-  pendingForwards.forEach((value, key) => {
-    if (now - value.timestamp > ttl) {
-      pendingForwards.delete(key);
-      logger.debug(`Cleaned up expired pending forward: ${key}`);
-    }
-  });
-
-  // Also clean up any stale reply-chain buffers (should complete in ~1 s, so
-  // anything older than 5 minutes is leaked — e.g. processReplyChain threw
-  // before reaching replyChainBuffers.delete).
   const replyChainTtl = 5 * 60 * 1000; // 5 minutes
   replyChainBuffers.forEach((buffer, key) => {
     if (now - buffer.createdAt > replyChainTtl) {
@@ -101,58 +78,32 @@ bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (c
       return;
     }
 
-    // DUAL READ: Find session waiting for custom text (DB first, then Map)
     const sessionSvc = getSessionService();
-    let session: ISession | undefined;
+    const session = await sessionSvc?.findWaitingForCustomText(userId) ?? undefined;
+    if (!session || !sessionSvc) return;
 
-    if (sessionSvc) {
-      try {
-        session = await sessionSvc.findWaitingForCustomText(userId) ?? undefined;
-        if (session) {
-          logger.debug(`Found session waiting for custom text in DB for user ${userId}`);
-        }
-      } catch (error) {
-        logger.error('Error fetching session from DB, falling back to Map:', error);
-      }
-    }
-
-    // Update with custom text, preserving Telegram formatting entities as HTML
     const customText = entitiesToHtml(message.text ?? '', message.entities);
+    const foundKey = session._id.toString();
 
-    if (session && sessionSvc) {
-      const foundKey = session._id.toString();
-      await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
-        customText,
-        waitingForCustomText: false,
-      });
+    await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
+      customText,
+      waitingForCustomText: false,
+    });
 
-      const updatedSession = await sessionSvc.findById(foundKey);
-      if (!updatedSession) {
-        await ctx.reply('⚠️ Session not found. Please try again.');
-        return;
-      }
-
-      const previewGenerator = new PreviewGeneratorService();
-      const previewContent = await previewGenerator.generatePreview(updatedSession);
-
-      const previewSender = new PreviewSenderService(ctx.api);
-      const previewMessageId = await previewSender.sendPreview(userId, previewContent, foundKey);
-
-      await sessionSvc.update(foundKey, { previewMessageId });
-      logger.debug(`Preview shown after custom text for session ${foundKey}`);
+    const updatedSession = await sessionSvc.findById(foundKey);
+    if (!updatedSession) {
+      await ctx.reply('⚠️ Session not found. Please try again.');
       return;
     }
 
-    // Map fallback
-    const foundEntry = [...pendingForwards.entries()].find(([, value]) => value.waitingForCustomText);
-    if (!foundEntry) return; // Not waiting for custom text
-    logger.debug(`Found session waiting for custom text in Map for user ${userId}`);
-    const [key, pendingForward] = foundEntry;
-    pendingForward.customText = customText;
-    pendingForward.waitingForCustomText = false;
-    await scheduleTransformPostFromForwardHandler(ctx, pendingForward, key);
+    const previewGenerator = new PreviewGeneratorService();
+    const previewContent = await previewGenerator.generatePreview(updatedSession);
 
-    logger.debug(`Custom text added and post scheduled for user ${userId}`);
+    const previewSender = new PreviewSenderService(ctx.api);
+    const previewMessageId = await previewSender.sendPreview(userId, previewContent, foundKey);
+
+    await sessionSvc.update(foundKey, { previewMessageId });
+    logger.debug(`Preview shown after custom text for session ${foundKey}`);
   } catch (error) {
     logger.error('Error handling custom text input:', error);
   }
@@ -293,20 +244,12 @@ async function processSingleMessage(ctx: Context, message: Message) {
 
   const keyboard = createChannelSelectKeyboard(channels);
 
-  // DUAL WRITE: Store in both Map (legacy) and Database (new)
-  const callbackKey = `${ctx.from?.id}_${message.message_id}_${Date.now()}`;
-  pendingForwards.set(callbackKey, {
-    message,
-    timestamp: Date.now(),
-  });
-
-  // Also write to database for session persistence (reuse sessionSvc from above)
   if (sessionSvc && ctx.from?.id) {
     try {
       await sessionSvc.create(ctx.from.id, message);
       logger.debug(`Session created in DB for message ${message.message_id}`);
     } catch (error) {
-      logger.error('Failed to create session in DB, using Map fallback:', error);
+      logger.error('Failed to create session in DB:', error);
     }
   }
 
@@ -374,26 +317,16 @@ async function processMediaGroup(mediaGroupId: string) {
 
   const keyboard = createChannelSelectKeyboard(channels);
 
-  // DUAL WRITE: Store in both Map (legacy) and Database (new)
-  const callbackKey = `${primaryMessage.from?.id}_${primaryMessage.message_id}_${Date.now()}`;
-  pendingForwards.set(callbackKey, {
-    message: primaryMessage,
-    mediaGroupMessages: messages,
-    timestamp: Date.now(),
-  });
-
-  // Also write to database for session persistence
   const sessionSvc = getSessionService();
   if (sessionSvc && primaryMessage.from?.id) {
     try {
       const session = await sessionSvc.create(primaryMessage.from.id, primaryMessage);
-      // Store media group messages in session
       await sessionSvc.update(session._id.toString(), {
         mediaGroupMessages: messages,
       });
       logger.debug(`Session created in DB for media group ${primaryMessage.message_id}`);
     } catch (error) {
-      logger.error('Failed to create session in DB, using Map fallback:', error);
+      logger.error('Failed to create session in DB:', error);
     }
   }
 
@@ -470,19 +403,6 @@ async function processReplyChain(bufferKey: string) {
       logger.error('Failed to create session for reply chain:', err);
     }
   }
-
-  // Also store in legacy pendingForwards map (dual-write pattern)
-  const forwardInfo = parseForwardInfo(primaryMessage);
-  if (messages.length > 1) {
-    forwardInfo.replyChainMessageIds = messages.map((m) => m.message_id);
-  }
-
-  const callbackKey = sessionId ?? `${primaryMessage.from?.id}_${primaryMessage.message_id}_${Date.now()}`;
-  pendingForwards.set(callbackKey, {
-    message: primaryMessage,
-    replyChainMessages: messages,
-    timestamp: Date.now(),
-  });
 
   // Build channel selection keyboard
   const channels = postingChannels.map((ch) => ({
@@ -572,71 +492,3 @@ export function extractMessageContent(
   return null;
 }
 
-// Helper function to schedule a transform post
-async function scheduleTransformPostFromForwardHandler(
-  ctx: Context,
-  pendingForward: PendingForward,
-  pendingKey: string
-) {
-  try {
-    const { message: originalMessage, selectedChannel, selectedNickname, customText, mediaGroupMessages, textHandling = 'keep' } = pendingForward;
-
-    if (!selectedChannel) {
-      await ctx.reply('❌ No channel selected. Please forward the message again.');
-      return;
-    }
-
-    // Parse forward info
-    const forwardInfo = parseForwardInfo(originalMessage);
-
-    // Extract message content
-    const content = extractMessageContent(originalMessage, mediaGroupMessages);
-
-    if (!content) {
-      await ctx.reply('❌ Unsupported message type.');
-      return;
-    }
-
-    // Schedule using the unified scheduler service
-    const result = await postScheduler.scheduleTransformPost({
-      targetChannelId: selectedChannel,
-      originalMessage,
-      forwardInfo,
-      content,
-      textHandling,
-      selectedNickname,
-      customText,
-    });
-
-    await ctx.reply(
-      `✅ Post scheduled with transformation\n` +
-        `📍 Target: ${selectedChannel}\n` +
-        `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`,
-      {
-        reply_to_message_id: originalMessage.message_id,
-      }
-    );
-
-    logger.info(
-      `Successfully scheduled transformed post to ${selectedChannel} for ${formatSlotTime(result.scheduledTime)}`
-    );
-
-    // Clean up: Delete from both DB and Map
-    const sessionSvc = getSessionService();
-    if (sessionSvc) {
-      try {
-        // Try to find and complete session in DB (pendingKey might be session ID)
-        const session = await sessionSvc.findById(pendingKey);
-        if (session) {
-          await sessionSvc.complete(pendingKey);
-        }
-      } catch (error) {
-        logger.error('Error cleaning up session from DB:', error);
-      }
-    }
-    pendingForwards.delete(pendingKey);
-  } catch (error) {
-    logger.error('Error scheduling transform post:', error);
-    await ctx.reply('❌ Error scheduling post. Please try again.');
-  }
-}
