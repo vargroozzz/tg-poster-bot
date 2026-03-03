@@ -270,34 +270,13 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     }
 
     if (shouldAutoForward) {
-      // Auto-forward green-listed content
-      const content = extractMessageContent(originalMessage, data?.mediaGroupMessages);
-
-      if (!content || !forwardInfo) {
-        await ctx.editMessageText('❌ Could not process message.');
-        return;
-      }
-
-      const result = await postScheduler.scheduleForwardPost({
-        targetChannelId: selectedChannelId,
-        originalMessage,
-        forwardInfo,
-        content,
-      });
-
-      await ctx.editMessageText(
-        `✅ Auto-scheduled (green-listed channel)\n` +
-          `📍 Target: ${selectedChannelId}\n` +
-          `📅 Scheduled for: ${formatSlotTime(result.scheduledTime)}`
-      );
-
-      // Cleanup: Delete from both DB and Map
       if (session && getSessionService()) {
-        await getSessionService().complete(session._id.toString());
+        await getSessionService().update(session._id.toString(), { selectedAction: 'forward' });
+      } else if (pending) {
+        pending[1].selectedAction = 'forward';
       }
-      if (pending) {
-        pendingForwards.delete(pending[0]);
-      }
+
+      await showPreview(ctx, foundKey);
       return;
     }
 
