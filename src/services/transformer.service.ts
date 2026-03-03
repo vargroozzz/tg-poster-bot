@@ -3,6 +3,7 @@ import { TextTransformerService } from '../core/transformation/text-transformer.
 import { NicknameResolverService } from '../core/attribution/nickname-resolver.service.js';
 import { AttributionService } from '../core/attribution/attribution.service.js';
 import { ChannelListRepository } from '../database/repositories/channel-list.repository.js';
+import { PostingChannel } from '../database/models/posting-channel.model.js';
 
 /**
  * Facade service for message transformation
@@ -63,7 +64,11 @@ export class TransformerService {
     }
 
     const channelId = String(forwardInfo.fromChannelId);
-    return await this.channelListRepo.isGreenListed(channelId);
+    if (await this.channelListRepo.isGreenListed(channelId)) {
+      return true;
+    }
+    const adminedChannel = await PostingChannel.findOne({ channelId, isActive: true }).lean();
+    return adminedChannel !== null;
   }
 
   /**
