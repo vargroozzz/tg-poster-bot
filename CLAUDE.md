@@ -1,5 +1,9 @@
 # Telegram Channel Poster Bot - Developer Guide
 
+## Workflow Notes
+
+- Do NOT commit design docs or implementation plans. Write them to disk if needed but skip the commit — execution follows immediately.
+
 ## Table of Contents
 
 - [Project Overview](#project-overview)
@@ -392,7 +396,8 @@ bot.on([
   'message:photo',           // Original photos
   'message:video',           // Original videos
   'message:document',        // Original documents
-  'message:animation'        // Original GIFs/animations
+  'message:animation',       // Original GIFs/animations
+  'message:text'             // Text messages (forwarded or original)
 ], async (ctx: Context) => {
   // Process all types uniformly
 });
@@ -407,6 +412,147 @@ const forwardInfo = parseForwardInfo(message); // Never null
 // Check if it's actually a forward
 const isForwarded = forwardInfo.fromChannelId !== undefined ||
                     forwardInfo.fromUserId !== undefined;
+```
+
+### Dual-Read Pattern for Session Management
+During migration from in-memory Map to database-backed sessions, use dual-read pattern for resilience:
+```typescript
+// Try database first
+const sessionSvc = getSessionService();
+if (sessionSvc && userId) {
+  try {
+    session = await sessionSvc.findWaitingForCustomText(userId) ?? undefined;
+    if (session) {
+      foundKey = session._id.toString();
+      logger.debug(`Found session in DB for user ${userId}`);
+    }
+  } catch (error) {
+    logger.error('Error fetching session from DB, falling back to Map:', error);
+  }
+}
+
+// Fall back to Map if not found in DB
+if (!session) {
+  for (const [key, value] of pendingForwards.entries()) {
+    if (value.waitingForCustomText) {
+      foundEntry = [key, value];
+      foundKey = key;
+      logger.debug(`Found session in Map for user ${userId}`);
+      break;
+    }
+  }
+}
+```
+
+### Idempotency Checks for Zero-Downtime Deployments
+Prevent duplicate processing during Render's zero-downtime deployments (when two instances briefly run):
+```typescript
+async function processSingleMessage(ctx: Context, message: Message) {
+  // Idempotency check: Skip if we already have a session for this message
+  // This prevents duplicate processing during zero-downtime deployments
+  const sessionSvc = getSessionService();
+  if (sessionSvc && ctx.from?.id) {
+    try {
+      const existingSession = await sessionSvc.findByMessage(ctx.from.id, message.message_id);
+      if (existingSession) {
+        logger.debug(`Session already exists for message ${message.message_id}, skipping duplicate processing`);
+        return;
+      }
+    } catch (error) {
+      logger.error('Error checking for existing session:', error);
+      // Continue processing if check fails (fail open)
+    }
+  }
+
+  // Continue with normal processing...
+}
+```
+
+### Filtering Message Handlers to Prevent Conflicts
+When handling text messages for custom text input, use `.filter()` to only catch replies (not all text):
+```typescript
+// CORRECT: Only handle text messages that are replies
+bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (ctx: Context) => {
+  // This only processes replies to bot messages (custom text input)
+  // Regular forwarded text messages go to the main handler
+});
+
+// WRONG: Catches ALL text messages including forwarded ones
+bot.on('message:text', async (ctx: Context) => {
+  // This blocks text forwarding from reaching the main handler
+});
+```
+
+### Auto-Nickname Selection
+Automatically select nickname for known users to streamline workflow:
+```typescript
+async function handleNicknameSelection(
+  ctx: Context,
+  originalMessage: Message,
+  sessionId?: string
+): Promise<boolean> {
+  const forwardInfo = parseForwardInfo(originalMessage);
+  const fromUserId = forwardInfo?.fromUserId;
+
+  if (fromUserId) {
+    const nickname = await NicknameHelper.findNicknameByUserId(fromUserId);
+    if (nickname) {
+      logger.debug(`Auto-selecting nickname "${nickname}" for user ${fromUserId}`);
+
+      // Auto-select and proceed to custom text
+      const sessionSvc = getSessionService();
+      if (sessionId && sessionSvc) {
+        await sessionSvc.update(sessionId, { selectedNickname: nickname });
+      }
+
+      const keyboard = createCustomTextKeyboard();
+      await ctx.editMessageText('Do you want to add custom text to this post?', {
+        reply_markup: keyboard,
+      });
+      return true; // Handled automatically
+    }
+  }
+
+  // Show selection keyboard if no nickname found
+  const keyboard = await NicknameHelper.getNicknameKeyboard();
+  await ctx.editMessageText('Who should be credited for this post?', {
+    reply_markup: keyboard,
+  });
+  return false; // Manual selection needed
+}
+```
+
+### Media Group Forwarding with forwardMessages
+For media groups (albums), use `forwardMessages` (plural) API to preserve album grouping:
+```typescript
+// Store all message IDs when buffering media group
+const forwardInfo = parseForwardInfo(primaryMessage);
+if (forwardInfo && messages.length > 1) {
+  forwardInfo.mediaGroupMessageIds = messages.map((msg) => msg.message_id);
+}
+
+// In post publisher, forward entire album atomically
+if (post.originalForward.mediaGroupMessageIds && post.originalForward.mediaGroupMessageIds.length > 1) {
+  // Use forwardMessages (plural) to preserve album grouping
+  const result = (await this.api.raw.forwardMessages({
+    chat_id: post.targetChannelId,
+    from_chat_id: post.originalForward.chatId,
+    message_ids: post.originalForward.mediaGroupMessageIds,
+  })) as any;
+
+  return result[0].message_id;
+}
+```
+
+### Setting Command Hints
+Command hints appear in Telegram when users type "/". Configure in `src/index.ts` after bot initialization:
+```typescript
+await bot.api.setMyCommands([
+  { command: 'start', description: 'Show welcome message' },
+  { command: 'help', description: 'Show help and available commands' },
+  { command: 'addchannel', description: 'Add a new posting channel' },
+  // ... other commands
+]);
 ```
 
 ## Common Pitfalls
@@ -444,6 +590,49 @@ Use `forwardMessage` API to preserve "Forwarded from" attribution, not `sendPhot
 
 ### ❌ Don't limit nickname selection to forwarded messages only
 Nickname selection should **always** show during Transform flow, even for non-forwarded original content.
+
+### ❌ Don't use .on('message:text') without filtering
+Using `.on('message:text')` without `.filter()` will catch ALL text messages, including custom text replies, preventing them from being processed correctly:
+```typescript
+// WRONG - Catches all text messages
+bot.on('message:text', async (ctx: Context) => {
+  // This catches forwarded text AND custom text input
+});
+
+// CORRECT - Only catch replies for custom text input
+bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (ctx: Context) => {
+  // This only catches replies to bot messages
+});
+```
+
+### ❌ Don't skip idempotency checks during deployments
+Render's zero-downtime deployments briefly run two instances simultaneously. Without idempotency checks, messages get processed twice:
+```typescript
+// WRONG - No check for duplicate processing
+async function processSingleMessage(ctx: Context, message: Message) {
+  // Immediately process without checking if already handled
+}
+
+// CORRECT - Check if message already has a session
+const existingSession = await sessionSvc.findByMessage(ctx.from.id, message.message_id);
+if (existingSession) {
+  return; // Skip duplicate processing
+}
+```
+
+### ❌ Don't use forwardMessage (singular) for media groups
+For albums/media groups, use `forwardMessages` (plural) to preserve grouping. Using `forwardMessage` will only forward the first item:
+```typescript
+// WRONG - Only forwards first image
+await this.api.forwardMessage(channelId, chatId, messageId);
+
+// CORRECT - Forwards entire album
+await this.api.raw.forwardMessages({
+  chat_id: channelId,
+  from_chat_id: chatId,
+  message_ids: mediaGroupMessageIds, // Array of all message IDs
+});
+```
 
 ### ✅ Do verify builds before committing
 Always run `npm run build` to catch TypeScript errors.
@@ -642,6 +831,43 @@ WEBHOOK_URL=            # Webhook URL for production (e.g., https://yourdomain.o
 ### Why Web Service, Not Background Worker?
 The bot runs continuously and has an HTTP endpoint for health checks, so it's configured as a Web Service rather than a Background Worker.
 
+### Keeping Render Free Tier Awake
+
+**Problem:** Render free tier spins down services after 15 minutes of inactivity. Since the bot uses webhooks (not polling), there may be no HTTP traffic for hours, causing the service to sleep and miss scheduled posts.
+
+**Solution:** Use **cron-job.org** (free external service) to ping the health endpoint regularly:
+
+1. **Create account at cron-job.org** (free, no credit card required)
+
+2. **Create new cron job:**
+   - **Title:** "Keep Render Bot Awake"
+   - **URL:** `https://your-app.onrender.com/health`
+   - **Schedule:** `*/10 * * * *` (every 10 minutes)
+   - **Method:** GET
+   - **Enable:** Yes
+
+3. **Verify health endpoint exists** in `src/index.ts`:
+   ```typescript
+   app.get('/health', (req, res) => {
+     res.json({ status: 'ok' });
+   });
+   ```
+
+4. **Bot uses continuous worker** (not HTTP-triggered):
+   - Worker runs every 30 seconds checking for due posts
+   - No `USE_CRON_JOB` environment variable needed
+   - More reliable than HTTP-triggered approach
+
+**Benefits:**
+- ✅ Service never sleeps (pinged every 10 min)
+- ✅ Posts publish on time
+- ✅ Free (cron-job.org free tier allows frequent pings)
+- ✅ Zero configuration changes to bot code
+
+**Monitoring:**
+- Check cron-job.org execution history for successful pings
+- Render logs should never show "spinning down" message
+
 ## Testing Locally
 
 ```bash
@@ -714,25 +940,35 @@ Currently no automated tests. Future improvement: add Jest tests for:
 
 ## Key Files to Know
 
-- `src/index.ts` - Entry point, starts bot and worker
+- `src/index.ts` - Entry point, starts bot and worker, configures command hints
 - `src/services/post-worker.service.ts` - **Critical:** Background worker that posts messages
-- `src/services/scheduler.service.ts` - Slot calculation and scheduling
-- `src/services/transformer.service.ts` - Attribution logic
+- `src/core/posting/post-scheduler.service.ts` - Slot calculation and scheduling
+- `src/services/transformer.service.ts` - Attribution logic facade
+- `src/core/attribution/attribution.service.ts` - Attribution string building logic
 - `src/bot/handlers/callback.handler.ts` - Handles all inline button clicks
-- `src/bot/handlers/forward.handler.ts` - Handles forwarded messages
+- `src/bot/handlers/forward.handler.ts` - Handles forwarded and original messages
 - `src/bot/handlers/command.handler.ts` - All bot commands
 - `src/utils/time-slots.ts` - Time slot calculation (hh:00:01 or hh:30:01)
 
 ## Implemented Features
 
-- [x] Media group support (albums with multiple photos/videos)
+- [x] Media group support (albums with multiple photos/videos via forwardMessages API)
 - [x] Inline nickname selection with "No attribution" option (always shown in Transform flow)
+- [x] Auto-nickname selection for known users (streamlines workflow)
 - [x] Custom text feature (prepend text to posts)
+- [x] Custom text input via filtered reply handler (prevents handler conflicts)
 - [x] Multi-channel support with channel selection
 - [x] Webhooks deployment (prevents 409 conflicts)
+- [x] Idempotency checks (prevents duplicate processing during zero-downtime deployments)
 - [x] True forwarding via forwardMessage (preserves "Forwarded from")
+- [x] Atomic album forwarding via forwardMessages (plural) API
 - [x] Non-forwarded message support (original photos, videos, documents can be scheduled)
+- [x] Text message forwarding support (forwarded text posts)
 - [x] User attribution for any message type (forwarded or original)
+- [x] Manual nickname attribution for original content (works without forward info)
+- [x] Session persistence (database-backed with in-memory Map fallback during migration)
+- [x] cron-job.org integration (keeps Render free tier awake for scheduled posts)
+- [x] Command hints (descriptions appear when typing "/" in Telegram)
 
 ## Future Improvements
 

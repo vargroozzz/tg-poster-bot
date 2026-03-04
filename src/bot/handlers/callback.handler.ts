@@ -10,13 +10,17 @@ import { formatSlotTime } from '../../utils/time-slots.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
 import { ErrorMessages } from '../../shared/constants/error-messages.js';
-import { NicknameHelper } from '../../shared/helpers/nickname.helper.js';
+import {
+  findNicknameByUserId,
+  getNicknameKeyboard,
+  parseNicknameSelection,
+} from '../../shared/helpers/nickname.helper.js';
 import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
 import type { ISession } from '../../database/models/session.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
-import { SessionStateMachine } from '../../core/session/session-state-machine.js';
+import { getNextState } from '../../core/session/session-state-machine.js';
 import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 import { QueueService } from '../../core/queue/queue.service.js';
@@ -62,7 +66,7 @@ async function handleNicknameSelection(
 
   if (fromUserId) {
     // Look up nickname for this user
-    const nickname = await NicknameHelper.findNicknameByUserId(fromUserId);
+    const nickname = await findNicknameByUserId(fromUserId);
 
     if (nickname) {
       // Auto-select this nickname and proceed to custom text
@@ -85,7 +89,7 @@ async function handleNicknameSelection(
   }
 
   // No nickname found - show selection keyboard
-  const keyboard = await NicknameHelper.getNicknameKeyboard();
+  const keyboard = await getNicknameKeyboard();
   await ctx.editMessageText('Who should be credited for this post?', {
     reply_markup: keyboard,
   });
@@ -217,7 +221,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     const sessionSvc = getSessionService();
     if (session && sessionSvc) {
-      const nextState = SessionStateMachine.getNextState(SessionState.CHANNEL_SELECT, {
+      const nextState = getNextState(SessionState.CHANNEL_SELECT, {
         isGreenListed: shouldAutoForward,
         isRedListed,
         hasText,
@@ -273,7 +277,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     if (!isForwarded) {
       // Non-forwarded message: forward option makes no sense, auto-select transform
       if (session && sessionSvc) {
-        const nextState = SessionStateMachine.getNextState(SessionState.ACTION_SELECT, {
+        const nextState = getNextState(SessionState.ACTION_SELECT, {
           isGreenListed: false,
           isRedListed: false,
           hasText,
@@ -441,7 +445,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
     }
 
     // Parse nickname selection
-    const selectedNickname = await NicknameHelper.parseNicknameSelection(nicknameSelection);
+    const selectedNickname = await parseNicknameSelection(nicknameSelection);
 
     const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
     const foundKey = session?._id.toString();
@@ -451,7 +455,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    const nextState = SessionStateMachine.getNextState(SessionState.NICKNAME_SELECT, {
+    const nextState = getNextState(SessionState.NICKNAME_SELECT, {
       isGreenListed: false, isRedListed: false, hasText: false, isForward: false,
     });
     await getSessionService()?.updateState(foundKey, nextState, { selectedNickname });
@@ -503,7 +507,7 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       return;
     }
 
-    const nextState = SessionStateMachine.getNextState(SessionState.TEXT_HANDLING, {
+    const nextState = getNextState(SessionState.TEXT_HANDLING, {
       isGreenListed: false, isRedListed: false, hasText: true, isForward: false,
     });
     await getSessionService()?.updateState(foundKey, nextState, { textHandling });
@@ -540,7 +544,7 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
     const hasText = !!(content?.text && content.text.trim().length > 0);
 
     if (session) {
-      const nextState = SessionStateMachine.getNextState(SessionState.ACTION_SELECT, {
+      const nextState = getNextState(SessionState.ACTION_SELECT, {
         isGreenListed: false, isRedListed: false, hasText, isForward: false,
       });
       await getSessionService()?.updateState(session._id.toString(), nextState, {

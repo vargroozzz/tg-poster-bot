@@ -1,6 +1,6 @@
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
 import type { IScheduledPost } from '../../database/models/scheduled-post.model.js';
-import { NicknameHelper } from '../../shared/helpers/nickname.helper.js';
+import { findNicknameByUserId } from '../../shared/helpers/nickname.helper.js';
 import { logger } from '../../utils/logger.js';
 
 const PAGE_SIZE = 5;
@@ -49,7 +49,7 @@ export class QueueService {
     }
 
     if (fromUserId) {
-      const nickname = await NicknameHelper.findNicknameByUserId(fromUserId);
+      const nickname = await findNicknameByUserId(fromUserId);
       if (nickname) return `via ${nickname}`;
     }
 

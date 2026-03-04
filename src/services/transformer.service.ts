@@ -1,82 +1,48 @@
 import type { ForwardInfo, TransformAction, TextHandling } from '../types/message.types.js';
-import { TextTransformerService } from '../core/transformation/text-transformer.service.js';
-import { NicknameResolverService } from '../core/attribution/nickname-resolver.service.js';
-import { AttributionService } from '../core/attribution/attribution.service.js';
+import { transformText } from '../core/transformation/text-transformer.js';
+import { buildAttribution } from '../core/attribution/attribution.js';
 import { ChannelListRepository } from '../database/repositories/channel-list.repository.js';
 import { PostingChannel } from '../database/models/posting-channel.model.js';
 
+const channelListRepo = new ChannelListRepository();
+
 /**
- * Facade service for message transformation
- * Coordinates text transformation and attribution services
- * Maintains backward compatibility while delegating to specialized services
+ * Facade for message transformation.
+ * Coordinates text transformation and attribution.
  */
-export class TransformerService {
-  private textTransformer: TextTransformerService;
-  private attribution: AttributionService;
-  private channelListRepo: ChannelListRepository;
+export async function transformMessage(
+  originalText: string,
+  forwardInfo: ForwardInfo,
+  action: TransformAction,
+  textHandling: TextHandling = 'keep',
+  manualNickname?: string | null,
+  customText?: string
+): Promise<string> {
+  const processedText = transformText(originalText, textHandling, customText);
 
-  constructor() {
-    this.textTransformer = new TextTransformerService();
-    const nicknameResolver = new NicknameResolverService();
-    this.channelListRepo = new ChannelListRepository();
-    this.attribution = new AttributionService(nicknameResolver, this.channelListRepo);
-  }
-  /**
-   * Transform message text with attribution based on forward info and action
-   * @param manualNickname - Manually selected nickname (overrides automatic lookup). null = no attribution, undefined = use automatic lookup
-   * @param customText - Optional custom text to prepend to the message
-   */
-  async transformMessage(
-    originalText: string,
-    forwardInfo: ForwardInfo,
-    action: TransformAction,
-    textHandling: TextHandling = 'keep',
-    manualNickname?: string | null,
-    customText?: string
-  ): Promise<string> {
-    // Apply text transformations (quote/remove/keep) and custom text
-    const processedText = this.textTransformer.transformText(
-      originalText,
-      textHandling,
-      customText
-    );
+  if (action === 'forward') return processedText;
 
-    // If action is 'forward', return processed text without attribution
-    if (action === 'forward') {
-      return processedText;
-    }
-
-    // Build attribution string based on forward info and rules
-    const attributionText = await this.attribution.buildAttribution(
-      forwardInfo,
-      manualNickname
-    );
-
-    return processedText + (attributionText ?? '');
-  }
-
-  /**
-   * Check if a channel forward should be auto-forwarded (green-listed)
-   */
-  async shouldAutoForward(forwardInfo: ForwardInfo): Promise<boolean> {
-    if (!forwardInfo.fromChannelId) {
-      return false;
-    }
-
-    const channelId = String(forwardInfo.fromChannelId);
-    if (await this.channelListRepo.isGreenListed(channelId)) {
-      return true;
-    }
-    const adminedChannel = await PostingChannel.findOne({ channelId, isActive: true }).lean();
-    return adminedChannel !== null;
-  }
-
-  /**
-   * Check if a channel is red-listed (should omit channel reference)
-   */
-  async isRedListed(channelId: string): Promise<boolean> {
-    return await this.channelListRepo.isRedListed(channelId);
-  }
+  const attributionText = await buildAttribution(forwardInfo, manualNickname);
+  return processedText + (attributionText ?? '');
 }
 
-export const transformerService = new TransformerService();
+export async function shouldAutoForward(forwardInfo: ForwardInfo): Promise<boolean> {
+  if (!forwardInfo.fromChannelId) return false;
+
+  const channelId = String(forwardInfo.fromChannelId);
+  if (await channelListRepo.isGreenListed(channelId)) return true;
+
+  const adminedChannel = await PostingChannel.findOne({ channelId, isActive: true }).lean();
+  return adminedChannel !== null;
+}
+
+export async function isRedListed(channelId: string): Promise<boolean> {
+  return channelListRepo.isRedListed(channelId);
+}
+
+// Keep singleton export for backwards compat with call sites that import `transformerService`
+export const transformerService = {
+  transformMessage,
+  shouldAutoForward,
+  isRedListed,
+};
