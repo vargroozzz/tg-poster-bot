@@ -1,5 +1,5 @@
 import { Context } from 'grammy';
-import { channelListService } from '../../services/channel-list.service.js';
+import { ChannelListRepository } from '../../database/repositories/channel-list.repository.js';
 import { SchedulerService } from '../../services/scheduler.service.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
 import { logger } from '../../utils/logger.js';
@@ -18,6 +18,7 @@ import { parseForwardInfo } from '../../utils/message-parser.js';
 import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
 
 const schedulerService = new SchedulerService(bot.api);
+const channelListRepo = new ChannelListRepository();
 
 bot.command('start', async (ctx: Context) => {
   const postingChannels = await getActivePostingChannels();
@@ -177,10 +178,10 @@ bot.command('listchannels', async (ctx: Context) => {
     // Get posting channels
     const postingChannels = await getActivePostingChannels();
 
-    // Get green/red channels
-    const channels = await channelListService.listChannels();
-    const greenChannels = channels.filter((ch) => ch.listType === 'green');
-    const redChannels = channels.filter((ch) => ch.listType === 'red');
+    const [greenChannels, redChannels] = await Promise.all([
+      channelListRepo.getGreenList(),
+      channelListRepo.getRedList(),
+    ]);
 
     const postingSection = postingChannels.length > 0
       ? '\n📍 Posting Channels (where bot can post):\n' + postingChannels.map((ch) => {
@@ -260,7 +261,7 @@ bot.command('addgreen', async (ctx: Context) => {
   }
 
   try {
-    await channelListService.addChannel(channelId, 'green');
+    await channelListRepo.addToList(channelId, 'green');
     await ctx.reply(`✅ Channel ${channelId} added to green list. Forwards from this channel will be auto-scheduled as-is.`);
   } catch (error) {
     logger.error('Error adding to green list:', error);
@@ -281,7 +282,7 @@ bot.command('addred', async (ctx: Context) => {
   }
 
   try {
-    await channelListService.addChannel(channelId, 'red');
+    await channelListRepo.addToList(channelId, 'red');
     await ctx.reply(
       `✅ Channel ${channelId} added to red list. Channel attribution will be omitted when transforming.`
     );
@@ -299,7 +300,7 @@ bot.command('remove', async (ctx: Context) => {
   if (!channelId) return;
 
   try {
-    const removed = await channelListService.removeChannel(channelId);
+    const removed = (await channelListRepo.removeFromAllLists(channelId)) > 0;
     if (removed) {
       await ctx.reply(`✅ Channel ${channelId} removed from lists.`);
     } else {
