@@ -398,7 +398,7 @@ async function processReplyChain(bufferKey: string) {
         replyChainMessages: messages,
         selectedAction: 'forward',
       });
-      logger.debug(`Reply chain session created: id=${sessionId}, messageCount=${messages.length}, ids=[${messages.map((m) => m.message_id).join(',')}], updateResult=${updatedSession ? `ok(${updatedSession.replyChainMessages?.length})` : 'null'}`);
+      logger.info(`[RC-DEBUG] session created: id=${sessionId}, messageCount=${messages.length}, ids=[${messages.map((m) => m.message_id).join(',')}], updateResult=${updatedSession ? `ok(${updatedSession.replyChainMessages?.length})` : 'null'}`);
     } catch (err) {
       logger.error('Failed to create session for reply chain:', err);
     }
