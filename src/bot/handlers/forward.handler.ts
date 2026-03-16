@@ -164,6 +164,7 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
           ? String(forwardOrigin.sender_chat.id)
           : undefined;
     const userId = ctx.from?.id;
+    logger.info(`[RC-DEBUG] incoming msg: id=${message.message_id}, forwardType=${forwardOrigin?.type ?? 'none'}, sourceChatId=${sourceChatId ?? 'none'}`);
 
     if (sourceChatId && userId) {
       const batchKey = `${userId}_${sourceChatId}`;
