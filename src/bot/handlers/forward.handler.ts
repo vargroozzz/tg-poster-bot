@@ -120,6 +120,7 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 
     // Check if this is part of a media group
     const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
+    logger.info(`[RC-DEBUG] handler received: id=${message.message_id}, type=${Object.keys(message).filter(k => ['text','photo','video','document','animation','poll'].includes(k))[0] ?? 'other'}, mediaGroupId=${mediaGroupId ?? 'none'}, forwardType=${message.forward_origin?.type ?? 'none'}`);
 
     if (mediaGroupId) {
       // Buffer this message
