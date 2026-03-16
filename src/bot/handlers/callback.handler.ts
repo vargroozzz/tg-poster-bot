@@ -208,6 +208,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     // Reply chains always go directly to preview (action selection is skipped).
     // Checking here avoids writing a transient ACTION_SELECT state to the DB.
     const hasReplyChain = (session?.replyChainMessages?.length ?? 0) > 1;
+    logger.debug(`Channel select: sessionFound=${!!session}, replyChainLen=${session?.replyChainMessages?.length}, hasReplyChain=${hasReplyChain}`);
 
     if (hasReplyChain && session) {
       const sessionSvc = getSessionService();
@@ -652,8 +653,10 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
     }
     // For reply chains, store all message IDs so the post worker forwards the full thread
     const replyChainMessagesForSchedule = session.replyChainMessages;
+    logger.debug(`preview:schedule replyChain: len=${replyChainMessagesForSchedule?.length}, ids=[${replyChainMessagesForSchedule?.map((msg) => msg.message_id).join(',')}]`);
     if (replyChainMessagesForSchedule && replyChainMessagesForSchedule.length > 1) {
       forwardInfo.replyChainMessageIds = replyChainMessagesForSchedule.map((msg) => msg.message_id);
+      logger.debug(`preview:schedule: set replyChainMessageIds=[${forwardInfo.replyChainMessageIds.join(',')}]`);
     }
 
     // Extract message content

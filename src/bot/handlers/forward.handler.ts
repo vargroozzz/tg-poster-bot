@@ -394,11 +394,11 @@ async function processReplyChain(bufferKey: string) {
       const session = await sessionSvc.create(ctx.from.id, primaryMessage);
       sessionId = session._id.toString();
       // Store reply chain messages and pre-select forward action
-      await sessionSvc.update(sessionId, {
+      const updatedSession = await sessionSvc.update(sessionId, {
         replyChainMessages: messages,
         selectedAction: 'forward',
       });
-      logger.debug(`Session ${sessionId} created for reply chain of ${messages.length} messages`);
+      logger.debug(`Reply chain session created: id=${sessionId}, messageCount=${messages.length}, ids=[${messages.map((m) => m.message_id).join(',')}], updateResult=${updatedSession ? `ok(${updatedSession.replyChainMessages?.length})` : 'null'}`);
     } catch (err) {
       logger.error('Failed to create session for reply chain:', err);
     }

@@ -1,6 +1,7 @@
 import { Api } from 'grammy';
 import type { IScheduledPost } from '../../database/models/scheduled-post.model.js';
 import { MediaSenderService } from '../sending/media-sender.service.js';
+import { logger } from '../../utils/logger.js';
 
 /**
  * Service for publishing posts to Telegram
@@ -38,6 +39,7 @@ export class PostPublisherService {
     }
 
     // For reply chains or media groups, forward all messages atomically
+    logger.debug(`copyMessage: replyChainIds=${JSON.stringify(post.originalForward.replyChainMessageIds)}, mediaGroupIds=${JSON.stringify(post.originalForward.mediaGroupMessageIds)}, chatId=${post.originalForward.chatId}`);
     const bulkMessageIds =
       (post.originalForward.replyChainMessageIds?.length ?? 0) > 1
         ? post.originalForward.replyChainMessageIds
