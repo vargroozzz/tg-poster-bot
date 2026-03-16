@@ -39,7 +39,7 @@ export class PostPublisherService {
     }
 
     // For reply chains or media groups, forward all messages atomically
-    logger.debug(`copyMessage: replyChainIds=${JSON.stringify(post.originalForward.replyChainMessageIds)}, mediaGroupIds=${JSON.stringify(post.originalForward.mediaGroupMessageIds)}, chatId=${post.originalForward.chatId}`);
+    logger.info(`[RC-DEBUG] copyMessage: replyChainIds=${JSON.stringify(post.originalForward.replyChainMessageIds)}, mediaGroupIds=${JSON.stringify(post.originalForward.mediaGroupMessageIds)}, chatId=${post.originalForward.chatId}`);
     const bulkMessageIds =
       (post.originalForward.replyChainMessageIds?.length ?? 0) > 1
         ? post.originalForward.replyChainMessageIds
