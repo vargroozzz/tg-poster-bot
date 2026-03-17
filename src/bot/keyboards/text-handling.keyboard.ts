@@ -1,9 +1,13 @@
 import { InlineKeyboard } from 'grammy';
 
 export function createTextHandlingKeyboard() {
-  return new InlineKeyboard()
-    .text('Keep text', 'text:keep')
-    .text('Remove text', 'text:remove')
-    .row()
-    .text('Wrap in quote', 'text:quote');
+  return {
+    inline_keyboard: [
+      [
+        { text: 'Remove text', callback_data: 'text:remove', style: 'primary' },
+        { text: 'Keep text', callback_data: 'text:keep' },
+      ],
+      [{ text: 'Wrap in quote', callback_data: 'text:quote' }],
+    ],
+  } as unknown as InlineKeyboard;
 }
