@@ -301,9 +301,10 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     // Forwarded message - show transform/forward options
     const keyboard = createForwardActionKeyboard();
-    await ctx.editMessageText('Choose how to post this message:', {
-      reply_markup: keyboard,
-    });
+    await ctx.editMessageText(
+      'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
+      { reply_markup: keyboard, parse_mode: 'HTML' }
+    );
 
     logger.debug(`Channel ${selectedChannelId} selected for message ${originalMessage.message_id}`);
   } catch (error) {
@@ -523,6 +524,42 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
       error,
       'Error processing text handling. Please try again.',
       'Error in text handling callback'
+    );
+  }
+});
+
+bot.callbackQuery('action:quick', async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
+    if (!originalMessage) {
+      await ErrorMessages.originalMessageNotFound(ctx);
+      return;
+    }
+
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+    if (!session) {
+      await ErrorMessages.sessionExpired(ctx);
+      return;
+    }
+
+    // Collapse transform + keep text + no attribution + skip custom text into one step
+    await getSessionService()?.updateState(session._id.toString(), SessionState.PREVIEW, {
+      selectedAction: 'transform',
+      textHandling: 'keep',
+      selectedNickname: null,
+    });
+
+    await showPreview(ctx, session._id.toString());
+
+    logger.debug(`Quick post selected for message ${originalMessage.message_id}`);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error processing quick post. Please try again.',
+      'Error in quick post callback'
     );
   }
 });
