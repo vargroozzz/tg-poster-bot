@@ -6,23 +6,13 @@ export interface NicknameInfo {
 }
 
 export function createNicknameSelectKeyboard(nicknames: NicknameInfo[]): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
+  const rows: object[][] = [
+    [{ text: 'No attribution', callback_data: 'select_nickname:none', style: 'primary' }],
+  ];
 
-  // Add "No attribution" option first
-  keyboard.text('No attribution', 'select_nickname:none');
+  nicknames.forEach((nick) => {
+    rows.push([{ text: nick.nickname, callback_data: `select_nickname:${nick.userId}` }]);
+  });
 
-  if (nicknames.length > 0) {
-    keyboard.row();
-
-    nicknames.forEach((nick, index) => {
-      keyboard.text(nick.nickname, `select_nickname:${nick.userId}`);
-
-      // Add row break after each nickname for better readability
-      if (index < nicknames.length - 1) {
-        keyboard.row();
-      }
-    });
-  }
-
-  return keyboard;
+  return { inline_keyboard: rows } as unknown as InlineKeyboard;
 }

@@ -1,9 +1,13 @@
 import { InlineKeyboard } from 'grammy';
 
 export function createForwardActionKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text('⚡ Quick post', 'action:quick')
-    .row()
-    .text('✨ Transform', 'action:transform')
-    .text('➡️ Forward', 'action:forward');
+  return {
+    inline_keyboard: [
+      [{ text: '⚡ Quick post', callback_data: 'action:quick', style: 'primary' }],
+      [
+        { text: '✨ Transform', callback_data: 'action:transform' },
+        { text: '➡️ Forward', callback_data: 'action:forward' },
+      ],
+    ],
+  } as unknown as InlineKeyboard;
 }

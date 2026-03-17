@@ -6,10 +6,10 @@ import { InlineKeyboard } from 'grammy';
  * @param sessionId - The session ID to embed in callback data for lookup
  */
 export function createPreviewActionKeyboard(sessionId: string): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-
-  keyboard.text('✅ Schedule', `preview:schedule:${sessionId}`);
-  keyboard.text('❌ Cancel', `preview:cancel:${sessionId}`);
-
-  return keyboard;
+  return {
+    inline_keyboard: [[
+      { text: '✅ Schedule', callback_data: `preview:schedule:${sessionId}`, style: 'success' },
+      { text: '❌ Cancel', callback_data: `preview:cancel:${sessionId}`, style: 'danger' },
+    ]],
+  } as unknown as InlineKeyboard;
 }
