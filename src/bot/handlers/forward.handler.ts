@@ -44,6 +44,10 @@ interface ReplyChainBuffer {
 
 const replyChainBuffers = new Map<string, ReplyChainBuffer>();
 
+// Maps a forwarded message_id (in bot chat) to its buffer key, so that
+// subsequent messages replying to it can be linked to the same buffer.
+const forwardedMsgToBufferKey = new Map<number, string>();
+
 // Clean up stale reply-chain buffers every 5 minutes
 setInterval(() => {
   const now = Date.now();
@@ -51,6 +55,7 @@ setInterval(() => {
   replyChainBuffers.forEach((buffer, key) => {
     if (now - buffer.createdAt > replyChainTtl) {
       clearTimeout(buffer.timeout);
+      buffer.messages.forEach((msg) => forwardedMsgToBufferKey.delete(msg.message_id));
       replyChainBuffers.delete(key);
       logger.debug(`Cleaned up stale reply chain buffer: ${key}`);
     }
@@ -154,16 +159,24 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
     }
 
     // Single message (not part of media group)
-    // Group all forwarded messages from the same user arriving within 1 second.
-    // Keying by userId alone (not by source chat) lets us group threads that span
-    // multiple source chats: e.g. a channel post + its discussion comments, which
-    // come from different chat IDs.
+    // Group forwarded messages that form a thread using reply-chain linkage.
+    // When Telegram batch-forwards a thread, the forwarded copies preserve reply
+    // relationships using the new message IDs in the bot chat. We track each
+    // forwarded message_id → bufferKey so that a reply arriving later can join
+    // the same buffer rather than starting a new one.
     const forwardOrigin = message.forward_origin;
     const userId = ctx.from?.id;
     logger.info(`[RC-DEBUG] incoming msg: id=${message.message_id}, forwardType=${forwardOrigin?.type ?? 'none'}`);
 
     if (forwardOrigin && userId) {
-      const batchKey = String(userId);
+      // If this message is a reply to one we already buffered, reuse that buffer.
+      const replyToId = message.reply_to_message?.message_id;
+      const linkedKey = replyToId !== undefined ? forwardedMsgToBufferKey.get(replyToId) : undefined;
+      const batchKey = linkedKey ?? `fwd_${userId}_${message.message_id}`;
+
+      // Register so future replies to this message can find the same buffer.
+      forwardedMsgToBufferKey.set(message.message_id, batchKey);
+
       const buffer = replyChainBuffers.get(batchKey);
 
       if (buffer) {
@@ -347,6 +360,7 @@ async function processReplyChain(bufferKey: string) {
 
   clearTimeout(buffer.timeout);
   replyChainBuffers.delete(bufferKey);
+  buffer.messages.forEach((msg) => forwardedMsgToBufferKey.delete(msg.message_id));
 
   const { messages, ctx } = buffer;
   if (messages.length === 0) return;
