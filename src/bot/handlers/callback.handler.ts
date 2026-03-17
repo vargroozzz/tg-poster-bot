@@ -544,10 +544,10 @@ bot.callbackQuery('action:quick', async (ctx: Context) => {
       return;
     }
 
-    // Collapse transform + keep text + no attribution + skip custom text into one step
+    // Collapse transform + remove text + no attribution + skip custom text into one step
     await getSessionService()?.updateState(session._id.toString(), SessionState.PREVIEW, {
       selectedAction: 'transform',
-      textHandling: 'keep',
+      textHandling: 'remove',
       selectedNickname: null,
     });
 
