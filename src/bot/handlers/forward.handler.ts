@@ -1,4 +1,4 @@
-import { Context } from 'grammy';
+import { Context, NextFunction } from 'grammy';
 import { Message } from 'grammy/types';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
@@ -59,28 +59,28 @@ setInterval(() => {
 
 // Handle text messages when waiting for custom text input
 // Only listen to messages that are replies (to filter out forwarded text messages)
-bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (ctx: Context) => {
+bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (ctx: Context, next: NextFunction) => {
   try {
     const message = ctx.message;
 
     if (!message) {
-      return;
+      return next();
     }
 
     // Check if this is a reply to a text message (our custom text prompt)
     const replyToMessage = message.reply_to_message;
     if (!replyToMessage || !('text' in replyToMessage)) {
-      return; // Not replying to text message
+      return next(); // Not replying to text message — pass through to main handler
     }
 
     const userId = ctx.from?.id;
     if (!userId) {
-      return;
+      return next();
     }
 
     const sessionSvc = getSessionService();
     const session = await sessionSvc?.findWaitingForCustomText(userId) ?? undefined;
-    if (!session || !sessionSvc) return;
+    if (!session || !sessionSvc) return next(); // No active session — pass through to main handler
 
     const customText = entitiesToHtml(message.text ?? '', message.entities);
     const foundKey = session._id.toString();
