@@ -418,6 +418,10 @@ async function showPreview(ctx: Context, sessionKey: string) {
       previewMessageId,
     });
 
+    // Delete the control message (the keyboard message that was edited through the flow)
+    // so stale buttons don't remain after the session moves to preview.
+    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+
     logger.debug(`Preview shown for session ${sessionKey}`);
   } catch (error) {
     logger.error('Error showing preview:', error);
