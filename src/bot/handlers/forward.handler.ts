@@ -154,21 +154,16 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
     }
 
     // Single message (not part of media group)
-    // Group forwarded messages from the same source chat arriving within 1 second.
-    // When the user batch-forwards a thread, messages arrive independently with no
-    // reply_to_message link — the only shared identifier is the source chat ID.
+    // Group all forwarded messages from the same user arriving within 1 second.
+    // Keying by userId alone (not by source chat) lets us group threads that span
+    // multiple source chats: e.g. a channel post + its discussion comments, which
+    // come from different chat IDs.
     const forwardOrigin = message.forward_origin;
-    const sourceChatId =
-      forwardOrigin?.type === 'channel'
-        ? String(forwardOrigin.chat.id)
-        : forwardOrigin?.type === 'chat'
-          ? String(forwardOrigin.sender_chat.id)
-          : undefined;
     const userId = ctx.from?.id;
-    logger.info(`[RC-DEBUG] incoming msg: id=${message.message_id}, forwardType=${forwardOrigin?.type ?? 'none'}, sourceChatId=${sourceChatId ?? 'none'}`);
+    logger.info(`[RC-DEBUG] incoming msg: id=${message.message_id}, forwardType=${forwardOrigin?.type ?? 'none'}`);
 
-    if (sourceChatId && userId) {
-      const batchKey = `${userId}_${sourceChatId}`;
+    if (forwardOrigin && userId) {
+      const batchKey = String(userId);
       const buffer = replyChainBuffers.get(batchKey);
 
       if (buffer) {
@@ -193,7 +188,7 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
         });
       }
     } else {
-      // Non-forwarded or user-forwarded message: process immediately
+      // Non-forwarded message: process immediately
       await processSingleMessage(ctx, message);
     }
   } catch (error) {
