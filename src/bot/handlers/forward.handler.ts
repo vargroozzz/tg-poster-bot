@@ -448,7 +448,10 @@ export function extractMessageContent(
       return [];
     });
 
-    const caption = mediaGroupMessages.find((msg) => msg.caption)?.caption;
+    const captionMsg = mediaGroupMessages.find((msg) => msg.caption);
+    const caption = captionMsg?.caption
+      ? entitiesToHtml(captionMsg.caption, captionMsg.caption_entities)
+      : undefined;
 
     if (mediaItems.length > 0) {
       return { type: 'media_group', mediaGroup: mediaItems, text: caption };
@@ -461,7 +464,7 @@ export function extractMessageContent(
     return {
       type: 'photo',
       fileId: photo.file_id,
-      text: message.caption,
+      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
     };
   }
 
@@ -469,7 +472,7 @@ export function extractMessageContent(
     return {
       type: 'video',
       fileId: message.video.file_id,
-      text: message.caption,
+      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
     };
   }
 
@@ -477,7 +480,7 @@ export function extractMessageContent(
     return {
       type: 'document',
       fileId: message.document.file_id,
-      text: message.caption,
+      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
     };
   }
 
@@ -485,14 +488,14 @@ export function extractMessageContent(
     return {
       type: 'animation',
       fileId: message.animation.file_id,
-      text: message.caption,
+      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
     };
   }
 
   if ('text' in message && message.text) {
     return {
       type: 'text',
-      text: message.text,
+      text: entitiesToHtml(message.text, message.entities),
     };
   }
 
