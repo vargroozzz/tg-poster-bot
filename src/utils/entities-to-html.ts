@@ -16,6 +16,10 @@ function openTag(entity: MessageEntity): string {
       return '<s>';
     case 'spoiler':
       return '<tg-spoiler>';
+    case 'blockquote':
+      return '<blockquote>';
+    case 'expandable_blockquote':
+      return '<blockquote expandable>';
     case 'code':
       return '<code>';
     case 'pre':
@@ -41,6 +45,10 @@ function closeTag(entity: MessageEntity): string {
       return '</s>';
     case 'spoiler':
       return '</tg-spoiler>';
+    case 'blockquote':
+      return '</blockquote>';
+    case 'expandable_blockquote':
+      return '</blockquote>';
     case 'code':
       return '</code>';
     case 'pre':
