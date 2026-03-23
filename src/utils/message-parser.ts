@@ -8,8 +8,45 @@ export function parseForwardInfo(message: Message): ForwardInfo {
     chatId: message.chat.id,
   };
 
-  // If not a forward, return minimal info (original message)
+  // If not a forward, check for external_reply (cross-chat reply, Bot API 7.0)
   if (!message.forward_origin) {
+    if (message.external_reply) {
+      const ext = message.external_reply;
+      const replyParameters =
+        ext.chat && ext.message_id !== undefined
+          ? { chatId: ext.chat.id, messageId: ext.message_id }
+          : undefined;
+
+      const origin = ext.origin;
+
+      if (origin.type === 'channel') {
+        const channelUsername = 'username' in origin.chat ? origin.chat.username : undefined;
+        return {
+          ...base,
+          fromChannelId: origin.chat.id,
+          fromChannelTitle: origin.chat.title,
+          ...(channelUsername
+            ? {
+                fromChannelUsername: channelUsername,
+                messageLink: `https://t.me/${channelUsername}/${origin.message_id}`,
+              }
+            : {}),
+          ...(replyParameters ? { replyParameters } : {}),
+        };
+      }
+
+      if (origin.type === 'user') {
+        return {
+          ...base,
+          fromUserId: origin.sender_user.id,
+          ...(origin.sender_user.username ? { fromUsername: origin.sender_user.username } : {}),
+          ...(replyParameters ? { replyParameters } : {}),
+        };
+      }
+
+      return { ...base, ...(replyParameters ? { replyParameters } : {}) };
+    }
+
     logger.debug('Non-forwarded message, using original message info');
     return base;
   }

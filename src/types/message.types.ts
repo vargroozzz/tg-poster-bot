@@ -11,6 +11,7 @@ export interface ForwardInfo {
   messageLink?: string;
   mediaGroupMessageIds?: number[]; // For forwarding entire albums
   replyChainMessageIds?: number[]; // For reply chains
+  replyParameters?: { chatId: number; messageId: number }; // For cross-chat reply posting
 }
 
 export interface MediaGroupItem {
