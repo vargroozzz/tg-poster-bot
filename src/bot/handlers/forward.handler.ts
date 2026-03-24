@@ -62,8 +62,10 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
-// Handle text messages when waiting for custom text input
-// Only listen to messages that are replies (to filter out forwarded text messages)
+// Handle text messages when waiting for custom text input.
+// Only match messages that are replies but NOT external_reply — external_reply means the user is
+// replying to a message in a different chat (cross-chat reply), which is content to schedule, not
+// custom text input. Those fall through to the main handler registered on 'message:text' below.
 bot.on('message:text').filter(
   (ctx) => !!ctx.message?.reply_to_message && !ctx.message?.external_reply,
   async (ctx: Context, next: NextFunction) => {
