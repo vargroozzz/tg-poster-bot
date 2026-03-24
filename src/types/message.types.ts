@@ -24,6 +24,7 @@ export interface MessageContent {
   text?: string;
   fileId?: string;
   mediaGroup?: MediaGroupItem[];
+  linkPreviewOptions?: { is_disabled?: boolean };
 }
 
 export type TransformAction = 'transform' | 'forward';

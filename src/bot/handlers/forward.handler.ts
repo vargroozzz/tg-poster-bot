@@ -500,6 +500,7 @@ export function extractMessageContent(
     return {
       type: 'text',
       text: entitiesToHtml(message.text, message.entities),
+      linkPreviewOptions: message.link_preview_options ?? { is_disabled: true },
     };
   }
 

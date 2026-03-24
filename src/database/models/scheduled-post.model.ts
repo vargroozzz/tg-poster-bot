@@ -75,6 +75,9 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
         },
       },
     ],
+    linkPreviewOptions: {
+      is_disabled: Boolean,
+    },
   },
   action: {
     type: String,
