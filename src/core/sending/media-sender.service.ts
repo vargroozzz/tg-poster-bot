@@ -108,6 +108,7 @@ export class MediaSenderService {
   ): Promise<number> {
     const result = await this.api.sendMessage(chatId, text, {
       parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
         : {}),
