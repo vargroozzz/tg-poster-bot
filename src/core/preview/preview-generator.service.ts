@@ -49,8 +49,6 @@ export class PreviewGeneratorService {
     const originalText = content.text ?? '';
     const textHandling = session.textHandling ?? 'keep';
 
-    logger.debug(`[ENTITY-DEBUG] originalMessage.text=${JSON.stringify(session.originalMessage.text)}, entities=${JSON.stringify((session.originalMessage as any).entities)}, content.text=${JSON.stringify(content.text)}`);
-
     logger.debug(`Transforming preview text for session ${session._id}`, {
       textHandling,
       selectedNickname: session.selectedNickname,
