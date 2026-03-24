@@ -31,7 +31,7 @@ export class MediaSenderService {
       case 'media_group':
         return await this.sendMediaGroup(chatId, content.mediaGroup!, content.text, replyParameters);
       case 'text':
-        return await this.sendText(chatId, content.text!, replyParameters);
+        return await this.sendText(chatId, content.text!, replyParameters, content.linkPreviewOptions);
       default:
         throw new Error(`Unsupported content type: ${(content as unknown as { type: string }).type}`);
     }
@@ -104,11 +104,12 @@ export class MediaSenderService {
   async sendText(
     chatId: number | string,
     text: string,
-    replyParameters?: ReplyParams
+    replyParameters?: ReplyParams,
+    linkPreviewOptions?: { is_disabled?: boolean }
   ): Promise<number> {
     const result = await this.api.sendMessage(chatId, text, {
       parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
+      link_preview_options: linkPreviewOptions ?? { is_disabled: true },
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
         : {}),
