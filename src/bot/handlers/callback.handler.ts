@@ -58,7 +58,8 @@ const getSessionService = () => {
 async function handleNicknameSelection(
   ctx: Context,
   originalMessage: Message,
-  sessionId?: string
+  sessionId?: string,
+  isPlainText?: boolean
 ): Promise<boolean> {
   // Check if message is from a user with a known nickname
   const forwardInfo = parseForwardInfo(originalMessage);
@@ -69,20 +70,22 @@ async function handleNicknameSelection(
     const nickname = await findNicknameByUserId(fromUserId);
 
     if (nickname) {
-      // Auto-select this nickname and proceed to custom text
       logger.debug(`Auto-selecting nickname "${nickname}" for user ${fromUserId}`);
 
-      // Update session/pending with selected nickname
       const sessionSvc = getSessionService();
       if (sessionId && sessionSvc) {
         await sessionSvc.update(sessionId, { selectedNickname: nickname });
       }
 
-      // Show custom text keyboard
-      const keyboard = createCustomTextKeyboard();
-      await ctx.editMessageText('Do you want to add custom text to this post?', {
-        reply_markup: keyboard,
-      });
+      if (isPlainText && sessionId) {
+        // Plain text message: skip custom text, go straight to preview
+        await showPreview(ctx, sessionId);
+      } else {
+        const keyboard = createCustomTextKeyboard();
+        await ctx.editMessageText('Do you want to add custom text to this post?', {
+          reply_markup: keyboard,
+        });
+      }
 
       return true; // Handled
     }
@@ -277,18 +280,25 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 
     if (!isForwarded) {
       // Non-forwarded message: forward option makes no sense, auto-select transform
+      // Plain text (no media, no external reply): skip text handling (always keep) and custom text
+      const isPlainText =
+        content?.type === 'text' && !originalMessage.external_reply;
       if (session && sessionSvc) {
         const nextState = getNextState(SessionState.ACTION_SELECT, {
           isGreenListed: false,
           isRedListed: false,
           hasText,
           isForward: false,
+          isPlainText,
         });
         await sessionSvc.updateState(session._id.toString(), nextState, {
           selectedAction: 'transform',
+          ...(isPlainText ? { textHandling: 'keep' } : {}),
         });
       }
-      if (hasText) {
+      if (isPlainText) {
+        await handleNicknameSelection(ctx, originalMessage, session?._id.toString(), true);
+      } else if (hasText) {
         await ctx.editMessageText('How should the text be handled?', {
           reply_markup: createTextHandlingKeyboard(),
         });
@@ -461,17 +471,28 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       return;
     }
 
+    const isPlainText =
+      originalMessage.text !== undefined &&
+      !('photo' in originalMessage && originalMessage.photo) &&
+      !('video' in originalMessage && originalMessage.video) &&
+      !('document' in originalMessage && originalMessage.document) &&
+      !('animation' in originalMessage && originalMessage.animation) &&
+      !('external_reply' in originalMessage && originalMessage.external_reply);
+
     const nextState = getNextState(SessionState.NICKNAME_SELECT, {
-      isGreenListed: false, isRedListed: false, hasText: false, isForward: false,
+      isGreenListed: false, isRedListed: false, hasText: false, isForward: false, isPlainText,
     });
     await getSessionService()?.updateState(foundKey, nextState, { selectedNickname });
 
-    // Show custom text keyboard
-    const keyboard = createCustomTextKeyboard();
-
-    await ctx.editMessageText('Do you want to add custom text to this post?', {
-      reply_markup: keyboard,
-    });
+    if (nextState === SessionState.PREVIEW) {
+      await showPreview(ctx, foundKey);
+    } else {
+      // Show custom text keyboard
+      const keyboard = createCustomTextKeyboard();
+      await ctx.editMessageText('Do you want to add custom text to this post?', {
+        reply_markup: keyboard,
+      });
+    }
 
     logger.debug(`Nickname "${nicknameSelection}" selected for message ${originalMessage.message_id}`);
   } catch (error) {
