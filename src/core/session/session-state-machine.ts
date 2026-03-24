@@ -11,6 +11,7 @@ export function getNextState(current: SessionState, context: SessionContext): Se
 
     case SessionState.ACTION_SELECT:
       if (!context.isForward) {
+        if (context.isPlainText) return SessionState.NICKNAME_SELECT;
         return context.hasText ? SessionState.TEXT_HANDLING : SessionState.NICKNAME_SELECT;
       }
       return SessionState.COMPLETED;
@@ -19,6 +20,7 @@ export function getNextState(current: SessionState, context: SessionContext): Se
       return SessionState.NICKNAME_SELECT;
 
     case SessionState.NICKNAME_SELECT:
+      if (context.isPlainText) return SessionState.PREVIEW;
       return SessionState.CUSTOM_TEXT;
 
     case SessionState.CUSTOM_TEXT:
@@ -57,7 +59,7 @@ export function getPossibleNextStates(current: SessionState): SessionState[] {
     case SessionState.TEXT_HANDLING:
       return [SessionState.NICKNAME_SELECT];
     case SessionState.NICKNAME_SELECT:
-      return [SessionState.CUSTOM_TEXT];
+      return [SessionState.CUSTOM_TEXT, SessionState.PREVIEW];
     case SessionState.CUSTOM_TEXT:
       return [SessionState.PREVIEW];
     case SessionState.PREVIEW:

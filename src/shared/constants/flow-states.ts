@@ -20,4 +20,5 @@ export interface SessionContext {
   isRedListed: boolean;
   hasText: boolean;
   isForward: boolean;
+  isPlainText?: boolean; // Non-forwarded text-only message: skip text handling and custom text
 }
