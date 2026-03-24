@@ -49,6 +49,10 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     messageLink: String,
     mediaGroupMessageIds: [Number],
     replyChainMessageIds: [Number],
+    replyParameters: {
+      chatId: Number,
+      messageId: Number,
+    },
   },
   content: {
     type: {
