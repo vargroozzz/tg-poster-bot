@@ -1,6 +1,8 @@
 import { Api } from 'grammy';
 import type { MessageContent, MediaGroupItem } from '../../types/message.types.js';
 
+type ReplyParams = { chatId: number; messageId: number };
+
 /**
  * Shared service for sending media to Telegram
  * Used by both preview and publishing to avoid code duplication
@@ -12,60 +14,103 @@ export class MediaSenderService {
    * Send message based on content type
    * Returns the Telegram message ID
    */
-  async sendMessage(chatId: number | string, content: MessageContent): Promise<number> {
+  async sendMessage(
+    chatId: number | string,
+    content: MessageContent,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
     switch (content.type) {
       case 'photo':
-        return await this.sendPhoto(chatId, content.fileId!, content.text);
+        return await this.sendPhoto(chatId, content.fileId!, content.text, replyParameters);
       case 'video':
-        return await this.sendVideo(chatId, content.fileId!, content.text);
+        return await this.sendVideo(chatId, content.fileId!, content.text, replyParameters);
       case 'document':
-        return await this.sendDocument(chatId, content.fileId!, content.text);
+        return await this.sendDocument(chatId, content.fileId!, content.text, replyParameters);
       case 'animation':
-        return await this.sendAnimation(chatId, content.fileId!, content.text);
+        return await this.sendAnimation(chatId, content.fileId!, content.text, replyParameters);
       case 'media_group':
-        return await this.sendMediaGroup(chatId, content.mediaGroup!, content.text);
+        return await this.sendMediaGroup(chatId, content.mediaGroup!, content.text, replyParameters);
       case 'text':
-        return await this.sendText(chatId, content.text!);
+        return await this.sendText(chatId, content.text!, replyParameters);
       default:
         throw new Error(`Unsupported content type: ${(content as unknown as { type: string }).type}`);
     }
   }
 
-  async sendPhoto(chatId: number | string, fileId: string, caption?: string): Promise<number> {
+  async sendPhoto(
+    chatId: number | string,
+    fileId: string,
+    caption?: string,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
     const result = await this.api.sendPhoto(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
+      ...(replyParameters
+        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+        : {}),
     });
     return result.message_id;
   }
 
-  async sendVideo(chatId: number | string, fileId: string, caption?: string): Promise<number> {
+  async sendVideo(
+    chatId: number | string,
+    fileId: string,
+    caption?: string,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
     const result = await this.api.sendVideo(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
+      ...(replyParameters
+        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+        : {}),
     });
     return result.message_id;
   }
 
-  async sendDocument(chatId: number | string, fileId: string, caption?: string): Promise<number> {
+  async sendDocument(
+    chatId: number | string,
+    fileId: string,
+    caption?: string,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
     const result = await this.api.sendDocument(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
+      ...(replyParameters
+        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+        : {}),
     });
     return result.message_id;
   }
 
-  async sendAnimation(chatId: number | string, fileId: string, caption?: string): Promise<number> {
+  async sendAnimation(
+    chatId: number | string,
+    fileId: string,
+    caption?: string,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
     const result = await this.api.sendAnimation(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
+      ...(replyParameters
+        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+        : {}),
     });
     return result.message_id;
   }
 
-  async sendText(chatId: number | string, text: string): Promise<number> {
+  async sendText(
+    chatId: number | string,
+    text: string,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
     const result = await this.api.sendMessage(chatId, text, {
       parse_mode: 'HTML',
+      ...(replyParameters
+        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+        : {}),
     });
     return result.message_id;
   }
@@ -73,9 +118,10 @@ export class MediaSenderService {
   async sendMediaGroup(
     chatId: number | string,
     mediaGroup: MediaGroupItem[],
-    caption?: string
+    caption?: string,
+    replyParameters?: ReplyParams
   ): Promise<number> {
-    const ids = await this.sendMediaGroupAll(chatId, mediaGroup, caption);
+    const ids = await this.sendMediaGroupAll(chatId, mediaGroup, caption, replyParameters);
     return ids[0];
   }
 
@@ -86,7 +132,8 @@ export class MediaSenderService {
   async sendMediaGroupAll(
     chatId: number | string,
     mediaGroup: MediaGroupItem[],
-    caption?: string
+    caption?: string,
+    replyParameters?: ReplyParams
   ): Promise<number[]> {
     if (!mediaGroup || mediaGroup.length === 0) {
       throw new Error('Media group cannot be empty');
@@ -99,7 +146,11 @@ export class MediaSenderService {
       parse_mode: index === 0 ? ('HTML' as const) : undefined,
     }));
 
-    const result = await this.api.sendMediaGroup(chatId, media);
+    const result = await this.api.sendMediaGroup(chatId, media, {
+      ...(replyParameters
+        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+        : {}),
+    });
     return result.map((m) => m.message_id);
   }
 }
