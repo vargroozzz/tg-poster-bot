@@ -25,7 +25,11 @@ export class PostPublisherService {
     }
 
     // For 'transform' action, delegate to MediaSenderService
-    return await this.mediaSender.sendMessage(post.targetChannelId, post.content);
+    return await this.mediaSender.sendMessage(
+      post.targetChannelId,
+      post.content,
+      post.originalForward.replyParameters
+    );
   }
 
   /**
