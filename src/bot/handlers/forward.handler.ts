@@ -64,7 +64,9 @@ setInterval(() => {
 
 // Handle text messages when waiting for custom text input
 // Only listen to messages that are replies (to filter out forwarded text messages)
-bot.on('message:text').filter((ctx) => !!ctx.message?.reply_to_message, async (ctx: Context, next: NextFunction) => {
+bot.on('message:text').filter(
+  (ctx) => !!ctx.message?.reply_to_message && !ctx.message?.external_reply,
+  async (ctx: Context, next: NextFunction) => {
   try {
     const message = ctx.message;
 
