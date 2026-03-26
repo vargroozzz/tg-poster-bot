@@ -23,17 +23,16 @@ describe('skipSleepWindow', () => {
   });
 
   it('advances slot to 09:00:01 Kyiv when inside window (hour 3)', () => {
-    // 03:00:01 Kyiv — inside [1, 9)
+    // 03:00:01 Kyiv — inside (1, 9)
     const slot = kyivUTC('2026-01-15T03:00:01');
     const result = skipSleepWindow(slot, WINDOW);
     // Expected: 09:00:01 Kyiv = 07:00:01 UTC on same day
     expect(result).toEqual(kyivUTC('2026-01-15T09:00:01'));
   });
 
-  it('advances slot at exactly startHour (1:00) to endHour (9:00)', () => {
+  it('returns slot unchanged at exactly startHour (1:00) — boundary is exclusive', () => {
     const slot = kyivUTC('2026-01-15T01:00:01');
-    const result = skipSleepWindow(slot, WINDOW);
-    expect(result).toEqual(kyivUTC('2026-01-15T09:00:01'));
+    expect(skipSleepWindow(slot, WINDOW)).toEqual(slot);
   });
 
   it('returns slot unchanged at exactly endHour (9:00) — boundary is exclusive', () => {
