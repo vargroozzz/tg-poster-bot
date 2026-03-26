@@ -25,6 +25,8 @@ export async function getSleepWindow(): Promise<SleepWindow | null> {
   const startHour = parseInt(map.get('sleep_start') ?? '1', 10);
   const endHour = parseInt(map.get('sleep_end') ?? '9', 10);
 
+  if (isNaN(startHour) || isNaN(endHour)) return null;
+
   return { startHour, endHour };
 }
 
@@ -32,14 +34,15 @@ export async function getSleepWindow(): Promise<SleepWindow | null> {
  * If slot falls inside [startHour, endHour) in Kyiv timezone, advance it to
  * endHour:00:01 of the same day. Otherwise return slot unchanged.
  * Pure function — no DB access.
+ * Note: midnight-crossing windows (startHour > endHour) are not supported and will not skip correctly.
  */
-export function skipSleepWindow(slot: Date, window: SleepWindow): Date {
+export function skipSleepWindow(slot: Date, sleepWindow: SleepWindow): Date {
   const kyivDate = toZonedTime(slot, TIMEZONE);
   const hour = kyivDate.getHours();
 
-  if (hour >= window.startHour && hour < window.endHour) {
+  if (hour >= sleepWindow.startHour && hour < sleepWindow.endHour) {
     const wakeSlot = setMilliseconds(
-      setSeconds(setMinutes(setHours(kyivDate, window.endHour), 0), 1),
+      setSeconds(setMinutes(setHours(kyivDate, sleepWindow.endHour), 0), 1),
       0
     );
     return fromZonedTime(wakeSlot, TIMEZONE);
