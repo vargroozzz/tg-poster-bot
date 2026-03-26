@@ -3,6 +3,7 @@ import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { ScheduledPost } from '../database/models/scheduled-post.model.js';
 import { config } from '../config/index.js';
 import { logger } from './logger.js';
+import { getSleepWindow, skipSleepWindow } from './sleep-window.js';
 
 const TIMEZONE = config.timezone;
 
@@ -12,17 +13,21 @@ const TIMEZONE = config.timezone;
  * Returns UTC Date object
  */
 export async function findNextAvailableSlot(targetChannelId: string): Promise<Date> {
-  const nextSlotAfterNow = fromZonedTime(
+  const sleepWindow = await getSleepWindow();
+
+  const rawNextSlot = fromZonedTime(
     calculateNextSlot(toZonedTime(new Date(), TIMEZONE)),
     TIMEZONE
   );
+  const nextSlotAfterNow = sleepWindow ? skipSleepWindow(rawNextSlot, sleepWindow) : rawNextSlot;
 
   const latestPending = await ScheduledPost
     .findOne({ targetChannelId, status: 'pending' })
     .sort({ scheduledTime: -1 });
 
   if (latestPending && latestPending.scheduledTime >= nextSlotAfterNow) {
-    const slot = addMinutes(latestPending.scheduledTime, 30);
+    const candidate = addMinutes(latestPending.scheduledTime, 30);
+    const slot = sleepWindow ? skipSleepWindow(candidate, sleepWindow) : candidate;
     logger.debug(`Found available slot: ${slot.toISOString()} (after latest pending)`);
     return slot;
   }
