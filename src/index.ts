@@ -36,6 +36,7 @@ async function main() {
       { command: 'listchannels', description: 'List all configured channels' },
       { command: 'status', description: 'View scheduled posts' },
       { command: 'queue', description: 'View and manage the post queue' },
+      { command: 'sleep', description: 'Configure sleep hours (no posts during window)' },
       { command: 'addgreen', description: 'Add channel to green list (reply to message)' },
       { command: 'addred', description: 'Add channel to red list (reply to message)' },
       { command: 'remove', description: 'Remove channel from lists (reply to message)' },
