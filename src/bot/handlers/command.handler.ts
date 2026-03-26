@@ -452,18 +452,23 @@ bot.command('queue', async (ctx: Context) => {
 });
 
 bot.command('sleep', async (ctx: Context) => {
-  const window = await getSleepWindow();
-  const enabled = window !== null;
+  try {
+    const sleepWindow = await getSleepWindow();
+    const enabled = sleepWindow !== null;
 
-  let text: string;
-  if (enabled) {
-    const startStr = window.startHour.toString().padStart(2, '0');
-    const endStr = window.endHour.toString().padStart(2, '0');
-    text = `Sleep hours: ${startStr}:00 – ${endStr}:00 ✅\nPosts scheduled during this window will be pushed to after ${endStr}:00.`;
-  } else {
-    text = 'Sleep hours: disabled';
+    let text: string;
+    if (enabled) {
+      const startStr = sleepWindow.startHour.toString().padStart(2, '0');
+      const endStr = sleepWindow.endHour.toString().padStart(2, '0');
+      text = `Sleep hours: ${startStr}:00 – ${endStr}:00 ✅\nPosts scheduled during this window will be pushed to after ${endStr}:00.`;
+    } else {
+      text = 'Sleep hours: disabled';
+    }
+
+    await ctx.reply(text, { reply_markup: createSleepStatusKeyboard(enabled) });
+  } catch (error) {
+    logger.error('Error in /sleep command:', error);
+    await ctx.reply('Error loading sleep settings. Please try again.');
   }
-
-  await ctx.reply(text, { reply_markup: createSleepStatusKeyboard(enabled) });
 });
 
