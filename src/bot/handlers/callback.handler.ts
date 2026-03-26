@@ -1017,35 +1017,71 @@ async function saveSleepSettings(
 
 // sleep:enable — show start hour picker
 bot.callbackQuery('sleep:enable', async (ctx: Context) => {
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText('Select start hour:', {
-    reply_markup: createHourPickerKeyboard('start'),
-  });
+  try {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('Select start hour:', {
+      reply_markup: createHourPickerKeyboard('start'),
+    });
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error showing hour picker. Please try again.',
+      'sleep:enable callback'
+    );
+  }
 });
 
 // sleep:change — same as enable (show start hour picker)
 bot.callbackQuery('sleep:change', async (ctx: Context) => {
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText('Select start hour:', {
-    reply_markup: createHourPickerKeyboard('start'),
-  });
+  try {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('Select start hour:', {
+      reply_markup: createHourPickerKeyboard('start'),
+    });
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error showing hour picker. Please try again.',
+      'sleep:change callback'
+    );
+  }
 });
 
 // sleep:disable — disable and show updated status
 bot.callbackQuery('sleep:disable', async (ctx: Context) => {
-  await ctx.answerCallbackQuery();
-  await saveSleepSettings(false);
-  await showSleepStatus(ctx);
+  try {
+    await ctx.answerCallbackQuery();
+    await saveSleepSettings(false);
+    await showSleepStatus(ctx);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error disabling sleep hours. Please try again.',
+      'sleep:disable callback'
+    );
+  }
 });
 
 // sleep:start:<h> — store start, show end picker
 bot.callbackQuery(/^sleep:start:(\d+)$/, async (ctx: Context) => {
-  await ctx.answerCallbackQuery();
-  const match = ctx.callbackQuery?.data?.match(/^sleep:start:(\d+)$/);
-  const startHour = parseInt(match![1], 10);
-  await ctx.editMessageText('Select end hour:', {
-    reply_markup: createHourPickerKeyboard('end', startHour),
-  });
+  try {
+    await ctx.answerCallbackQuery();
+    const match = ctx.callbackQuery?.data?.match(/^sleep:start:(\d+)$/);
+    const startHour = parseInt(match![1], 10);
+    await ctx.editMessageText('Select end hour:', {
+      reply_markup: createHourPickerKeyboard('end', startHour),
+    });
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error showing hour picker. Please try again.',
+      'sleep:start callback'
+    );
+  }
 });
 
 // sleep:end:<start>:<h> — show confirm screen
@@ -1059,27 +1095,54 @@ bot.callbackQuery(/^sleep:end:(\d+):(\d+)$/, async (ctx: Context) => {
     return;
   }
 
-  await ctx.answerCallbackQuery();
+  try {
+    await ctx.answerCallbackQuery();
 
-  const startStr = startHour.toString().padStart(2, '0');
-  const endStr = endHour.toString().padStart(2, '0');
-  await ctx.editMessageText(`Sleep hours: ${startStr}:00 – ${endStr}:00\n\nConfirm?`, {
-    reply_markup: createSleepConfirmKeyboard(startHour, endHour),
-  });
+    const startStr = startHour.toString().padStart(2, '0');
+    const endStr = endHour.toString().padStart(2, '0');
+    await ctx.editMessageText(`Sleep hours: ${startStr}:00 – ${endStr}:00\n\nConfirm?`, {
+      reply_markup: createSleepConfirmKeyboard(startHour, endHour),
+    });
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error showing confirmation. Please try again.',
+      'sleep:end callback'
+    );
+  }
 });
 
 // sleep:confirm:<start>:<end> — save and show status
 bot.callbackQuery(/^sleep:confirm:(\d+):(\d+)$/, async (ctx: Context) => {
-  await ctx.answerCallbackQuery();
-  const match = ctx.callbackQuery?.data?.match(/^sleep:confirm:(\d+):(\d+)$/);
-  const startHour = parseInt(match![1], 10);
-  const endHour = parseInt(match![2], 10);
-  await saveSleepSettings(true, startHour, endHour);
-  await showSleepStatus(ctx);
+  try {
+    await ctx.answerCallbackQuery();
+    const match = ctx.callbackQuery?.data?.match(/^sleep:confirm:(\d+):(\d+)$/);
+    const startHour = parseInt(match![1], 10);
+    const endHour = parseInt(match![2], 10);
+    await saveSleepSettings(true, startHour, endHour);
+    await showSleepStatus(ctx);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error saving sleep hours. Please try again.',
+      'sleep:confirm callback'
+    );
+  }
 });
 
 // sleep:cancel — discard changes, show current status
 bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
-  await ctx.answerCallbackQuery();
-  await showSleepStatus(ctx);
+  try {
+    await ctx.answerCallbackQuery();
+    await showSleepStatus(ctx);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error showing sleep status. Please try again.',
+      'sleep:cancel callback'
+    );
+  }
 });
