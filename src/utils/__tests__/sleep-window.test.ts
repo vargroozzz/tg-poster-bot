@@ -35,6 +35,11 @@ describe('skipSleepWindow', () => {
     expect(skipSleepWindow(slot, WINDOW)).toEqual(slot);
   });
 
+  it('advances slot at 01:30 (inside window) to 09:00:01', () => {
+    const slot = kyivUTC('2026-01-15T01:30:01');
+    expect(skipSleepWindow(slot, WINDOW)).toEqual(kyivUTC('2026-01-15T09:00:01'));
+  });
+
   it('returns slot unchanged at exactly endHour (9:00) — boundary is exclusive', () => {
     const slot = kyivUTC('2026-01-15T09:00:01');
     expect(skipSleepWindow(slot, WINDOW)).toEqual(slot);

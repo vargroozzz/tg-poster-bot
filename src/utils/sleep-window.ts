@@ -38,9 +38,11 @@ export async function getSleepWindow(): Promise<SleepWindow | null> {
  */
 export function skipSleepWindow(slot: Date, sleepWindow: SleepWindow): Date {
   const kyivDate = toZonedTime(slot, TIMEZONE);
-  const hour = kyivDate.getHours();
+  const totalMinutes = kyivDate.getHours() * 60 + kyivDate.getMinutes();
+  const startMinutes = sleepWindow.startHour * 60;
+  const endMinutes = sleepWindow.endHour * 60;
 
-  if (hour > sleepWindow.startHour && hour < sleepWindow.endHour) {
+  if (totalMinutes > startMinutes && totalMinutes < endMinutes) {
     const wakeSlot = setMilliseconds(
       setSeconds(setMinutes(setHours(kyivDate, sleepWindow.endHour), 0), 1),
       0
