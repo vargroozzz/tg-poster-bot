@@ -30,6 +30,13 @@ import { createQueueListKeyboard } from '../keyboards/queue-list.keyboard.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
 import { InlineKeyboard } from 'grammy';
+import { getSleepWindow } from '../../utils/sleep-window.js';
+import { BotSettings } from '../../database/models/bot-settings.model.js';
+import {
+  createSleepStatusKeyboard,
+  createHourPickerKeyboard,
+  createSleepConfirmKeyboard,
+} from '../keyboards/sleep.keyboard.js';
 
 const postScheduler = new PostSchedulerService();
 const queueService = new QueueService();
@@ -957,4 +964,122 @@ bot.callbackQuery('queue:back', async (ctx: Context) => {
   } catch (error) {
     await ErrorMessages.catchAndReply(ctx, error, '❌ Error going back.', 'queue:back callback');
   }
+});
+
+// ──────────────────────────────────────────────
+// Sleep window configuration callbacks
+// ──────────────────────────────────────────────
+
+async function showSleepStatus(ctx: Context): Promise<void> {
+  const sleepWindow = await getSleepWindow();
+  const enabled = sleepWindow !== null;
+
+  let text: string;
+  if (enabled) {
+    const startStr = sleepWindow.startHour.toString().padStart(2, '0');
+    const endStr = sleepWindow.endHour.toString().padStart(2, '0');
+    text = `Sleep hours: ${startStr}:00 – ${endStr}:00 ✅\nPosts scheduled during this window will be pushed to after ${endStr}:00.`;
+  } else {
+    text = 'Sleep hours: disabled';
+  }
+
+  await ctx.editMessageText(text, { reply_markup: createSleepStatusKeyboard(enabled) });
+}
+
+async function saveSleepSettings(
+  enabled: boolean,
+  startHour?: number,
+  endHour?: number
+): Promise<void> {
+  const ops: Promise<unknown>[] = [
+    BotSettings.findOneAndUpdate(
+      { key: 'sleep_enabled' },
+      { key: 'sleep_enabled', value: String(enabled), updatedAt: new Date() },
+      { upsert: true }
+    ),
+  ];
+  if (startHour !== undefined && endHour !== undefined) {
+    ops.push(
+      BotSettings.findOneAndUpdate(
+        { key: 'sleep_start' },
+        { key: 'sleep_start', value: String(startHour), updatedAt: new Date() },
+        { upsert: true }
+      ),
+      BotSettings.findOneAndUpdate(
+        { key: 'sleep_end' },
+        { key: 'sleep_end', value: String(endHour), updatedAt: new Date() },
+        { upsert: true }
+      )
+    );
+  }
+  await Promise.all(ops);
+}
+
+// sleep:enable — show start hour picker
+bot.callbackQuery('sleep:enable', async (ctx: Context) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('Select start hour:', {
+    reply_markup: createHourPickerKeyboard('start'),
+  });
+});
+
+// sleep:change — same as enable (show start hour picker)
+bot.callbackQuery('sleep:change', async (ctx: Context) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText('Select start hour:', {
+    reply_markup: createHourPickerKeyboard('start'),
+  });
+});
+
+// sleep:disable — disable and show updated status
+bot.callbackQuery('sleep:disable', async (ctx: Context) => {
+  await ctx.answerCallbackQuery();
+  await saveSleepSettings(false);
+  await showSleepStatus(ctx);
+});
+
+// sleep:start:<h> — store start, show end picker
+bot.callbackQuery(/^sleep:start:(\d+)$/, async (ctx: Context) => {
+  await ctx.answerCallbackQuery();
+  const match = ctx.callbackQuery?.data?.match(/^sleep:start:(\d+)$/);
+  const startHour = parseInt(match![1], 10);
+  await ctx.editMessageText('Select end hour:', {
+    reply_markup: createHourPickerKeyboard('end', startHour),
+  });
+});
+
+// sleep:end:<start>:<h> — show confirm screen
+bot.callbackQuery(/^sleep:end:(\d+):(\d+)$/, async (ctx: Context) => {
+  const match = ctx.callbackQuery?.data?.match(/^sleep:end:(\d+):(\d+)$/);
+  const startHour = parseInt(match![1], 10);
+  const endHour = parseInt(match![2], 10);
+
+  if (endHour <= startHour) {
+    await ctx.answerCallbackQuery({ text: 'End hour must be after start hour', show_alert: true });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+
+  const startStr = startHour.toString().padStart(2, '0');
+  const endStr = endHour.toString().padStart(2, '0');
+  await ctx.editMessageText(`Sleep hours: ${startStr}:00 – ${endStr}:00\n\nConfirm?`, {
+    reply_markup: createSleepConfirmKeyboard(startHour, endHour),
+  });
+});
+
+// sleep:confirm:<start>:<end> — save and show status
+bot.callbackQuery(/^sleep:confirm:(\d+):(\d+)$/, async (ctx: Context) => {
+  await ctx.answerCallbackQuery();
+  const match = ctx.callbackQuery?.data?.match(/^sleep:confirm:(\d+):(\d+)$/);
+  const startHour = parseInt(match![1], 10);
+  const endHour = parseInt(match![2], 10);
+  await saveSleepSettings(true, startHour, endHour);
+  await showSleepStatus(ctx);
+});
+
+// sleep:cancel — discard changes, show current status
+bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
+  await ctx.answerCallbackQuery();
+  await showSleepStatus(ctx);
 });
