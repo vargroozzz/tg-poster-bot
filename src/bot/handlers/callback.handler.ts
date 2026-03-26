@@ -1086,16 +1086,16 @@ bot.callbackQuery(/^sleep:start:(\d+)$/, async (ctx: Context) => {
 
 // sleep:end:<start>:<h> — show confirm screen
 bot.callbackQuery(/^sleep:end:(\d+):(\d+)$/, async (ctx: Context) => {
-  const match = ctx.callbackQuery?.data?.match(/^sleep:end:(\d+):(\d+)$/);
-  const startHour = parseInt(match![1], 10);
-  const endHour = parseInt(match![2], 10);
-
-  if (endHour <= startHour) {
-    await ctx.answerCallbackQuery({ text: 'End hour must be after start hour', show_alert: true });
-    return;
-  }
-
   try {
+    const match = ctx.callbackQuery?.data?.match(/^sleep:end:(\d+):(\d+)$/);
+    const startHour = parseInt(match![1], 10);
+    const endHour = parseInt(match![2], 10);
+
+    if (endHour <= startHour) {
+      await ctx.answerCallbackQuery({ text: 'End hour must be after start hour', show_alert: true });
+      return;
+    }
+
     await ctx.answerCallbackQuery();
 
     const startStr = startHour.toString().padStart(2, '0');
