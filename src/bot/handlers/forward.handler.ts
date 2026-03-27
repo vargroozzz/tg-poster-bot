@@ -27,6 +27,7 @@ const getSessionService = () => {
 interface MediaGroupBuffer {
   messages: Message[];
   timeout: NodeJS.Timeout;
+  ctx: Context;
 }
 
 const mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
@@ -156,8 +157,13 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
         mediaGroupBuffers.set(mediaGroupId, {
           messages: [message],
           timeout,
+          ctx,
         });
       }
+
+      // Register this message ID so that thread comments arriving later can
+      // find and join the same media group buffer.
+      forwardedMsgToBufferKey.set(message.message_id, `mg:${mediaGroupId}`);
 
       return; // Don't process yet
     }
@@ -176,7 +182,46 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
       // If this message is a reply to one we already buffered, reuse that buffer.
       const replyToId = message.reply_to_message?.message_id;
       const linkedKey = replyToId !== undefined ? forwardedMsgToBufferKey.get(replyToId) : undefined;
-      const batchKey = linkedKey ?? `fwd_${userId}_${message.message_id}`;
+
+      // If this message is a comment/reply to a media group, merge both into one thread buffer.
+      if (linkedKey?.startsWith('mg:')) {
+        const mediaGroupId = linkedKey.slice(3);
+        const mgBuffer = mediaGroupBuffers.get(mediaGroupId);
+
+        if (mgBuffer) {
+          clearTimeout(mgBuffer.timeout);
+          mediaGroupBuffers.delete(mediaGroupId);
+
+          // Combined key anchored on the first media group message.
+          const combinedKey = `fwd_${userId}_${mgBuffer.messages[0].message_id}`;
+          const allMessages = [...mgBuffer.messages, message];
+
+          // Re-register all IDs so further comments join the same buffer.
+          allMessages.forEach((msg) => forwardedMsgToBufferKey.set(msg.message_id, combinedKey));
+
+          const timeout = setTimeout(() => {
+            processReplyChain(combinedKey).catch((err) => {
+              logger.error('Error processing forward batch:', err);
+            });
+          }, 1000);
+
+          replyChainBuffers.set(combinedKey, {
+            messages: allMessages,
+            timeout,
+            ctx: mgBuffer.ctx,
+            createdAt: Date.now(),
+          });
+
+          return;
+        }
+        // mgBuffer already flushed — fall through to normal reply-chain logic
+      }
+
+      // Use the linked key only when it's an actual reply-chain key; an mg: key
+      // at this point means the media group was already flushed, so start fresh.
+      const batchKey = linkedKey && !linkedKey.startsWith('mg:')
+        ? linkedKey
+        : `fwd_${userId}_${message.message_id}`;
 
       // Register so future replies to this message can find the same buffer.
       forwardedMsgToBufferKey.set(message.message_id, batchKey);
@@ -290,6 +335,9 @@ async function processMediaGroup(mediaGroupId: string) {
   mediaGroupBuffers.delete(mediaGroupId);
 
   const messages = buffer.messages;
+
+  // Remove forwardedMsgToBufferKey entries for this media group.
+  messages.forEach((msg) => forwardedMsgToBufferKey.delete(msg.message_id));
 
   if (messages.length === 0) {
     return;
