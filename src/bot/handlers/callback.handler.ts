@@ -28,6 +28,7 @@ import { QueuePreviewSenderService } from '../../core/queue/queue-preview-sender
 import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
 import { createQueueListKeyboard } from '../keyboards/queue-list.keyboard.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
+import { createChannelSelectKeyboard } from '../keyboards/channel-select.keyboard.js';
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
 import { InlineKeyboard } from 'grammy';
 import { getSleepWindow } from '../../utils/sleep-window.js';
@@ -817,6 +818,83 @@ bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
       error,
       'Error cancelling preview.',
       'Error in preview:cancel callback'
+    );
+  }
+});
+
+// Handle preview back button — returns to channel selection
+bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const match = ctx.callbackQuery?.data?.match(/^preview:back:(.+)$/);
+    const sessionKey = match?.[1];
+
+    if (!sessionKey) {
+      await ctx.reply('Invalid session.');
+      return;
+    }
+
+    const sessionSvc = getSessionService();
+    if (!sessionSvc) {
+      await ctx.reply('Service unavailable.');
+      return;
+    }
+
+    const session = await sessionSvc.findById(sessionKey);
+    if (!session) {
+      await ctx.reply('Session already expired or cancelled.');
+      return;
+    }
+
+    const fromId = ctx.from?.id;
+    if (fromId) {
+      await deletePreviewMessages(ctx, fromId, session);
+    }
+
+    // Delete the control message (this message with the keyboard)
+    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+
+    // Reset session back to channel selection state
+    await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
+      selectedChannel: undefined,
+      selectedAction: undefined,
+      selectedNickname: undefined,
+      textHandling: undefined,
+      customText: undefined,
+      previewMessageId: undefined,
+      previewMessageIds: undefined,
+    });
+
+    // Re-send channel selection keyboard
+    const postingChannels = await getActivePostingChannels();
+    if (postingChannels.length === 0) {
+      await ctx.reply('⚠️ No posting channels configured.');
+      return;
+    }
+
+    const channels = postingChannels.map((ch) => ({
+      id: ch.channelId,
+      title: ch.channelTitle ?? ch.channelId,
+      username: ch.channelUsername,
+    }));
+
+    await ctx.api.sendMessage(
+      session.originalMessage.chat.id,
+      '📍 Select target channel:',
+      {
+        reply_markup: createChannelSelectKeyboard(channels),
+        reply_to_message_id: session.originalMessage.message_id,
+      }
+    );
+
+    logger.info(`Preview back for session ${sessionKey}`);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error going back.',
+      'Error in preview:back callback'
     );
   }
 });

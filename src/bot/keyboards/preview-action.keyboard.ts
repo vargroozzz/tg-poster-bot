@@ -7,9 +7,14 @@ import { InlineKeyboard } from 'grammy';
  */
 export function createPreviewActionKeyboard(sessionId: string): InlineKeyboard {
   return {
-    inline_keyboard: [[
-      { text: '✅ Schedule', callback_data: `preview:schedule:${sessionId}`, style: 'success' },
-      { text: '❌ Cancel', callback_data: `preview:cancel:${sessionId}`, style: 'danger' },
-    ]],
+    inline_keyboard: [
+      [
+        { text: '✅ Schedule', callback_data: `preview:schedule:${sessionId}` },
+        { text: '❌ Cancel', callback_data: `preview:cancel:${sessionId}` },
+      ],
+      [
+        { text: '⬅️ Back to start', callback_data: `preview:back:${sessionId}` },
+      ],
+    ],
   } as unknown as InlineKeyboard;
 }
