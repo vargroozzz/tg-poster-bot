@@ -231,6 +231,24 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       }
     }
 
+    // When the user sent their own reply to a cross-chat message (replyParameters set,
+    // no forward_origin so fromChannelId/fromUserId are unset), the content is already
+    // exactly what they want to post — skip transform/text/nickname steps entirely.
+    const isOwnReply = !!forwardInfo.replyParameters && !forwardInfo.fromChannelId && !forwardInfo.fromUserId;
+    if (isOwnReply && session) {
+      const sessionSvc = getSessionService();
+      if (sessionSvc) {
+        await sessionSvc.update(session._id.toString(), {
+          selectedChannel: selectedChannelId,
+          selectedAction: 'transform',
+          textHandling: 'keep',
+          selectedNickname: null,
+        });
+        await showPreview(ctx, session._id.toString());
+        return;
+      }
+    }
+
     const sessionSvc = getSessionService();
     if (session && sessionSvc) {
       const nextState = getNextState(SessionState.CHANNEL_SELECT, {
