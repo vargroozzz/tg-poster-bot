@@ -21,7 +21,10 @@ describe('parseForwardInfo — external_reply', () => {
     expect(result.replyParameters).toBeUndefined();
   });
 
-  it('extracts channel origin from external_reply', () => {
+  it('extracts only replyParameters from external_reply (channel origin)', () => {
+    // external_reply.origin identifies the *quoted* entity, not the author.
+    // fromChannelId must NOT be set so attribution is not wrongly attributed
+    // to the channel being quoted.
     const msg = makeBase({
       external_reply: {
         origin: {
@@ -36,14 +39,14 @@ describe('parseForwardInfo — external_reply', () => {
     });
 
     const result = parseForwardInfo(msg);
-    expect(result.fromChannelId).toBe(-1001);
-    expect(result.fromChannelTitle).toBe('Test Chan');
-    expect(result.fromChannelUsername).toBe('testchan');
-    expect(result.messageLink).toBe('https://t.me/testchan/42');
+    expect(result.fromChannelId).toBeUndefined();
+    expect(result.fromChannelTitle).toBeUndefined();
+    expect(result.fromChannelUsername).toBeUndefined();
+    expect(result.messageLink).toBeUndefined();
     expect(result.replyParameters).toEqual({ chatId: -1001, messageId: 42 });
   });
 
-  it('extracts user origin from external_reply', () => {
+  it('extracts only replyParameters from external_reply (user origin)', () => {
     const msg = makeBase({
       external_reply: {
         origin: {
@@ -57,8 +60,8 @@ describe('parseForwardInfo — external_reply', () => {
     });
 
     const result = parseForwardInfo(msg);
-    expect(result.fromUserId).toBe(777);
-    expect(result.fromUsername).toBe('alice');
+    expect(result.fromUserId).toBeUndefined();
+    expect(result.fromUsername).toBeUndefined();
     expect(result.replyParameters).toEqual({ chatId: -1002, messageId: 55 });
   });
 
@@ -72,5 +75,61 @@ describe('parseForwardInfo — external_reply', () => {
 
     const result = parseForwardInfo(msg);
     expect(result.replyParameters).toBeUndefined();
+  });
+});
+
+describe('parseForwardInfo — forward_origin with external_reply', () => {
+  it('captures replyParameters from external_reply even when forward_origin is set', () => {
+    const msg = makeBase({
+      forward_origin: {
+        type: 'channel',
+        date: 0,
+        chat: { id: -2001, type: 'channel', title: 'Source Chan', username: 'sourcechan' },
+        message_id: 10,
+      },
+      external_reply: {
+        origin: {
+          type: 'channel',
+          date: 0,
+          chat: { id: -3001, type: 'channel', title: 'Quoted Chan', username: 'quotedchan' },
+          message_id: 20,
+        },
+        chat: { id: -3001, type: 'channel', title: 'Quoted Chan', username: 'quotedchan' },
+        message_id: 20,
+      },
+    });
+
+    const result = parseForwardInfo(msg);
+    // fromChannelId comes from forward_origin (the actual source)
+    expect(result.fromChannelId).toBe(-2001);
+    expect(result.fromChannelTitle).toBe('Source Chan');
+    expect(result.messageLink).toBe('https://t.me/sourcechan/10');
+    // replyParameters come from external_reply (what it was replying to)
+    expect(result.replyParameters).toEqual({ chatId: -3001, messageId: 20 });
+  });
+
+  it('captures replyParameters for forwarded user message that was a reply', () => {
+    const msg = makeBase({
+      forward_origin: {
+        type: 'user',
+        date: 0,
+        sender_user: { id: 42, is_bot: false, first_name: 'Bob', username: 'bob' },
+      },
+      external_reply: {
+        origin: {
+          type: 'channel',
+          date: 0,
+          chat: { id: -4001, type: 'channel', title: 'Some Chan', username: 'somechan' },
+          message_id: 99,
+        },
+        chat: { id: -4001, type: 'channel', title: 'Some Chan', username: 'somechan' },
+        message_id: 99,
+      },
+    });
+
+    const result = parseForwardInfo(msg);
+    expect(result.fromUserId).toBe(42);
+    expect(result.fromUsername).toBe('bob');
+    expect(result.replyParameters).toEqual({ chatId: -4001, messageId: 99 });
   });
 });

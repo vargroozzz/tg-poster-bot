@@ -67,13 +67,10 @@ export function buildAttribution(
 ): Promise<string | null> {
   return Effect.runPromise(
     Effect.gen(function* () {
-      // When replyParameters is set, fromChannelId/fromUserId were extracted from
-      // external_reply — they identify the *quoted* message, not the author.
-      // Don't attribute to the quoted channel/user; use only manualNickname.
-      if (forwardInfo.fromChannelId && !forwardInfo.replyParameters) {
+      if (forwardInfo.fromChannelId) {
         return yield* buildChannelAttribution(forwardInfo, manualNickname);
       }
-      if (forwardInfo.fromUserId && !forwardInfo.replyParameters) {
+      if (forwardInfo.fromUserId) {
         return yield* buildUserAttribution(forwardInfo.fromUserId, manualNickname);
       }
       if (manualNickname !== undefined && manualNickname !== null) {

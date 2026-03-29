@@ -27,7 +27,6 @@ export async function transformMessage(
 }
 
 export async function shouldAutoForward(forwardInfo: ForwardInfo): Promise<boolean> {
-  if (forwardInfo.replyParameters) return false; // external reply — content is user's text, not the channel post
   if (!forwardInfo.fromChannelId) return false;
 
   const channelId = String(forwardInfo.fromChannelId);
