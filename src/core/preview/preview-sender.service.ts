@@ -102,7 +102,20 @@ export class PreviewSenderService {
           );
           previewMessageIds.push(contextMsg.message_id);
         } catch (err) {
-          logger.warn('Could not forward replied-to message for preview context:', err);
+          logger.warn('Could not forward replied-to message for preview context, using placeholder:', err);
+          // Bot isn't a member of the source channel — show a text stub so the user
+          // still sees reply context in the preview.
+          const origin = session?.originalMessage.external_reply?.origin;
+          const channelTitle =
+            origin?.type === 'channel'
+              ? (origin as { type: 'channel'; chat: { title?: string } }).chat.title
+              : undefined;
+          const placeholderContent: MessageContent = {
+            type: 'text',
+            text: `↩️ Reply to: ${channelTitle ?? 'channel post'}`,
+          };
+          const placeholderId = await this.mediaSender.sendMessage(userId, placeholderContent);
+          previewMessageIds.push(placeholderId);
         }
       }
 
