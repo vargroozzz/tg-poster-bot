@@ -94,21 +94,27 @@ export class PreviewSenderService {
       // For replies: forward the replied-to message into the PM as visual context,
       // since cross-chat reply_parameters are rejected in private chats by Telegram.
       if (replyParams) {
+        // external_reply.chat may point to a private linked discussion group copy.
+        // Prefer external_reply.origin (always the original public channel) for forwarding.
+        const extOrigin = session?.originalMessage.external_reply?.origin;
+        const fwdChatId =
+          extOrigin?.type === 'channel'
+            ? (extOrigin as { type: 'channel'; chat: { id: number } }).chat.id
+            : replyParams.chatId;
+        const fwdMessageId =
+          extOrigin?.type === 'channel'
+            ? (extOrigin as { type: 'channel'; message_id: number }).message_id
+            : replyParams.messageId;
+        logger.debug(`Preview reply context: chatId=${fwdChatId}, messageId=${fwdMessageId}`);
         try {
-          const contextMsg = await this.api.forwardMessage(
-            userId,
-            replyParams.chatId,
-            replyParams.messageId
-          );
+          const contextMsg = await this.api.forwardMessage(userId, fwdChatId, fwdMessageId);
           previewMessageIds.push(contextMsg.message_id);
         } catch (err) {
           logger.warn('Could not forward replied-to message for preview context, using placeholder:', err);
-          // Bot isn't a member of the source channel — show a text stub so the user
-          // still sees reply context in the preview.
-          const origin = session?.originalMessage.external_reply?.origin;
+          // Fall back to a text stub so the user still sees reply context.
           const channelTitle =
-            origin?.type === 'channel'
-              ? (origin as { type: 'channel'; chat: { title?: string } }).chat.title
+            extOrigin?.type === 'channel'
+              ? (extOrigin as { type: 'channel'; chat: { title?: string } }).chat.title
               : undefined;
           const placeholderContent: MessageContent = {
             type: 'text',
