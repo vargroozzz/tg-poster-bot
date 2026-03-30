@@ -91,24 +91,27 @@ export class PreviewSenderService {
       const forwardInfo = session ? parseForwardInfo(session.originalMessage) : undefined;
       const replyParams = forwardInfo?.replyParameters ?? undefined;
 
+      // For replies: forward the replied-to message into the PM as visual context,
+      // since cross-chat reply_parameters are rejected in private chats by Telegram.
+      if (replyParams) {
+        try {
+          const contextMsg = await this.api.forwardMessage(
+            userId,
+            replyParams.chatId,
+            replyParams.messageId
+          );
+          previewMessageIds.push(contextMsg.message_id);
+        } catch (err) {
+          logger.warn('Could not forward replied-to message for preview context:', err);
+        }
+      }
+
       if (content.type === 'media_group' && content.mediaGroup && content.mediaGroup.length > 0) {
         // Collect all album message IDs so every item can be deleted on cleanup
         const ids = await this.mediaSender.sendMediaGroupAll(userId, content.mediaGroup, content.text);
         previewMessageIds.push(...ids);
       } else {
-        let contentMsgId: number;
-        try {
-          contentMsgId = await this.mediaSender.sendMessage(userId, content, replyParams);
-        } catch (err) {
-          // Cross-chat reply_parameters can be rejected by Telegram (private channel,
-          // deleted message, etc.) — fall back to sending without the reply header.
-          if (replyParams) {
-            logger.warn('Preview with reply_parameters failed, retrying without:', err);
-            contentMsgId = await this.mediaSender.sendMessage(userId, content);
-          } else {
-            throw err;
-          }
-        }
+        const contentMsgId = await this.mediaSender.sendMessage(userId, content);
         previewMessageIds.push(contentMsgId);
       }
     }
