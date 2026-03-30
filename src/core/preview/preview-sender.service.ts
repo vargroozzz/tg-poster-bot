@@ -96,7 +96,19 @@ export class PreviewSenderService {
         const ids = await this.mediaSender.sendMediaGroupAll(userId, content.mediaGroup, content.text);
         previewMessageIds.push(...ids);
       } else {
-        const contentMsgId = await this.mediaSender.sendMessage(userId, content, replyParams);
+        let contentMsgId: number;
+        try {
+          contentMsgId = await this.mediaSender.sendMessage(userId, content, replyParams);
+        } catch (err) {
+          // Cross-chat reply_parameters can be rejected by Telegram (private channel,
+          // deleted message, etc.) — fall back to sending without the reply header.
+          if (replyParams) {
+            logger.warn('Preview with reply_parameters failed, retrying without:', err);
+            contentMsgId = await this.mediaSender.sendMessage(userId, content);
+          } else {
+            throw err;
+          }
+        }
         previewMessageIds.push(contentMsgId);
       }
     }
