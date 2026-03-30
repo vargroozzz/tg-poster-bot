@@ -5,6 +5,7 @@ import { createPreviewActionKeyboard } from '../../bot/keyboards/preview-action.
 import { logger } from '../../utils/logger.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../session/session.service.js';
+import { parseForwardInfo } from '../../utils/message-parser.js';
 
 export class PreviewSenderService {
   private mediaSender: MediaSenderService;
@@ -87,12 +88,15 @@ export class PreviewSenderService {
       }
     } else {
       // For transform action (or unknown): use MediaSenderService
+      const forwardInfo = session ? parseForwardInfo(session.originalMessage) : undefined;
+      const replyParams = forwardInfo?.replyParameters ?? undefined;
+
       if (content.type === 'media_group' && content.mediaGroup && content.mediaGroup.length > 0) {
         // Collect all album message IDs so every item can be deleted on cleanup
         const ids = await this.mediaSender.sendMediaGroupAll(userId, content.mediaGroup, content.text);
         previewMessageIds.push(...ids);
       } else {
-        const contentMsgId = await this.mediaSender.sendMessage(userId, content);
+        const contentMsgId = await this.mediaSender.sendMessage(userId, content, replyParams);
         previewMessageIds.push(contentMsgId);
       }
     }
