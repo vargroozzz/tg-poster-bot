@@ -17,12 +17,14 @@ export interface ForwardInfo {
 export interface MediaGroupItem {
   type: 'photo' | 'video';
   fileId: string;
+  hasSpoiler?: boolean;
 }
 
 export interface MessageContent {
   type: 'text' | 'photo' | 'video' | 'document' | 'animation' | 'media_group' | 'poll';
   text?: string;
   fileId?: string;
+  hasSpoiler?: boolean;
   mediaGroup?: MediaGroupItem[];
   linkPreviewOptions?: { is_disabled?: boolean };
 }
