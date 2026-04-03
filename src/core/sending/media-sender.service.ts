@@ -21,9 +21,9 @@ export class MediaSenderService {
   ): Promise<number> {
     switch (content.type) {
       case 'photo':
-        return await this.sendPhoto(chatId, content.fileId!, content.text, replyParameters);
+        return await this.sendPhoto(chatId, content.fileId!, content.text, replyParameters, content.hasSpoiler);
       case 'video':
-        return await this.sendVideo(chatId, content.fileId!, content.text, replyParameters);
+        return await this.sendVideo(chatId, content.fileId!, content.text, replyParameters, content.hasSpoiler);
       case 'document':
         return await this.sendDocument(chatId, content.fileId!, content.text, replyParameters);
       case 'animation':
@@ -41,15 +41,17 @@ export class MediaSenderService {
     chatId: number | string,
     fileId: string,
     caption?: string,
-    replyParameters?: ReplyParams
+    replyParameters?: ReplyParams,
+    hasSpoiler?: boolean
   ): Promise<number> {
     const result = await this.api.sendPhoto(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
+      ...(hasSpoiler ? { has_spoiler: true } : {}),
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
         : {}),
-    });
+    } as any);
     return result.message_id;
   }
 
@@ -57,15 +59,17 @@ export class MediaSenderService {
     chatId: number | string,
     fileId: string,
     caption?: string,
-    replyParameters?: ReplyParams
+    replyParameters?: ReplyParams,
+    hasSpoiler?: boolean
   ): Promise<number> {
     const result = await this.api.sendVideo(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
+      ...(hasSpoiler ? { has_spoiler: true } : {}),
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
         : {}),
-    });
+    } as any);
     return result.message_id;
   }
 
@@ -146,6 +150,7 @@ export class MediaSenderService {
       media: item.fileId,
       caption: index === 0 ? caption : undefined,
       parse_mode: index === 0 ? ('HTML' as const) : undefined,
+      ...(item.hasSpoiler ? { has_spoiler: true } : {}),
     }));
 
     const result = await this.api.sendMediaGroup(chatId, media, {

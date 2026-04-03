@@ -490,12 +490,12 @@ export function extractMessageContent(
 ): MessageContent | null {
   // If media group messages provided, create media group content
   if (mediaGroupMessages && mediaGroupMessages.length > 1) {
-    const mediaItems = mediaGroupMessages.flatMap((msg): Array<{ type: 'photo' | 'video'; fileId: string }> => {
+    const mediaItems = mediaGroupMessages.flatMap((msg): Array<{ type: 'photo' | 'video'; fileId: string; hasSpoiler?: boolean }> => {
       if ('photo' in msg && msg.photo && msg.photo.length > 0) {
-        return [{ type: 'photo', fileId: msg.photo[msg.photo.length - 1].file_id }];
+        return [{ type: 'photo', fileId: msg.photo[msg.photo.length - 1].file_id, hasSpoiler: msg.has_media_spoiler ?? undefined }];
       }
       if ('video' in msg && msg.video) {
-        return [{ type: 'video', fileId: msg.video.file_id }];
+        return [{ type: 'video', fileId: msg.video.file_id, hasSpoiler: msg.has_media_spoiler ?? undefined }];
       }
       return [];
     });
@@ -516,6 +516,7 @@ export function extractMessageContent(
     return {
       type: 'photo',
       fileId: photo.file_id,
+      hasSpoiler: message.has_media_spoiler ?? undefined,
       text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
     };
   }
@@ -524,6 +525,7 @@ export function extractMessageContent(
     return {
       type: 'video',
       fileId: message.video.file_id,
+      hasSpoiler: message.has_media_spoiler ?? undefined,
       text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
     };
   }
