@@ -62,6 +62,7 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     },
     text: String,
     fileId: String,
+    hasSpoiler: Boolean,
     mediaGroup: [
       {
         type: {
@@ -73,6 +74,7 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
           type: String,
           required: true,
         },
+        hasSpoiler: Boolean,
       },
     ],
     linkPreviewOptions: {
