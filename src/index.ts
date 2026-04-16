@@ -43,6 +43,9 @@ async function main() {
       { command: 'addnickname', description: 'Set nickname for a user' },
       { command: 'removenickname', description: 'Remove nickname for a user' },
       { command: 'listnicknames', description: 'List all configured nicknames' },
+      { command: 'addpreset', description: 'Add a custom text preset' },
+      { command: 'removepreset', description: 'Remove a custom text preset' },
+      { command: 'listpresets', description: 'List all custom text presets' },
     ]);
     logger.info('Command hints configured');
 
