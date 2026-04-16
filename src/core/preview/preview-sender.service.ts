@@ -150,7 +150,7 @@ export class PreviewSenderService {
     // unreliable for other media types in some clients, so a dedicated text
     // message with the keyboard is the most reliable approach.
     const keyboard = createPreviewActionKeyboard(sessionId);
-    const controlText = await this.buildControlMessage(session?.selectedChannel, session?.selectedAction);
+    const controlText = await this.buildControlMessage(session?.selectedChannel);
     const controlMessage = await this.api.sendMessage(userId, controlText, {
       reply_markup: keyboard,
       parse_mode: 'HTML',
@@ -160,7 +160,7 @@ export class PreviewSenderService {
     return controlMessage.message_id;
   }
 
-  private async buildControlMessage(channelId?: string, action?: string): Promise<string> {
+  private async buildControlMessage(channelId?: string): Promise<string> {
     const lines: string[] = [];
 
     if (channelId) {
@@ -176,11 +176,6 @@ export class PreviewSenderService {
       } catch {
         // Skip if slot lookup fails
       }
-    }
-
-    if (action) {
-      const actionLabel = action === 'forward' ? 'Forward' : 'Transform';
-      lines.push(`⚡ ${actionLabel}`);
     }
 
     lines.push('');
