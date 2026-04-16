@@ -46,7 +46,7 @@ Commands:
 /status - Show pending scheduled posts
 /addgreen <channel_id> - Add channel to green list (auto-forward)
 /addred <channel_id> - Add channel to red list (omit channel reference)
-/setnickname <user_id> <nickname> - Set custom nickname for a user
+/addnickname <user_id> <nickname> - Set custom nickname for a user
 /listnicknames - Show all user nicknames
 /help - Show this help message${setupMessage}`
   );
@@ -67,7 +67,7 @@ bot.command('help', async (ctx: Context) => {
 🎨 Attribution Control:
 /addgreen <channel_id> - Add channel to green list (forwards as-is automatically)
 /addred <channel_id> - Add channel to red list (omits channel attribution)
-/setnickname <user_id> <nickname> - Set custom nickname for a user
+/addnickname <user_id> <nickname> - Set custom nickname for a user
 /removenickname <user_id> - Remove user nickname
 /listnicknames - Show all user nicknames
 
@@ -320,7 +320,7 @@ bot.command('remove', async (ctx: Context) => {
 });
 
 // User nickname commands
-bot.command('setnickname', async (ctx: Context) => {
+bot.command('addnickname', async (ctx: Context) => {
   const args = typeof ctx.match === 'string' ? ctx.match.trim().split(/\s+/) : [];
 
   // Check if replying to a forwarded message
@@ -337,7 +337,7 @@ bot.command('setnickname', async (ctx: Context) => {
       nickname = args.join(' ');
 
       if (!nickname) {
-        await ctx.reply('❌ Please provide a nickname.\n\nUsage: Reply to a forwarded message with /setnickname <nickname>');
+        await ctx.reply('❌ Please provide a nickname.\n\nUsage: Reply to a forwarded message with /addnickname <nickname>');
         return;
       }
     } else {
@@ -348,9 +348,9 @@ bot.command('setnickname', async (ctx: Context) => {
     // Traditional usage with user ID
     if (args.length < 2) {
       await ctx.reply(
-        'Usage: /setnickname <user_id> <nickname>\n\n' +
-          'Example: /setnickname 123456789 My Best Friend\n\n' +
-          '💡 Or reply to a forwarded message with /setnickname <nickname>'
+        'Usage: /addnickname <user_id> <nickname>\n\n' +
+          'Example: /addnickname 123456789 My Best Friend\n\n' +
+          '💡 Or reply to a forwarded message with /addnickname <nickname>'
       );
       return;
     }
@@ -424,7 +424,7 @@ bot.command('listnicknames', async (ctx: Context) => {
     const nicknames = await listUserNicknames();
 
     if (nicknames.length === 0) {
-      await ctx.reply('📝 No user nicknames configured.\n\nUse /setnickname to add one.');
+      await ctx.reply('📝 No user nicknames configured.\n\nUse /addnickname to add one.');
       return;
     }
 

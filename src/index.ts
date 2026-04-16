@@ -40,7 +40,7 @@ async function main() {
       { command: 'addgreen', description: 'Add channel to green list (reply to message)' },
       { command: 'addred', description: 'Add channel to red list (reply to message)' },
       { command: 'remove', description: 'Remove channel from lists (reply to message)' },
-      { command: 'setnickname', description: 'Set nickname for a user' },
+      { command: 'addnickname', description: 'Set nickname for a user' },
       { command: 'removenickname', description: 'Remove nickname for a user' },
       { command: 'listnicknames', description: 'List all configured nicknames' },
     ]);
