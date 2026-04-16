@@ -6,6 +6,8 @@ import { logger } from '../../utils/logger.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../session/session.service.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
+import { PostingChannel } from '../../database/models/posting-channel.model.js';
+import { findNextAvailableSlot, formatSlotTime } from '../../utils/time-slots.js';
 
 export class PreviewSenderService {
   private mediaSender: MediaSenderService;
@@ -148,11 +150,42 @@ export class PreviewSenderService {
     // unreliable for other media types in some clients, so a dedicated text
     // message with the keyboard is the most reliable approach.
     const keyboard = createPreviewActionKeyboard(sessionId);
-    const controlMessage = await this.api.sendMessage(userId, 'What would you like to do?', {
+    const controlText = await this.buildControlMessage(session?.selectedChannel, session?.selectedAction);
+    const controlMessage = await this.api.sendMessage(userId, controlText, {
       reply_markup: keyboard,
+      parse_mode: 'HTML',
     });
 
     logger.debug(`Preview sent to user ${userId}, control message ID: ${controlMessage.message_id}`);
     return controlMessage.message_id;
+  }
+
+  private async buildControlMessage(channelId?: string, action?: string): Promise<string> {
+    const lines: string[] = [];
+
+    if (channelId) {
+      const channel = await PostingChannel.findOne({ channelId }).lean();
+      const channelLabel = channel?.channelTitle ?? channel?.channelUsername ?? channelId;
+      lines.push(`📢 <b>${channelLabel}</b>`);
+    }
+
+    if (channelId) {
+      try {
+        const slot = await findNextAvailableSlot(channelId);
+        lines.push(`🕐 ${formatSlotTime(slot)}`);
+      } catch {
+        // Skip if slot lookup fails
+      }
+    }
+
+    if (action) {
+      const actionLabel = action === 'forward' ? 'Forward' : 'Transform';
+      lines.push(`⚡ ${actionLabel}`);
+    }
+
+    lines.push('');
+    lines.push('Schedule or cancel?');
+
+    return lines.join('\n');
   }
 }
