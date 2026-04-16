@@ -14,6 +14,11 @@ import {
   removeUserNickname,
   listUserNicknames,
 } from '../../database/models/user-nickname.model.js';
+import {
+  addCustomTextPreset,
+  listCustomTextPresets,
+  removeCustomTextPreset,
+} from '../../database/models/custom-text-preset.model.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
 import { getSleepWindow } from '../../utils/sleep-window.js';
@@ -469,6 +474,82 @@ bot.command('sleep', async (ctx: Context) => {
   } catch (error) {
     logger.error('Error in /sleep command:', error);
     await ctx.reply('Error loading sleep settings. Please try again.');
+  }
+});
+
+// Custom text preset commands
+bot.command('addpreset', async (ctx: Context) => {
+  try {
+    const args = ctx.message?.text?.split(' ').slice(1) ?? [];
+    if (args.length < 2) {
+      await ctx.reply(
+        '❌ Usage: /addpreset <label> | <text>\n\nExample: /addpreset 🔥 Breaking | 🔥 Breaking news!'
+      );
+      return;
+    }
+
+    const raw = args.join(' ');
+    const separatorIndex = raw.indexOf('|');
+    if (separatorIndex === -1) {
+      await ctx.reply('❌ Separator "|" not found.\n\nUsage: /addpreset <label> | <text>');
+      return;
+    }
+
+    const label = raw.slice(0, separatorIndex).trim();
+    const text = raw.slice(separatorIndex + 1).trim();
+
+    if (!label || !text) {
+      await ctx.reply('❌ Both label and text are required.\n\nUsage: /addpreset <label> | <text>');
+      return;
+    }
+
+    await addCustomTextPreset(label, text);
+    await ctx.reply(`✅ Preset added:\nLabel: "${label}"\nText: "${text}"`);
+    logger.info(`Custom text preset added: "${label}"`);
+  } catch (error) {
+    logger.error('Error adding preset:', error);
+    await ctx.reply('❌ Error adding preset. Please try again.');
+  }
+});
+
+bot.command('listpresets', async (ctx: Context) => {
+  try {
+    const presets = await listCustomTextPresets();
+
+    if (presets.length === 0) {
+      await ctx.reply('📝 No text presets configured.\n\nUse /addpreset to add one.');
+      return;
+    }
+
+    const list = presets
+      .map((p, i) => `${i + 1}. [${p._id}]\n   Label: "${p.label}"\n   Text: "${p.text}"`)
+      .join('\n\n');
+
+    await ctx.reply(`📝 Text Presets:\n\n${list}`);
+  } catch (error) {
+    logger.error('Error listing presets:', error);
+    await ctx.reply('❌ Error fetching presets. Please try again.');
+  }
+});
+
+bot.command('removepreset', async (ctx: Context) => {
+  try {
+    const id = ctx.message?.text?.split(' ')[1];
+
+    if (!id) {
+      await ctx.reply('❌ Usage: /removepreset <id>\n\nUse /listpresets to see IDs.');
+      return;
+    }
+
+    const removed = await removeCustomTextPreset(id);
+    if (removed) {
+      await ctx.reply(`✅ Preset removed.`);
+    } else {
+      await ctx.reply('❌ Preset not found.');
+    }
+  } catch (error) {
+    logger.error('Error removing preset:', error);
+    await ctx.reply('❌ Error removing preset. Please try again.');
   }
 });
 

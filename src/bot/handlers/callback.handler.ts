@@ -6,6 +6,7 @@ import { transformerService } from '../../services/transformer.service.js';
 import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
 import { createTextHandlingKeyboard } from '../keyboards/text-handling.keyboard.js';
 import { createCustomTextKeyboard } from '../keyboards/custom-text.keyboard.js';
+import { CustomTextPreset } from '../../database/models/custom-text-preset.model.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
@@ -89,7 +90,7 @@ async function handleNicknameSelection(
         // Plain text message: skip custom text, go straight to preview
         await showPreview(ctx, sessionId);
       } else {
-        const keyboard = createCustomTextKeyboard();
+        const keyboard = await createCustomTextKeyboard();
         await ctx.editMessageText('Do you want to add custom text to this post?', {
           reply_markup: keyboard,
         });
@@ -406,6 +407,50 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
   }
 });
 
+// Handle preset custom text selection
+bot.callbackQuery(/^custom_text:preset:(.+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const presetId = ctx.callbackQuery?.data?.match(/^custom_text:preset:(.+)$/)?.[1];
+    if (!presetId) {
+      await ErrorMessages.invalidSelection(ctx, 'preset');
+      return;
+    }
+
+    const preset = await CustomTextPreset.findById(presetId).lean();
+    if (!preset) {
+      await ctx.editMessageText('❌ Preset not found. It may have been deleted.');
+      return;
+    }
+
+    const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
+    if (!originalMessage) {
+      await ErrorMessages.originalMessageNotFound(ctx);
+      return;
+    }
+
+    const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+    const foundKey = session?._id.toString();
+    if (!foundKey) {
+      await ErrorMessages.sessionExpired(ctx);
+      return;
+    }
+
+    await getSessionService()?.updateState(foundKey, SessionState.PREVIEW, { customText: preset.text });
+    await showPreview(ctx, foundKey);
+
+    logger.debug(`Preset custom text "${preset.label}" selected for message ${originalMessage.message_id}`);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error selecting preset text. Please try again.',
+      'Error in custom text preset callback'
+    );
+  }
+});
+
 // Helper to delete all preview messages for a session
 async function deletePreviewMessages(ctx: Context, fromId: number, session: { previewMessageIds?: number[]; previewMessageId?: number }) {
   const messageIds = (session.previewMessageIds?.length ?? 0) > 0
@@ -514,7 +559,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       await showPreview(ctx, foundKey);
     } else {
       // Show custom text keyboard
-      const keyboard = createCustomTextKeyboard();
+      const keyboard = await createCustomTextKeyboard();
       await ctx.editMessageText('Do you want to add custom text to this post?', {
         reply_markup: keyboard,
       });
