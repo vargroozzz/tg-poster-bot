@@ -9,7 +9,7 @@ export async function createCustomTextKeyboard(): Promise<InlineKeyboard> {
   ]);
 
   rows.push([
-    { text: 'Skip', callback_data: 'custom_text:skip' },
+    { text: 'Skip', callback_data: 'custom_text:skip', style: 'primary' },
     { text: '✍️ Add text', callback_data: 'custom_text:add' },
   ]);
 
