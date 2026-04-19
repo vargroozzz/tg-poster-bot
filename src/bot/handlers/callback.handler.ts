@@ -542,14 +542,17 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       return;
     }
 
+    // Use the session's stored originalMessage (full data from DB) rather than
+    // reply_to_message from the callback, which Telegram may truncate (e.g. strips forward_origin).
+    const fullMessage = session?.originalMessage ?? originalMessage;
     const isPlainText =
-      originalMessage.text !== undefined &&
-      !('photo' in originalMessage && originalMessage.photo) &&
-      !('video' in originalMessage && originalMessage.video) &&
-      !('document' in originalMessage && originalMessage.document) &&
-      !('animation' in originalMessage && originalMessage.animation) &&
-      !('external_reply' in originalMessage && originalMessage.external_reply) &&
-      !originalMessage.forward_origin;
+      fullMessage.text !== undefined &&
+      !('photo' in fullMessage && fullMessage.photo) &&
+      !('video' in fullMessage && fullMessage.video) &&
+      !('document' in fullMessage && fullMessage.document) &&
+      !('animation' in fullMessage && fullMessage.animation) &&
+      !('external_reply' in fullMessage && fullMessage.external_reply) &&
+      !fullMessage.forward_origin;
 
     const nextState = getNextState(SessionState.NICKNAME_SELECT, {
       isGreenListed: false, isRedListed: false, hasText: false, isForward: false, isPlainText,
