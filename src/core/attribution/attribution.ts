@@ -39,7 +39,7 @@ function buildChannelAttribution(
 
     if (isRed) return userNickname ? `\n\nvia ${userNickname}` : null;
 
-    if (!forwardInfo.messageLink) return null;
+    if (!forwardInfo.messageLink) return userNickname ? `\n\nvia ${userNickname}` : null;
 
     const channelReference =
       forwardInfo.fromChannelUsername ?? forwardInfo.fromChannelTitle ?? 'Unnamed Channel';
