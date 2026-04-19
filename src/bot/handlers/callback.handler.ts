@@ -548,7 +548,8 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       !('video' in originalMessage && originalMessage.video) &&
       !('document' in originalMessage && originalMessage.document) &&
       !('animation' in originalMessage && originalMessage.animation) &&
-      !('external_reply' in originalMessage && originalMessage.external_reply);
+      !('external_reply' in originalMessage && originalMessage.external_reply) &&
+      !originalMessage.forward_origin;
 
     const nextState = getNextState(SessionState.NICKNAME_SELECT, {
       isGreenListed: false, isRedListed: false, hasText: false, isForward: false, isPlainText,
