@@ -11,6 +11,10 @@ A Telegram bot that helps schedule channel posts with automatic attribution. For
 - 📝 **Text Handling Options** - Keep, remove, or wrap text in blockquotes for each post
 - ✨ **Smart Attribution** - Automatically adds custom nicknames or channel links to transformed posts
 - 👤 **Custom User Nicknames** - Set friendly names for users (e.g., "My Best Friend" instead of @username)
+- 💾 **Custom Text Presets** - Save reusable text snippets and apply them quickly
+- 📋 **Queue Management** - View and manage the post queue per channel (`/queue`)
+- 🌙 **Sleep Window** - Suppress scheduling during configured quiet hours (`/sleep`)
+- 👁 **Preview Before Scheduling** - See the transformed post before committing
 - 🟢 **Green List** - Auto-forward posts from trusted channels without prompting
 - 🔴 **Red List** - Omit channel attribution when transforming posts from specific channels
 - 🔒 **Single User** - Authorized for one user only (secure and private)
@@ -41,43 +45,49 @@ A Telegram bot that helps schedule channel posts with automatic attribution. For
 ### Installation
 
 1. Clone the repository:
+
 ```bash
 cd tg_poster_bot
 ```
 
 2. Install dependencies:
+
 ```bash
 npm install
 ```
 
 3. Create `.env` file (copy from `.env.example`):
+
 ```bash
 cp .env.example .env
 ```
 
 4. Configure environment variables in `.env`:
+
 ```env
 BOT_TOKEN=your_bot_token_from_botfather
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/tg_poster_bot
 AUTHORIZED_USER_ID=123456789
 NODE_ENV=development
-TZ=Europe/Kiev
-# TARGET_CHANNEL_ID=-1001234567890  # Optional - can use /setchannel instead
+TZ=Europe/Kyiv
 ```
 
 ### Getting Your IDs
 
 **Bot Token:**
+
 1. Message @BotFather on Telegram
 2. Create a new bot with `/newbot`
 3. Copy the token
 
 **User ID:**
+
 1. Message @userinfobot on Telegram
 2. Copy your user ID
 
 **Adding Posting Channels:**
 After starting the bot:
+
 1. Add your bot as an administrator to your channel(s) with permission to post messages
 2. Use `/addchannel <channel_id>` to register each channel
 3. Bot will verify it has admin access before adding
@@ -85,11 +95,13 @@ After starting the bot:
 ### Running
 
 **Development:**
+
 ```bash
 npm run dev
 ```
 
 **Production:**
+
 ```bash
 npm run build
 npm start
@@ -98,39 +110,58 @@ npm start
 ## Commands
 
 ### Channel Management
+
 - `/addchannel <channel_id>` - Add a channel where you want to post (bot must be admin)
 - `/removechannel <channel_id>` - Remove a posting channel
 - `/listchannels` - Show all posting channels and green/red lists
 
 ### Attribution Control
+
 - `/addgreen <channel_id>` - Add source channel to green list (auto-forward)
 - `/addred <channel_id>` - Add source channel to red list (omit channel reference)
 - `/remove <channel_id>` - Remove channel from green/red lists
-- `/setnickname <user_id> <nickname>` - Set custom nickname for a user
+- `/addnickname <user_id> <nickname>` - Set custom nickname for a user
 - `/removenickname <user_id>` - Remove user's custom nickname
 - `/listnicknames` - Show all configured user nicknames
 
-### Status
+### Schedule / Queue
+
 - `/status` - Show pending scheduled posts (count and next 5)
+- `/queue` - View and manage post queue per channel
+
+### Sleep Window
+
+- `/sleep` - View or configure quiet hours (posts won't be scheduled during this window)
+
+### Custom Text Presets
+
+- `/addpreset <label> | <text>` - Save a reusable text preset
+- `/listpresets` - Show all presets with their IDs
+- `/removepreset <id>` - Delete a preset by ID
 
 ### Reply-Driven Commands
+
 You can reply to any forwarded message with these commands (no need to provide IDs):
+
 - Reply with `/addgreen` - Add the source channel to green list
 - Reply with `/addred` - Add the source channel to red list
 - Reply with `/remove` - Remove the source channel from lists
-- Reply with `/setnickname <nickname>` - Set nickname for the user who forwarded the message
+- Reply with `/addnickname <nickname>` - Set nickname for the user who forwarded the message
 - Reply with `/removenickname` - Remove nickname for the user
 
 ### Help
+
 - `/start` - Welcome message
 - `/help` - Usage instructions
 
 ## Attribution Rules
 
 ### Green List
+
 If a channel is green-listed, all forwards from it are automatically scheduled as-is with no transformation.
 
 ### Transform Action
+
 - **From channel (not red-listed) with message link:** Adds `via [Channel Name](link)` (uses @username if available)
 - **From channel (not red-listed) without message link:** No attribution added
 - **From channel (red-listed):** Omits channel reference, adds custom nickname if user has one
@@ -138,12 +169,15 @@ If a channel is green-listed, all forwards from it are automatically scheduled a
 - **From user without custom nickname:** No attribution added
 
 ### Text Handling
+
 When a message has text/caption, you can choose:
+
 - **Keep text** - Leave text as-is
 - **Remove text** - Remove all text/caption
 - **Wrap in quote** - Wrap text in Telegram blockquote
 
 ### Forward As-Is Action
+
 Posts the message exactly as received with no modifications (except text handling if selected).
 
 ## Architecture
@@ -160,25 +194,38 @@ Posts the message exactly as received with no modifications (except text handlin
 
 ```
 src/
-├── index.ts                    # Entry point
-├── config/                     # Configuration and validation
+├── index.ts                         # Entry point
+├── config/                          # Configuration and validation
 ├── bot/
-│   ├── bot.ts                 # Grammy bot instance
-│   ├── handlers/              # Message and callback handlers
-│   └── keyboards/             # Inline keyboards
+│   ├── bot.ts                       # Grammy bot instance
+│   ├── handlers/                    # Message and callback handlers
+│   └── keyboards/                   # Inline keyboards
+├── core/
+│   ├── attribution/attribution.ts   # Attribution string building
+│   ├── posting/                     # Scheduler and publisher services
+│   ├── preview/                     # Preview generation and sending
+│   ├── queue/                       # Queue listing and management
+│   ├── sending/                     # Media sending abstraction
+│   ├── session/                     # Session state machine and service
+│   └── transformation/              # Text transformation utilities
 ├── services/
-│   ├── scheduler.service.ts   # Schedule slot calculation and DB storage
-│   ├── post-worker.service.ts # Background worker for publishing posts
-│   ├── transformer.service.ts # Message transformation with attribution
-│   └── channel-list.service.ts # Green/red list management
+│   ├── post-worker.service.ts       # Background worker for publishing posts
+│   ├── scheduler.service.ts         # Schedule slot helpers
+│   └── transformer.service.ts       # Attribution logic facade
+├── shared/
+│   ├── di/container.ts             # DI container
+│   ├── helpers/                    # Shared helpers (nickname, validation)
+│   └── constants/                  # Shared constants
 ├── database/
-│   ├── connection.ts          # MongoDB connection
-│   └── models/                # Mongoose schemas
-├── types/                     # TypeScript type definitions
+│   ├── connection.ts               # MongoDB connection
+│   ├── models/                     # Mongoose schemas
+│   └── repositories/               # Data access layer
+├── types/                           # TypeScript type definitions
 └── utils/
-    ├── logger.ts              # Winston logger
-    ├── time-slots.ts          # Time slot calculation
-    └── message-parser.ts      # Forward info extraction
+    ├── logger.ts                    # Winston logger
+    ├── time-slots.ts                # Time slot calculation
+    ├── sleep-window.ts              # Sleep window feature
+    └── message-parser.ts            # Forward info extraction
 ```
 
 ## License
