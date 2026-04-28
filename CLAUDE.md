@@ -3,6 +3,7 @@
 ## Workflow Notes
 
 - Do NOT commit design docs or implementation plans. Write them to disk if needed but skip the commit — execution follows immediately.
+- After completing any code change, always commit and push without waiting to be asked.
 
 ## Checking Render Logs (MCP)
 
