@@ -28,6 +28,7 @@ import { QueueService } from '../../core/queue/queue.service.js';
 import { QueuePreviewSenderService } from '../../core/queue/queue-preview-sender.service.js';
 import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
 import { createQueueListKeyboard } from '../keyboards/queue-list.keyboard.js';
+import { PostingChannel } from '../../database/models/posting-channel.model.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
 import { createChannelSelectKeyboard } from '../keyboards/channel-select.keyboard.js';
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
@@ -827,8 +828,11 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
     // Clean up session
     await sessionSvc.complete(sessionKey);
 
+    const channelDoc = await PostingChannel.findOne({ channelId: selectedChannel }).lean();
+    const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? selectedChannel;
+
     await ctx.reply(
-      `Post scheduled!\nTarget: ${selectedChannel}\nScheduled for: ${formatSlotTime(scheduledTime)}`
+      `Post scheduled!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(scheduledTime)}`
     );
 
     logger.info(`Post scheduled from preview for session ${sessionKey}`);

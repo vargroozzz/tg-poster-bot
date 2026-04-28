@@ -4,6 +4,27 @@
 
 - Do NOT commit design docs or implementation plans. Write them to disk if needed but skip the commit — execution follows immediately.
 
+## Checking Render Logs (MCP)
+
+Use the Render MCP tools to check production logs without leaving the session:
+
+```
+1. mcp__render__list_workspaces          — list available workspaces
+2. mcp__render__select_workspace         — select "My Workspace" (id: tea-d0ea6jhr0fns73cu3gj0)
+3. mcp__render__list_services            — find the service id (tg-poster-bot: srv-d653fplum26s73bjd9ug)
+4. mcp__render__list_logs                — fetch logs for that service id
+```
+
+Example log query for recent errors:
+```json
+{
+  "resource": ["srv-d653fplum26s73bjd9ug"],
+  "type": ["app"],
+  "text": ["error", "Error"],
+  "limit": 50
+}
+```
+
 ## Table of Contents
 
 - [Project Overview](#project-overview)
@@ -270,28 +291,34 @@ For messages with text/caption, users can choose:
 ## Bot Commands
 
 ### Posting Channel Management
-- `/addchannel` - Add a new posting channel (must be admin of the channel)
-- `/listchannels` - List all configured posting channels
+- `/addchannel <channelId>` - Add a new posting channel (must be admin of the channel)
+- `/listchannels` - List all configured posting channels and green/red lists
 - `/removechannel <channelId>` - Remove a posting channel
 
 ### Schedule Management
-- `/list` - View all scheduled posts
-- `/stats` - View posting statistics
+- `/status` - View pending scheduled posts count and next 5 posts
+- `/queue` - View and manage the post queue by channel
 - Forward any message - Start the scheduling flow
 
 ### Channel Lists (Attribution Control)
-- `/greenlist [reply]` - Add channel to green list (auto-forward without changes)
-- `/redlist [reply]` - Add channel to red list (auto-transform, hide channel link)
-- `/removelist [reply]` - Remove channel from green/red lists
-- `/listgreen` - Show all green-listed channels
-- `/listred` - Show all red-listed channels
+- `/addgreen [reply]` - Add channel to green list (auto-forward without changes)
+- `/addred [reply]` - Add channel to red list (auto-transform, hide channel link)
+- `/remove [reply]` - Remove channel from green/red lists
 
 **Tip:** Use reply-to-message for list commands to auto-extract channel ID
 
 ### Nickname Management
-- `/addnickname <userId> <nickname>` - Add a custom nickname for a user
+- `/addnickname <userId> <nickname>` - Add a custom nickname for a user (reply-driven supported)
 - `/listnicknames` - Show all configured nicknames
-- `/removenickname <userId>` - Remove a nickname
+- `/removenickname <userId>` - Remove a nickname (reply-driven supported)
+
+### Sleep Window
+- `/sleep` - View or configure sleep hours (no posts scheduled during this window)
+
+### Custom Text Presets
+- `/addpreset <label> | <text>` - Save a reusable custom text preset
+- `/listpresets` - Show all presets with their IDs
+- `/removepreset <id>` - Delete a preset by ID
 
 ### Other
 - `/start` - Show welcome message
@@ -943,8 +970,19 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - `src/index.ts` - Entry point, starts bot and worker, configures command hints
 - `src/services/post-worker.service.ts` - **Critical:** Background worker that posts messages
 - `src/core/posting/post-scheduler.service.ts` - Slot calculation and scheduling
+- `src/core/posting/post-publisher.service.ts` - Publishes a single post (transform or forward)
 - `src/services/transformer.service.ts` - Attribution logic facade
-- `src/core/attribution/attribution.service.ts` - Attribution string building logic
+- `src/core/attribution/attribution.ts` - Attribution string building logic
+- `src/core/session/session.service.ts` - Database-backed session management
+- `src/core/session/session-state-machine.ts` - Session state transitions
+- `src/core/queue/queue.service.ts` - Queue listing and management
+- `src/core/queue/queue-preview-sender.service.ts` - Sends queue preview messages
+- `src/core/preview/preview-generator.service.ts` - Generates post preview before scheduling
+- `src/core/preview/preview-sender.service.ts` - Sends preview to user
+- `src/core/sending/media-sender.service.ts` - Media sending abstraction
+- `src/shared/di/container.ts` - DI container wiring all services together
+- `src/utils/sleep-window.ts` - Sleep window feature (skip slots during configured hours)
+- `src/database/models/custom-text-preset.model.ts` - Custom text presets schema
 - `src/bot/handlers/callback.handler.ts` - Handles all inline button clicks
 - `src/bot/handlers/forward.handler.ts` - Handles forwarded and original messages
 - `src/bot/handlers/command.handler.ts` - All bot commands
@@ -956,8 +994,12 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - [x] Inline nickname selection with "No attribution" option (always shown in Transform flow)
 - [x] Auto-nickname selection for known users (streamlines workflow)
 - [x] Custom text feature (prepend text to posts)
+- [x] Custom text presets (save and reuse text snippets via `/addpreset`)
 - [x] Custom text input via filtered reply handler (prevents handler conflicts)
 - [x] Multi-channel support with channel selection
+- [x] Post queue management (`/queue` command with per-channel view)
+- [x] Sleep window feature (no posts scheduled during configured hours, via `/sleep`)
+- [x] Preview message before scheduling (shows transformed output to user)
 - [x] Webhooks deployment (prevents 409 conflicts)
 - [x] Idempotency checks (prevents duplicate processing during zero-downtime deployments)
 - [x] True forwarding via forwardMessage (preserves "Forwarded from")
@@ -966,7 +1008,8 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - [x] Text message forwarding support (forwarded text posts)
 - [x] User attribution for any message type (forwarded or original)
 - [x] Manual nickname attribution for original content (works without forward info)
-- [x] Session persistence (database-backed with in-memory Map fallback during migration)
+- [x] Session persistence (database-backed sessions via session-state-machine)
+- [x] DI container wiring all services (src/shared/di/container.ts)
 - [x] cron-job.org integration (keeps Render free tier awake for scheduled posts)
 - [x] Command hints (descriptions appear when typing "/" in Telegram)
 
@@ -975,5 +1018,4 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - [ ] Edit scheduled posts before they're published
 - [ ] Cancel/delete scheduled posts
 - [ ] Statistics dashboard
-- [ ] Preview transformed message before scheduling
 - [ ] Batch scheduling
