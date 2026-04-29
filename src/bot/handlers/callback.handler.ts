@@ -40,6 +40,8 @@ import {
   createHourPickerKeyboard,
   createSleepConfirmKeyboard,
 } from '../keyboards/sleep.keyboard.js';
+import { setPostInterval, VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
+import { createIntervalKeyboard } from '../keyboards/interval.keyboard.js';
 
 const postScheduler = new PostSchedulerService();
 const queueService = new QueueService();
@@ -1292,6 +1294,37 @@ bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
       error,
       'Error showing sleep status. Please try again.',
       'sleep:cancel callback'
+    );
+  }
+});
+
+// ──────────────────────────────────────────────
+// Post interval configuration callbacks
+// ──────────────────────────────────────────────
+
+bot.callbackQuery(/^interval:set:(\d+)$/, async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const match = ctx.callbackQuery?.data?.match(/^interval:set:(\d+)$/);
+    const minutes = parseInt(match?.[1] ?? '30', 10);
+
+    if (!VALID_INTERVALS.includes(minutes as PostInterval)) {
+      await ctx.answerCallbackQuery('Invalid interval.');
+      return;
+    }
+
+    await setPostInterval(minutes as PostInterval);
+
+    await ctx.editMessageText(
+      `Post interval: every ${minutes} minutes ✅`,
+      { reply_markup: createIntervalKeyboard(minutes) }
+    );
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error saving interval. Please try again.',
+      'interval:set callback'
     );
   }
 });
