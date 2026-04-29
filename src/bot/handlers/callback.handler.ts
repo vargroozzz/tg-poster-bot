@@ -40,7 +40,7 @@ import {
   createHourPickerKeyboard,
   createSleepConfirmKeyboard,
 } from '../keyboards/sleep.keyboard.js';
-import { setPostInterval, VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
+import { getPostInterval, setPostInterval, VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
 import { createIntervalKeyboard } from '../keyboards/interval.keyboard.js';
 import { QueueRepackService } from '../../core/queue/queue-repack.service.js';
 
@@ -1333,14 +1333,19 @@ bot.callbackQuery('interval:repack', async (ctx: Context) => {
   try {
     await ctx.answerCallbackQuery();
     const repackService = new QueueRepackService();
-    const { totalPosts, channelCount } = await repackService.repackAll();
+    const [{ totalPosts, channelCount }, intervalMinutes] = await Promise.all([
+      repackService.repackAll(),
+      getPostInterval(),
+    ]);
 
     const text =
       totalPosts === 0
         ? 'No pending posts to reschedule.'
         : `Queue repacked ✅\n${totalPosts} post${totalPosts === 1 ? '' : 's'} across ${channelCount} channel${channelCount === 1 ? '' : 's'} rescheduled.`;
 
-    await ctx.editMessageText(text);
+    await ctx.editMessageText(text, {
+      reply_markup: createIntervalKeyboard(intervalMinutes, true),
+    });
   } catch (error) {
     await ErrorMessages.catchAndReply(
       ctx,
