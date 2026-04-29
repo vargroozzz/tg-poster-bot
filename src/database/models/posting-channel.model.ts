@@ -4,6 +4,7 @@ export interface IPostingChannel extends Document {
   channelId: string;
   channelUsername?: string;
   channelTitle?: string;
+  postInterval?: number;
   addedAt: Date;
   isActive: boolean;
 }
@@ -17,6 +18,9 @@ const postingChannelSchema = new Schema<IPostingChannel>({
   },
   channelUsername: String,
   channelTitle: String,
+  postInterval: {
+    type: Number,
+  },
   addedAt: {
     type: Date,
     default: Date.now,
