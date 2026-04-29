@@ -35,29 +35,25 @@ export class QueueRepackService {
   private repository = new ScheduledPostRepository();
 
   async repackAll(): Promise<{ totalPosts: number; channelCount: number }> {
-    const [intervalMinutes, sleepWindow] = await Promise.all([
-      getPostInterval(),
-      getSleepWindow(),
-    ]);
-
     const channelIds = (await ScheduledPost.distinct('targetChannelId', {
       status: 'pending',
     })) as string[];
 
     const counts = await Promise.all(
-      channelIds.map((channelId) => this.repackChannel(channelId, intervalMinutes, sleepWindow))
+      channelIds.map((channelId) => this.repackChannel(channelId))
     );
     const totalPosts = counts.reduce((sum, n) => sum + n, 0);
 
     return { totalPosts, channelCount: channelIds.length };
   }
 
-  private async repackChannel(
-    channelId: string,
-    intervalMinutes: number,
-    sleepWindow: SleepWindow | null
-  ): Promise<number> {
-    const posts = await this.repository.findPendingByChannel(channelId);
+  async repackChannel(channelId: string): Promise<number> {
+    const [posts, intervalMinutes, sleepWindow] = await Promise.all([
+      this.repository.findPendingByChannel(channelId),
+      getPostInterval(channelId),
+      getSleepWindow(),
+    ]);
+
     if (posts.length === 0) return 0;
 
     // Compute first slot from scratch rather than using findNextAvailableSlot,
