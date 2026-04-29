@@ -44,10 +44,10 @@ export class QueueRepackService {
       status: 'pending',
     })) as string[];
 
-    let totalPosts = 0;
-    for (const channelId of channelIds) {
-      totalPosts += await this.repackChannel(channelId, intervalMinutes, sleepWindow);
-    }
+    const counts = await Promise.all(
+      channelIds.map((channelId) => this.repackChannel(channelId, intervalMinutes, sleepWindow))
+    );
+    const totalPosts = counts.reduce((sum, n) => sum + n, 0);
 
     return { totalPosts, channelCount: channelIds.length };
   }
@@ -60,6 +60,9 @@ export class QueueRepackService {
     const posts = await this.repository.findPendingByChannel(channelId);
     if (posts.length === 0) return 0;
 
+    // Compute first slot from scratch rather than using findNextAvailableSlot,
+    // because that function advances past the latest pending post — repack ignores
+    // the existing schedule and starts fresh from now.
     const nowInTz = toZonedTime(new Date(), TIMEZONE);
     const firstSlotInTz = calculateNextSlotForInterval(nowInTz, intervalMinutes);
     const firstSlotUtc = fromZonedTime(firstSlotInTz, TIMEZONE);
@@ -68,9 +71,9 @@ export class QueueRepackService {
     const newTimes = computeRepackSlots(posts.length, firstSlot, intervalMinutes, sleepWindow);
 
     // Update order avoids unique-index conflicts on (scheduledTime, targetChannelId):
-    // expanding (new start > old start) → last-to-first
-    // compressing or same start → first-to-last
-    const expanding = newTimes[0] > posts[0].scheduledTime;
+    // expanding (new end > old end) → last-to-first
+    // compressing or same end → first-to-last
+    const expanding = newTimes[newTimes.length - 1] > posts[posts.length - 1].scheduledTime;
     const indices = Array.from({ length: posts.length }, (_, i) => i);
     const orderedIndices = expanding ? [...indices].reverse() : indices;
 
