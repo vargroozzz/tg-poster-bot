@@ -23,6 +23,8 @@ import { parseForwardInfo } from '../../utils/message-parser.js';
 import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
 import { getSleepWindow } from '../../utils/sleep-window.js';
 import { createSleepStatusKeyboard } from '../keyboards/sleep.keyboard.js';
+import { getPostInterval } from '../../utils/post-interval.js';
+import { createIntervalKeyboard } from '../keyboards/interval.keyboard.js';
 
 const schedulerService = new SchedulerService(bot.api);
 const channelListRepo = new ChannelListRepository();
@@ -550,6 +552,19 @@ bot.command('removepreset', async (ctx: Context) => {
   } catch (error) {
     logger.error('Error removing preset:', error);
     await ctx.reply('❌ Error removing preset. Please try again.');
+  }
+});
+
+bot.command('interval', async (ctx: Context) => {
+  try {
+    const current = await getPostInterval();
+    await ctx.reply(
+      `Post interval: every ${current} minutes\n\nSelect a new interval:`,
+      { reply_markup: createIntervalKeyboard(current) }
+    );
+  } catch (error) {
+    logger.error('Error in /interval command:', error);
+    await ctx.reply('Error loading interval settings. Please try again.');
   }
 });
 
