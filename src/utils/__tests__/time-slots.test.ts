@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { calculateNextSlotForInterval } from '../time-slots.js';
 
 function kyivDate(timeStr: string): Date {
   const [h, m, s] = timeStr.split(':').map(Number);
   // Kyiv=UTC+2 in January: subtract 2h to get UTC
   return new Date(Date.UTC(2026, 0, 15, h - 2, m, s));
 }
-
-import { calculateNextSlotForInterval } from '../time-slots.js';
 
 describe('calculateNextSlotForInterval', () => {
   describe('30-minute interval (legacy behaviour)', () => {

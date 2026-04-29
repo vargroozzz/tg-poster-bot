@@ -1304,20 +1304,19 @@ bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
 
 bot.callbackQuery(/^interval:set:(\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
-    const match = ctx.callbackQuery?.data?.match(/^interval:set:(\d+)$/);
-    const minutes = parseInt(match?.[1] ?? '30', 10);
+    const minutes = parseInt(ctx.match?.[1] ?? '30', 10);
 
     if (!VALID_INTERVALS.includes(minutes as PostInterval)) {
       await ctx.answerCallbackQuery('Invalid interval.');
       return;
     }
 
+    await ctx.answerCallbackQuery();
     await setPostInterval(minutes as PostInterval);
 
     await ctx.editMessageText(
       `Post interval: every ${minutes} minutes ✅`,
-      { reply_markup: createIntervalKeyboard(minutes) }
+      { reply_markup: createIntervalKeyboard(minutes as PostInterval) }
     );
   } catch (error) {
     await ErrorMessages.catchAndReply(
