@@ -42,6 +42,7 @@ import {
 } from '../keyboards/sleep.keyboard.js';
 import { setPostInterval, VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
 import { createIntervalKeyboard } from '../keyboards/interval.keyboard.js';
+import { QueueRepackService } from '../../core/queue/queue-repack.service.js';
 
 const postScheduler = new PostSchedulerService();
 const queueService = new QueueService();
@@ -1316,7 +1317,7 @@ bot.callbackQuery(/^interval:set:(\d+)$/, async (ctx: Context) => {
 
     await ctx.editMessageText(
       `Post interval: every ${minutes} minutes ✅`,
-      { reply_markup: createIntervalKeyboard(minutes as PostInterval) }
+      { reply_markup: createIntervalKeyboard(minutes as PostInterval, true) }
     );
   } catch (error) {
     await ErrorMessages.catchAndReply(
@@ -1324,6 +1325,28 @@ bot.callbackQuery(/^interval:set:(\d+)$/, async (ctx: Context) => {
       error,
       'Error saving interval. Please try again.',
       'interval:set callback'
+    );
+  }
+});
+
+bot.callbackQuery('interval:repack', async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const repackService = new QueueRepackService();
+    const { totalPosts, channelCount } = await repackService.repackAll();
+
+    const text =
+      totalPosts === 0
+        ? 'No pending posts to reschedule.'
+        : `Queue repacked ✅\n${totalPosts} post${totalPosts === 1 ? '' : 's'} across ${channelCount} channel${channelCount === 1 ? '' : 's'} rescheduled.`;
+
+    await ctx.editMessageText(text);
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error repacking queue. Please try again.',
+      'interval:repack callback'
     );
   }
 });
