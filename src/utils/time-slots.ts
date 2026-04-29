@@ -15,7 +15,7 @@ const TIMEZONE = config.timezone;
 export async function findNextAvailableSlot(targetChannelId: string): Promise<Date> {
   const [sleepWindow, intervalMinutes] = await Promise.all([
     getSleepWindow(),
-    getPostInterval(),
+    getPostInterval(targetChannelId),
   ]);
 
   const rawNextSlot = fromZonedTime(
