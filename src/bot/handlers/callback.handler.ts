@@ -1307,8 +1307,7 @@ bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
 bot.callbackQuery(/^interval:ch:(-?\d+)$/, async (ctx: Context) => {
   try {
     await ctx.answerCallbackQuery();
-    const match = ctx.callbackQuery?.data?.match(/^interval:ch:(-?\d+)$/);
-    const channelId = match![1];
+    const channelId = (ctx.match as RegExpExecArray)[1];
     const [channel, currentInterval] = await Promise.all([
       PostingChannel.findOne({ channelId }),
       getPostInterval(channelId),
@@ -1331,9 +1330,8 @@ bot.callbackQuery(/^interval:ch:(-?\d+)$/, async (ctx: Context) => {
 // interval:set:<channelId>:<minutes> — save interval for a channel
 bot.callbackQuery(/^interval:set:(-?\d+):(\d+)$/, async (ctx: Context) => {
   try {
-    const match = ctx.callbackQuery?.data?.match(/^interval:set:(-?\d+):(\d+)$/);
-    const channelId = match![1];
-    const minutes = parseInt(match![2], 10);
+    const channelId = (ctx.match as RegExpExecArray)[1];
+    const minutes = parseInt((ctx.match as RegExpExecArray)[2], 10);
 
     if (!VALID_INTERVALS.includes(minutes as PostInterval)) {
       await ctx.answerCallbackQuery('Invalid interval.');
@@ -1363,8 +1361,7 @@ bot.callbackQuery(/^interval:set:(-?\d+):(\d+)$/, async (ctx: Context) => {
 bot.callbackQuery(/^interval:repack:(-?\d+)$/, async (ctx: Context) => {
   try {
     await ctx.answerCallbackQuery();
-    const repackMatch = ctx.callbackQuery?.data?.match(/^interval:repack:(-?\d+)$/);
-    const channelId = repackMatch![1];
+    const channelId = (ctx.match as RegExpExecArray)[1];
     const repackService = new QueueRepackService();
     const [count, currentInterval, channel] = await Promise.all([
       repackService.repackChannel(channelId),
