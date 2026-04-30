@@ -24,7 +24,7 @@ import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-sel
 import { getSleepWindow } from '../../utils/sleep-window.js';
 import { createSleepStatusKeyboard } from '../keyboards/sleep.keyboard.js';
 import { getPostInterval } from '../../utils/post-interval.js';
-import { createIntervalKeyboard } from '../keyboards/interval.keyboard.js';
+import { createChannelIntervalListKeyboard } from '../keyboards/interval.keyboard.js';
 
 const schedulerService = new SchedulerService(bot.api);
 const channelListRepo = new ChannelListRepository();
@@ -557,11 +557,18 @@ bot.command('removepreset', async (ctx: Context) => {
 
 bot.command('interval', async (ctx: Context) => {
   try {
-    const current = await getPostInterval();
-    await ctx.reply(
-      `Post interval: every ${current} minutes\n\nSelect a new interval:`,
-      { reply_markup: createIntervalKeyboard(current) }
-    );
+    const channels = await getActivePostingChannels();
+    if (channels.length === 0) {
+      await ctx.reply('No posting channels configured. Add one with /addchannel first.');
+      return;
+    }
+    const intervals = await Promise.all(channels.map((ch) => getPostInterval(ch.channelId)));
+    const lines = channels
+      .map((ch, i) => `• ${ch.channelTitle ?? ch.channelId} — ${intervals[i]} min`)
+      .join('\n');
+    await ctx.reply(`Post intervals:\n${lines}`, {
+      reply_markup: createChannelIntervalListKeyboard(channels),
+    });
   } catch (error) {
     logger.error('Error in /interval command:', error);
     await ctx.reply('Error loading interval settings. Please try again.');
