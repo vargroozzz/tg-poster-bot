@@ -40,8 +40,8 @@ import {
   createHourPickerKeyboard,
   createSleepConfirmKeyboard,
 } from '../keyboards/sleep.keyboard.js';
-import { getPostInterval, setPostInterval, VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
-import { createIntervalKeyboard } from '../keyboards/interval.keyboard.js';
+import { getPostInterval, setChannelInterval, VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
+import { createChannelIntervalListKeyboard, createChannelIntervalPickerKeyboard } from '../keyboards/interval.keyboard.js';
 import { QueueRepackService } from '../../core/queue/queue-repack.service.js';
 
 const postScheduler = new PostSchedulerService();
@@ -1300,12 +1300,40 @@ bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
 });
 
 // ──────────────────────────────────────────────
-// Post interval configuration callbacks
+// Per-channel post interval callbacks
 // ──────────────────────────────────────────────
 
-bot.callbackQuery(/^interval:set:(\d+)$/, async (ctx: Context) => {
+// interval:ch:<channelId> — show picker for a specific channel
+bot.callbackQuery(/^interval:ch:(-?\d+)$/, async (ctx: Context) => {
   try {
-    const minutes = parseInt(ctx.match?.[1] ?? '30', 10);
+    await ctx.answerCallbackQuery();
+    const match = ctx.callbackQuery?.data?.match(/^interval:ch:(-?\d+)$/);
+    const channelId = match![1];
+    const [channel, currentInterval] = await Promise.all([
+      PostingChannel.findOne({ channelId }),
+      getPostInterval(channelId),
+    ]);
+    const title = channel?.channelTitle ?? channelId;
+    await ctx.editMessageText(
+      `Post interval for ${title}: ${currentInterval} min\n\nSelect a new interval:`,
+      { reply_markup: createChannelIntervalPickerKeyboard(channelId, currentInterval) }
+    );
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error loading channel interval. Please try again.',
+      'interval:ch callback'
+    );
+  }
+});
+
+// interval:set:<channelId>:<minutes> — save interval for a channel
+bot.callbackQuery(/^interval:set:(-?\d+):(\d+)$/, async (ctx: Context) => {
+  try {
+    const match = ctx.callbackQuery?.data?.match(/^interval:set:(-?\d+):(\d+)$/);
+    const channelId = match![1];
+    const minutes = parseInt(match![2], 10);
 
     if (!VALID_INTERVALS.includes(minutes as PostInterval)) {
       await ctx.answerCallbackQuery('Invalid interval.');
@@ -1313,11 +1341,13 @@ bot.callbackQuery(/^interval:set:(\d+)$/, async (ctx: Context) => {
     }
 
     await ctx.answerCallbackQuery();
-    await setPostInterval(minutes as PostInterval);
+    await setChannelInterval(channelId, minutes as PostInterval);
 
+    const channel = await PostingChannel.findOne({ channelId });
+    const title = channel?.channelTitle ?? channelId;
     await ctx.editMessageText(
-      `Post interval: every ${minutes} minutes ✅`,
-      { reply_markup: createIntervalKeyboard(minutes as PostInterval, true) }
+      `Post interval for ${title}: ${minutes} min ✅`,
+      { reply_markup: createChannelIntervalPickerKeyboard(channelId, minutes as PostInterval) }
     );
   } catch (error) {
     await ErrorMessages.catchAndReply(
@@ -1329,22 +1359,25 @@ bot.callbackQuery(/^interval:set:(\d+)$/, async (ctx: Context) => {
   }
 });
 
-bot.callbackQuery('interval:repack', async (ctx: Context) => {
+// interval:repack:<channelId> — repack queue for a specific channel
+bot.callbackQuery(/^interval:repack:(-?\d+)$/, async (ctx: Context) => {
   try {
     await ctx.answerCallbackQuery();
+    const repackMatch = ctx.callbackQuery?.data?.match(/^interval:repack:(-?\d+)$/);
+    const channelId = repackMatch![1];
     const repackService = new QueueRepackService();
-    const [{ totalPosts, channelCount }, intervalMinutes] = await Promise.all([
-      repackService.repackAll(),
-      getPostInterval(),
+    const [count, currentInterval, channel] = await Promise.all([
+      repackService.repackChannel(channelId),
+      getPostInterval(channelId),
+      PostingChannel.findOne({ channelId }),
     ]);
-
+    const title = channel?.channelTitle ?? channelId;
     const text =
-      totalPosts === 0
-        ? 'No pending posts to reschedule.'
-        : `Queue repacked ✅\n${totalPosts} post${totalPosts === 1 ? '' : 's'} across ${channelCount} channel${channelCount === 1 ? '' : 's'} rescheduled.`;
-
+      count === 0
+        ? `No pending posts to reschedule for ${title}.`
+        : `Queue repacked ✅\n${count} post${count === 1 ? '' : 's'} for ${title} rescheduled to ${currentInterval}-min intervals.`;
     await ctx.editMessageText(text, {
-      reply_markup: createIntervalKeyboard(intervalMinutes, true),
+      reply_markup: createChannelIntervalPickerKeyboard(channelId, currentInterval),
     });
   } catch (error) {
     await ErrorMessages.catchAndReply(
@@ -1355,3 +1388,30 @@ bot.callbackQuery('interval:repack', async (ctx: Context) => {
     );
   }
 });
+
+// interval:back — return to channel list
+bot.callbackQuery('interval:back', async (ctx: Context) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const channels = await getActivePostingChannels();
+    const intervals = await Promise.all(channels.map((ch) => getPostInterval(ch.channelId)));
+    const lines = channels
+      .map((ch, i) => `• ${ch.channelTitle ?? ch.channelId} — ${intervals[i]} min`)
+      .join('\n');
+    const text =
+      channels.length === 0
+        ? 'No posting channels configured.'
+        : `Post intervals:\n${lines}`;
+    await ctx.editMessageText(text, {
+      reply_markup: createChannelIntervalListKeyboard(channels),
+    });
+  } catch (error) {
+    await ErrorMessages.catchAndReply(
+      ctx,
+      error,
+      'Error loading intervals. Please try again.',
+      'interval:back callback'
+    );
+  }
+});
+
