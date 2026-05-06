@@ -53,7 +53,7 @@ interface QueuePreviewState {
   channelId: string;
   page: number;
 }
-const queuePreviewStateMap = new Map<number, QueuePreviewState>();
+export const queuePreviewStateMap = new Map<number, QueuePreviewState>();
 
 // Get SessionService from DI container (will be initialized in index.ts)
 let sessionService: SessionService;
