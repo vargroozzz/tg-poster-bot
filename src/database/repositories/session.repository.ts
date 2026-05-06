@@ -67,4 +67,11 @@ export class SessionRepository extends BaseRepository<ISession> {
       expiresAt: { $gt: new Date() },
     });
   }
+
+  /**
+   * Delete sessions matching a filter
+   */
+  async deleteWhere(filter: Partial<{ userId: number; messageId: number }>): Promise<void> {
+    await this.model.deleteMany(filter);
+  }
 }
