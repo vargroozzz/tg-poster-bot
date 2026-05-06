@@ -143,6 +143,7 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   /**
    * Update content and scheduling parameters of a pending post in-place.
    * scheduledTime is intentionally not touched.
+   * Only updates posts with status 'pending' to prevent updating already-published posts.
    */
   async updatePost(
     postId: string,
@@ -155,6 +156,9 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
       customText?: string;
     }
   ): Promise<void> {
-    await this.model.findByIdAndUpdate(postId, updates);
+    await this.model.findOneAndUpdate(
+      { _id: postId, status: 'pending' },
+      { $set: updates }
+    );
   }
 }
