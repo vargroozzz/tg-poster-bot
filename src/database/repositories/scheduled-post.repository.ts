@@ -1,6 +1,7 @@
 import { BaseRepository } from './base.repository.js';
 import { ScheduledPost, type IScheduledPost } from '../models/scheduled-post.model.js';
 import type { RetryMetadata } from '../models/scheduled-post.model.js';
+import type { MessageContent, TextHandling, TransformAction } from '../../types/message.types.js';
 
 /**
  * Repository for scheduled posts
@@ -137,5 +138,23 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
       { targetChannelId: channelId, status: 'pending', scheduledTime: { $gt: afterTime } },
       [{ $set: { scheduledTime: { $subtract: ['$scheduledTime', 30 * 60 * 1000] } } }]
     );
+  }
+
+  /**
+   * Update content and scheduling parameters of a pending post in-place.
+   * scheduledTime is intentionally not touched.
+   */
+  async updatePost(
+    postId: string,
+    updates: {
+      content: MessageContent;
+      action: TransformAction;
+      rawContent: MessageContent;
+      textHandling?: TextHandling;
+      selectedNickname?: string | null;
+      customText?: string;
+    }
+  ): Promise<void> {
+    await this.model.findByIdAndUpdate(postId, updates);
   }
 }
