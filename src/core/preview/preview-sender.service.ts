@@ -41,7 +41,7 @@ export class PreviewSenderService {
 
     if (session?.selectedAction === 'forward') {
       // For forward action: use forwardMessage(s) to preserve "Forwarded from" attribution
-      const sourceChatId = session.originalMessage.chat.id;
+      const sourceChatId = session.originalMessage!.chat.id;
       const replyChain = session.replyChainMessages;
       const mediaGroup = session.mediaGroupMessages;
 
@@ -69,10 +69,10 @@ export class PreviewSenderService {
           const result = await this.api.forwardMessage(
             userId,
             sourceChatId,
-            session.originalMessage.message_id
+            session.originalMessage!.message_id
           );
           previewMessageIds.push(result.message_id);
-          logger.debug(`Forwarded single message ${session.originalMessage.message_id} to user ${userId} for preview`);
+          logger.debug(`Forwarded single message ${session.originalMessage!.message_id} to user ${userId} for preview`);
         } catch (error) {
           logger.error('Failed to forward single message for preview, falling back to placeholder:', error);
         }
@@ -90,7 +90,7 @@ export class PreviewSenderService {
       }
     } else {
       // For transform action (or unknown): use MediaSenderService
-      const forwardInfo = session ? parseForwardInfo(session.originalMessage) : undefined;
+      const forwardInfo = session ? parseForwardInfo(session.originalMessage!) : undefined;
       const replyParams = forwardInfo?.replyParameters ?? undefined;
 
       // For replies: forward the replied-to message into the PM as visual context,
@@ -98,7 +98,7 @@ export class PreviewSenderService {
       if (replyParams) {
         // external_reply.chat may point to a private linked discussion group copy.
         // Prefer external_reply.origin (always the original public channel) for forwarding.
-        const extOrigin = session?.originalMessage.external_reply?.origin;
+        const extOrigin = session?.originalMessage?.external_reply?.origin;
         const fwdChatId =
           extOrigin?.type === 'channel'
             ? (extOrigin as { type: 'channel'; chat: { id: number } }).chat.id

@@ -784,7 +784,7 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    const originalMessage = session.originalMessage;
+    const originalMessage = session.originalMessage!;
     const mediaGroupMessages = session.mediaGroupMessages;
     const selectedChannel = session.selectedChannel;
 
@@ -954,11 +954,11 @@ bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
     }));
 
     await ctx.api.sendMessage(
-      session.originalMessage.chat.id,
+      session.originalMessage!.chat.id,
       '📍 Select target channel:',
       {
         reply_markup: createChannelSelectKeyboard(channels),
-        reply_to_message_id: session.originalMessage.message_id,
+        reply_to_message_id: session.originalMessage!.message_id,
       }
     );
 

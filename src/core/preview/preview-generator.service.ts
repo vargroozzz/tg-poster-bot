@@ -26,7 +26,7 @@ export class PreviewGeneratorService {
     }
 
     const mediaGroupMessages = session.mediaGroupMessages ?? [];
-    const content = extractMessageContent(session.originalMessage, mediaGroupMessages);
+    const content = extractMessageContent(session.originalMessage!, mediaGroupMessages);
 
     if (!content) {
       throw new Error(`Unable to extract message content from session ${session._id}`);
@@ -39,7 +39,7 @@ export class PreviewGeneratorService {
     }
 
     // For transform action, apply text transformations and attribution
-    const forwardInfo = parseForwardInfo(session.originalMessage);
+    const forwardInfo = parseForwardInfo(session.originalMessage!);
 
     // Reconstruct mediaGroupMessageIds if this is a media group
     if (mediaGroupMessages.length > 1) {

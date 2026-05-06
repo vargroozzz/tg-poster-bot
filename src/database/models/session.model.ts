@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import type { Message } from 'grammy/types';
-import type { PostSelections } from '../../types/message.types.js';
+import type { ForwardInfo, MessageContent, PostSelections } from '../../types/message.types.js';
 
 /**
  * Session model for database-backed flow state management
@@ -11,9 +11,14 @@ export interface ISession extends Document, PostSelections {
   messageId: number;
   chatId: number;
   state: string;
-  originalMessage: Message;
+  originalMessage?: Message;
   previewMessageId?: number;
   previewMessageIds?: number[];
+  editingPostId?: string;
+  editingOriginalChannelId?: string;
+  editingOriginalScheduledTime?: Date;
+  editingRawContent?: MessageContent;
+  editingOriginalForward?: ForwardInfo;
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date;
@@ -39,7 +44,7 @@ const sessionSchema = new Schema<ISession>({
   },
   originalMessage: {
     type: Schema.Types.Mixed,
-    required: true,
+    required: false,
   },
   selectedChannel: String,
   selectedAction: {
@@ -63,6 +68,11 @@ const sessionSchema = new Schema<ISession>({
     type: [Number],
     default: undefined,
   },
+  editingPostId: { type: String },
+  editingOriginalChannelId: { type: String },
+  editingOriginalScheduledTime: { type: Date },
+  editingRawContent: { type: Schema.Types.Mixed },
+  editingOriginalForward: { type: Schema.Types.Mixed },
   createdAt: {
     type: Date,
     default: Date.now,
