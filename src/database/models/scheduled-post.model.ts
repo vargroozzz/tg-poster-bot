@@ -18,6 +18,10 @@ export interface IScheduledPost extends Document {
   originalForward: ForwardInfo;
   content: MessageContent;
   action: TransformAction;
+  rawContent?: MessageContent;
+  textHandling?: 'keep' | 'remove' | 'quote';
+  selectedNickname?: string | null;
+  customText?: string;
   status: 'pending' | 'posted' | 'failed';
   postedAt?: Date;
   error?: string;
@@ -86,6 +90,18 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     enum: ['transform', 'forward'],
     required: true,
   },
+  rawContent: {
+    type: Schema.Types.Mixed,
+  },
+  textHandling: {
+    type: String,
+    enum: ['keep', 'remove', 'quote'],
+  },
+  selectedNickname: {
+    type: String,
+    default: null,
+  },
+  customText: String,
   status: {
     type: String,
     enum: ['pending', 'posted', 'failed'],
