@@ -21,7 +21,7 @@ export class PostSchedulerService {
    */
   async scheduleTransformPost(params: {
     targetChannelId: string;
-    originalMessage: Message;
+    originalMessage?: Message;
     forwardInfo: ForwardInfo;
     content: MessageContent;
     textHandling: TextHandling;
@@ -37,10 +37,8 @@ export class PostSchedulerService {
       customText,
     } = params;
 
-    // Find next available slot
     const nextSlot = await findNextAvailableSlot(targetChannelId);
 
-    // Transform the message text
     const originalText = content.text ?? '';
     const transformedText = await transformerService.transformMessage(
       originalText,
@@ -51,13 +49,11 @@ export class PostSchedulerService {
       customText
     );
 
-    // Create transformed content
     const transformedContent = {
       ...content,
       text: transformedText,
     };
 
-    // Save to database
     const scheduledPost = await this.repository.create({
       scheduledTime: nextSlot,
       targetChannelId,
@@ -65,6 +61,10 @@ export class PostSchedulerService {
       action: 'transform',
       originalForward: forwardInfo,
       content: transformedContent,
+      rawContent: content,
+      textHandling,
+      selectedNickname: selectedNickname ?? null,
+      customText,
       createdAt: new Date(),
     });
 
@@ -79,16 +79,14 @@ export class PostSchedulerService {
    */
   async scheduleForwardPost(params: {
     targetChannelId: string;
-    originalMessage: Message;
+    originalMessage?: Message;
     forwardInfo: ForwardInfo;
     content: MessageContent;
   }): Promise<{ scheduledTime: Date; postId: string }> {
     const { targetChannelId, forwardInfo, content } = params;
 
-    // Find next available slot
     const nextSlot = await findNextAvailableSlot(targetChannelId);
 
-    // Process text through transformer (for consistency, though forward action doesn't transform)
     const processedText = await transformerService.transformMessage(
       content.text ?? '',
       forwardInfo,
@@ -98,13 +96,11 @@ export class PostSchedulerService {
       undefined
     );
 
-    // Create content with processed text
     const processedContent = {
       ...content,
       text: processedText,
     };
 
-    // Save to database
     const scheduledPost = await this.repository.create({
       scheduledTime: nextSlot,
       targetChannelId,
@@ -112,6 +108,9 @@ export class PostSchedulerService {
       action: 'forward',
       originalForward: forwardInfo,
       content: processedContent,
+      rawContent: content,
+      textHandling: 'keep',
+      selectedNickname: null,
       createdAt: new Date(),
     });
 
