@@ -16,6 +16,10 @@ export class PreviewGeneratorService {
   async generatePreview(session: ISession): Promise<MessageContent> {
     logger.debug(`Generating preview for session ${session._id}, action: ${session.selectedAction}`);
 
+    if (session.editingPostId) {
+      return this.generatePreviewForEdit(session);
+    }
+
     // For reply chains, return placeholder content
     // Actual preview is sent via forwardMessages in PreviewSenderService
     if (session.replyChainMessages && session.replyChainMessages.length > 1) {
@@ -68,5 +72,32 @@ export class PreviewGeneratorService {
       ...content,
       text: transformedText,
     };
+  }
+
+  private async generatePreviewForEdit(session: ISession): Promise<MessageContent> {
+    const rawContent = session.editingRawContent;
+    if (!rawContent) {
+      throw new Error(`Edit session ${session._id} has no editingRawContent`);
+    }
+
+    if (session.selectedAction === 'forward') {
+      return rawContent;
+    }
+
+    const forwardInfo = session.editingOriginalForward;
+    if (!forwardInfo) {
+      throw new Error(`Edit session ${session._id} has no editingOriginalForward`);
+    }
+
+    const transformedText = await transformerService.transformMessage(
+      rawContent.text ?? '',
+      forwardInfo,
+      'transform',
+      session.textHandling ?? 'keep',
+      session.selectedNickname,
+      session.customText
+    );
+
+    return { ...rawContent, text: transformedText };
   }
 }
