@@ -1,6 +1,7 @@
 import type { Message } from 'grammy/types';
 import { SessionRepository } from '../../database/repositories/session.repository.js';
 import type { ISession } from '../../database/models/session.model.js';
+import type { IScheduledPost } from '../../database/models/scheduled-post.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
 import { logger } from '../../utils/logger.js';
 
@@ -32,6 +33,41 @@ export class SessionService {
     } as Partial<ISession>);
 
     logger.debug(`Created session ${session._id} for user ${userId}, message ${message.message_id}`);
+    return session;
+  }
+
+  /**
+   * Create a session for editing an existing scheduled post.
+   * No originalMessage — edit callbacks use sessionId directly.
+   * messageId: 0 is a sentinel (Telegram IDs start at 1).
+   */
+  async createForEdit(userId: number, post: IScheduledPost): Promise<ISession> {
+    const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);
+
+    // Delete any existing edit session for this user to avoid unique-index conflict
+    await this.repository.deleteWhere({ userId, messageId: 0 });
+
+    const session = await this.repository.create({
+      userId,
+      messageId: 0,
+      chatId: userId,
+      state: SessionState.CHANNEL_SELECT,
+      editingPostId: post._id.toString(),
+      editingOriginalChannelId: post.targetChannelId,
+      editingOriginalScheduledTime: post.scheduledTime,
+      editingRawContent: post.rawContent ?? post.content,
+      editingOriginalForward: post.originalForward,
+      selectedChannel: post.targetChannelId,
+      selectedAction: post.action,
+      textHandling: post.textHandling,
+      selectedNickname: post.selectedNickname,
+      customText: post.customText,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      expiresAt,
+    } as Partial<ISession>);
+
+    logger.debug(`Created edit session ${session._id} for user ${userId}, post ${post._id}`);
     return session;
   }
 
