@@ -40,47 +40,54 @@ export class PreviewSenderService {
     const previewMessageIds: number[] = [];
 
     if (session?.selectedAction === 'forward') {
-      // For forward action: use forwardMessage(s) to preserve "Forwarded from" attribution
-      const sourceChatId = session.originalMessage!.chat.id;
-      const replyChain = session.replyChainMessages;
-      const mediaGroup = session.mediaGroupMessages;
+      let sourceChatId: number;
+      let bulkMessageIds: number[] | null = null;
+      let singleMessageId: number;
 
-      // Pick the bulk message list (reply chain takes priority over media group)
-      const bulkMessages =
-        (replyChain?.length ?? 0) > 1 ? replyChain :
-        (mediaGroup?.length ?? 0) > 1 ? mediaGroup :
-        null;
+      if (session.editingPostId) {
+        // Edit session: source info comes from stored forwardInfo
+        const fwd = session.editingOriginalForward!;
+        sourceChatId = fwd.chatId;
+        singleMessageId = fwd.messageId;
+        const bulkIds = fwd.replyChainMessageIds ?? fwd.mediaGroupMessageIds ?? null;
+        bulkMessageIds = (bulkIds?.length ?? 0) > 1 ? bulkIds! : null;
+      } else {
+        sourceChatId = session.originalMessage!.chat.id;
+        singleMessageId = session.originalMessage!.message_id;
+        const replyChain = session.replyChainMessages;
+        const mediaGroup = session.mediaGroupMessages;
+        const bulkMessages =
+          (replyChain?.length ?? 0) > 1 ? replyChain :
+          (mediaGroup?.length ?? 0) > 1 ? mediaGroup :
+          null;
+        bulkMessageIds = bulkMessages ? bulkMessages.map((msg) => msg.message_id) : null;
+      }
 
-      if (bulkMessages) {
-        const messageIds = bulkMessages.map((msg) => msg.message_id);
+      if (bulkMessageIds) {
         try {
           const result = (await this.api.raw.forwardMessages({
             chat_id: userId,
             from_chat_id: sourceChatId,
-            message_ids: messageIds,
+            message_ids: bulkMessageIds,
           })) as Array<{ message_id: number }>;
           previewMessageIds.push(...result.map((r) => r.message_id));
-          logger.debug(`Forwarded ${messageIds.length} messages to user ${userId} for preview`);
+          logger.debug(`Forwarded ${bulkMessageIds.length} messages to user ${userId} for preview`);
         } catch (error) {
           logger.error('Failed to forward messages for preview, falling back to placeholder:', error);
         }
       } else {
         try {
-          const result = await this.api.forwardMessage(
-            userId,
-            sourceChatId,
-            session.originalMessage!.message_id
-          );
+          const result = await this.api.forwardMessage(userId, sourceChatId, singleMessageId);
           previewMessageIds.push(result.message_id);
-          logger.debug(`Forwarded single message ${session.originalMessage!.message_id} to user ${userId} for preview`);
+          logger.debug(`Forwarded single message ${singleMessageId} to user ${userId} for preview`);
         } catch (error) {
           logger.error('Failed to forward single message for preview, falling back to placeholder:', error);
         }
       }
 
-      // Fallback: send a text placeholder if forwarding failed
+      // Fallback placeholder if forwarding failed
       if (previewMessageIds.length === 0) {
-        const count = bulkMessages?.length ?? 1;
+        const count = bulkMessageIds?.length ?? 1;
         const fallbackContent: MessageContent = {
           type: 'text',
           text: `🧵 Thread of ${count} message${count > 1 ? 's' : ''} will be forwarded (preview unavailable)`,
@@ -90,7 +97,11 @@ export class PreviewSenderService {
       }
     } else {
       // For transform action (or unknown): use MediaSenderService
-      const forwardInfo = session ? parseForwardInfo(session.originalMessage!) : undefined;
+      const forwardInfo = session
+        ? (session.editingPostId
+            ? session.editingOriginalForward
+            : parseForwardInfo(session.originalMessage!))
+        : undefined;
       const replyParams = forwardInfo?.replyParameters ?? undefined;
 
       // For replies: forward the replied-to message into the PM as visual context,
