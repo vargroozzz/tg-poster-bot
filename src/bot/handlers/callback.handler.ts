@@ -43,6 +43,7 @@ import {
 import { getPostInterval, setChannelInterval, VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
 import { createChannelIntervalListKeyboard, createChannelIntervalPickerKeyboard } from '../keyboards/interval.keyboard.js';
 import { QueueRepackService } from '../../core/queue/queue-repack.service.js';
+import { createEditChannelSelectKeyboard } from '../keyboards/edit-keyboards.js';
 
 const postScheduler = new PostSchedulerService();
 const queueService = new QueueService();
@@ -784,6 +785,89 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
       return;
     }
 
+    const fromId = ctx.from?.id;
+
+    // ── Edit-session confirm ──────────────────────────────────────────────
+    if (session.editingPostId) {
+      const {
+        editingPostId,
+        editingOriginalChannelId,
+        editingOriginalScheduledTime,
+        editingRawContent,
+        editingOriginalForward,
+      } = session;
+
+      const sameChannel = session.selectedChannel === editingOriginalChannelId;
+      const repository = new ScheduledPostRepository();
+
+      if (sameChannel) {
+        let newContent = editingRawContent!;
+        if (session.selectedAction === 'transform') {
+          const transformedText = await transformerService.transformMessage(
+            editingRawContent!.text ?? '',
+            editingOriginalForward!,
+            'transform',
+            session.textHandling ?? 'keep',
+            session.selectedNickname,
+            session.customText
+          );
+          newContent = { ...editingRawContent!, text: transformedText };
+        }
+
+        await repository.updatePost(editingPostId!, {
+          content: newContent,
+          action: session.selectedAction ?? 'transform',
+          rawContent: editingRawContent!,
+          textHandling: session.textHandling,
+          selectedNickname: session.selectedNickname,
+          customText: session.customText,
+        });
+
+        if (fromId) await deletePreviewMessages(ctx, fromId, session);
+        await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+        await sessionSvc.complete(sessionKey);
+
+        const channelDoc = await PostingChannel.findOne({ channelId: editingOriginalChannelId }).lean();
+        const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? editingOriginalChannelId;
+        await ctx.reply(
+          `✅ Post updated!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime!)}`
+        );
+      } else {
+        await queueService.deleteAndCascade(editingPostId!);
+
+        const newChannelId = session.selectedChannel!;
+        const { scheduledTime } =
+          session.selectedAction === 'forward'
+            ? await postScheduler.scheduleForwardPost({
+                targetChannelId: newChannelId,
+                forwardInfo: editingOriginalForward!,
+                content: editingRawContent!,
+              })
+            : await postScheduler.scheduleTransformPost({
+                targetChannelId: newChannelId,
+                forwardInfo: editingOriginalForward!,
+                content: editingRawContent!,
+                textHandling: session.textHandling ?? 'keep',
+                selectedNickname: session.selectedNickname,
+                customText: session.customText,
+              });
+
+        if (fromId) await deletePreviewMessages(ctx, fromId, session);
+        await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+        await sessionSvc.complete(sessionKey);
+
+        const channelDoc = await PostingChannel.findOne({ channelId: newChannelId }).lean();
+        const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? newChannelId;
+        await ctx.reply(
+          `✅ Moved to ${channelLabel}\nScheduled for: ${formatSlotTime(scheduledTime)}`
+        );
+      }
+
+      logger.info(`Edit confirmed for session ${sessionKey}`);
+      return;
+    }
+    // ── End edit-session confirm ──────────────────────────────────────────
+
     const originalMessage = session.originalMessage!;
     const mediaGroupMessages = session.mediaGroupMessages;
     const selectedChannel = session.selectedChannel;
@@ -821,7 +905,6 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
       ? await postScheduler.scheduleForwardPost(baseParams)
       : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedNickname, customText });
 
-    const fromId = ctx.from?.id;
     if (fromId) {
       await deletePreviewMessages(ctx, fromId, session);
     }
@@ -881,6 +964,14 @@ bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
 
     await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
 
+    // Edit sessions: original post stays untouched
+    if (session.editingPostId) {
+      await sessionSvc.complete(sessionKey);
+      await ctx.reply('Edit cancelled.');
+      logger.info(`Edit cancelled for session ${sessionKey}`);
+      return;
+    }
+
     await sessionSvc.complete(sessionKey);
 
     await ctx.reply('Cancelled. Forward a new message to start over.');
@@ -928,6 +1019,32 @@ bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
 
     // Delete the control message (this message with the keyboard)
     await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+
+    // Edit sessions: re-send channel selection
+    if (session.editingPostId) {
+      await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
+        selectedChannel: session.editingOriginalChannelId,
+        selectedAction: undefined,
+        textHandling: undefined,
+        selectedNickname: undefined,
+        customText: undefined,
+        previewMessageId: undefined,
+        previewMessageIds: undefined,
+      });
+
+      const channels = await getActivePostingChannels();
+      if (channels.length === 0) {
+        await ctx.reply('⚠️ No posting channels configured.');
+        return;
+      }
+      const keyboard = createEditChannelSelectKeyboard(channels, sessionKey);
+      await ctx.api.sendMessage(fromId!, '📍 Select target channel:', {
+        reply_markup: keyboard as any,
+      });
+
+      logger.info(`Edit back: re-showing channel select for session ${sessionKey}`);
+      return;
+    }
 
     // Reset session back to channel selection state
     await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
