@@ -33,7 +33,6 @@ function getSessionService(): SessionService | undefined {
 
 bot.callbackQuery(/^queue:edit:([a-f0-9]{24})$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
     const postId = (ctx.match as RegExpExecArray)[1];
     const userId = ctx.from?.id;
     if (!userId) return;
@@ -44,6 +43,8 @@ bot.callbackQuery(/^queue:edit:([a-f0-9]{24})$/, async (ctx: Context) => {
       await ctx.answerCallbackQuery({ text: '❌ Post already published or deleted', show_alert: true });
       return;
     }
+
+    await ctx.answerCallbackQuery();
 
     const state = queuePreviewStateMap.get(userId);
     if (state) {
