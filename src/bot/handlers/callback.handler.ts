@@ -1037,8 +1037,9 @@ bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
         await ctx.reply('⚠️ No posting channels configured.');
         return;
       }
+      if (!fromId) return;
       const keyboard = createEditChannelSelectKeyboard(channels, sessionKey);
-      await ctx.api.sendMessage(fromId!, '📍 Select target channel:', {
+      await ctx.api.sendMessage(fromId, '📍 Select target channel:', {
         reply_markup: keyboard as any,
       });
 
