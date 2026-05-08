@@ -45,7 +45,7 @@ export class SessionService {
     const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);
 
     // Delete any existing edit session for this user to avoid unique-index conflict
-    await this.repository.deleteWhere({ userId, messageId: 0 });
+    await this.repository.deleteMany({ userId, messageId: 0 });
 
     const session = await this.repository.create({
       userId,

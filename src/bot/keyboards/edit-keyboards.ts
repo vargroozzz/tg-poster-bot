@@ -58,7 +58,7 @@ export function createEditNicknameKeyboard(
 export async function createEditCustomTextKeyboard(sessionId: string): Promise<object> {
   const presets = await listCustomTextPresets();
   const rows: object[][] = presets.map((p) => [
-    { text: p.label, callback_data: `queue:edit:custom:preset:${sessionId}:${p._id}` },
+    { text: p.label, callback_data: `ec:preset:${sessionId}:${p._id}` },
   ]);
   rows.push([
     { text: 'Skip', callback_data: `queue:edit:custom:${sessionId}:skip`, style: 'primary' },
