@@ -814,7 +814,7 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
           newContent = { ...editingRawContent!, text: transformedText };
         }
 
-        await repository.updatePost(editingPostId!, {
+        const updated = await repository.updatePost(editingPostId!, {
           content: newContent,
           action: session.selectedAction ?? 'transform',
           rawContent: editingRawContent!,
@@ -826,6 +826,11 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
         if (fromId) await deletePreviewMessages(ctx, fromId, session);
         await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
         await sessionSvc.complete(sessionKey);
+
+        if (!updated) {
+          await ctx.reply('⚠️ Post was already published — your changes were not applied.');
+          return;
+        }
 
         const channelDoc = await PostingChannel.findOne({ channelId: editingOriginalChannelId }).lean();
         const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? editingOriginalChannelId;
