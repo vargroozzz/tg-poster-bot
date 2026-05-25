@@ -459,7 +459,6 @@ async function processReplyChain(bufferKey: string) {
       // Store reply chain messages and pre-select forward action
       const updatedSession = await sessionSvc.update(sessionId, {
         replyChainMessages: messages,
-        selectedAction: 'forward',
       });
       logger.info(`[RC-DEBUG] session created: id=${sessionId}, messageCount=${messages.length}, ids=[${messages.map((m) => m.message_id).join(',')}], updateResult=${updatedSession ? `ok(${updatedSession.replyChainMessages?.length})` : 'null'}`);
     } catch (err) {
