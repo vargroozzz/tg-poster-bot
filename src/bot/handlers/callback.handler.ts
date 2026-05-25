@@ -221,21 +221,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
     const foundKey = session?._id.toString();
 
-    // Check for reply chain BEFORE state machine transition.
-    // Reply chains always go directly to preview (action selection is skipped).
-    // Checking here avoids writing a transient ACTION_SELECT state to the DB.
-    const hasReplyChain = (session?.replyChainMessages?.length ?? 0) > 1;
-    logger.info(`[RC-DEBUG] channel select: sessionFound=${!!session}, replyChainLen=${session?.replyChainMessages?.length}, hasReplyChain=${hasReplyChain}`);
-
-    if (hasReplyChain && session) {
-      const sessionSvc = getSessionService();
-      if (sessionSvc) {
-        await sessionSvc.update(session._id.toString(), { selectedChannel: selectedChannelId });
-        logger.debug(`Reply chain detected, skipping action selection for session ${session._id}`);
-        await showPreview(ctx, session._id.toString());
-        return;
-      }
-    }
+    logger.info(`[RC-DEBUG] channel select: sessionFound=${!!session}, replyChainLen=${session?.replyChainMessages?.length}`);
 
     // When the user sent their own reply to a cross-chat message (replyParameters set,
     // no forward_origin so fromChannelId/fromUserId are unset), the content is already
