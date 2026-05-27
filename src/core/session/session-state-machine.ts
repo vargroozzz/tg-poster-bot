@@ -4,9 +4,6 @@ export function getNextState(current: SessionState, context: SessionContext): Se
   switch (current) {
     case SessionState.CHANNEL_SELECT:
       if (context.isGreenListed) return SessionState.COMPLETED;
-      if (context.isRedListed) {
-        return context.hasText ? SessionState.TEXT_HANDLING : SessionState.NICKNAME_SELECT;
-      }
       return SessionState.ACTION_SELECT;
 
     case SessionState.ACTION_SELECT:
