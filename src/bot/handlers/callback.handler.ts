@@ -204,18 +204,12 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Parse forward info to check if it's green-listed or red-listed
+    // Parse forward info to check green list
     const forwardInfo = parseForwardInfo(originalMessage);
     const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
-    // Check if red-listed
-    const isRedListed = forwardInfo?.fromChannelId
-      ? await transformerService.isRedListed(String(forwardInfo.fromChannelId))
-      : false;
-
     // Check if message has text
     const content = extractMessageContent(originalMessage);
-    const hasText = !!(content?.text && content.text.trim().length > 0);
 
     // DUAL READ: Try to find session in DB first, fall back to Map
     const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
@@ -227,8 +221,8 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
     if (session && sessionSvc) {
       const nextState = getNextState(SessionState.CHANNEL_SELECT, {
         isGreenListed: shouldAutoForward,
-        isRedListed,
-        hasText,
+        isRedListed: false,
+        hasText: false,
         isForward: false,
       });
       await sessionSvc.updateState(session._id.toString(), nextState, {
@@ -249,22 +243,6 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Red-listed channels auto-transform without asking
-    if (isRedListed) {
-      if (session && sessionSvc) {
-        await sessionSvc.update(session._id.toString(), { selectedAction: 'transform' });
-      }
-      if (hasText) {
-        await ctx.editMessageText('How should the text be handled?', {
-          reply_markup: createTextHandlingKeyboard(),
-        });
-      } else {
-        await handleNicknameSelection(ctx, originalMessage, session?._id.toString());
-      }
-      logger.debug(`Red-listed channel - auto-transforming message ${originalMessage.message_id}`);
-      return;
-    }
-
     // Polls cannot be transformed — always forward regardless of origin
     if (content?.type === 'poll') {
       if (session && sessionSvc) {
@@ -275,41 +253,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Neither green nor red listed
-    const isForwarded = !!originalMessage.forward_origin;
-
-    if (!isForwarded) {
-      // Non-forwarded message: forward option makes no sense, auto-select transform
-      // Plain text (no media, no external reply): skip text handling (always keep) and custom text
-      const isPlainText =
-        content?.type === 'text' && !originalMessage.external_reply;
-      if (session && sessionSvc) {
-        const nextState = getNextState(SessionState.ACTION_SELECT, {
-          isGreenListed: false,
-          isRedListed: false,
-          hasText,
-          isForward: false,
-          isPlainText,
-        });
-        await sessionSvc.updateState(session._id.toString(), nextState, {
-          selectedAction: 'transform',
-          ...(isPlainText ? { textHandling: 'keep' } : {}),
-        });
-      }
-      if (isPlainText) {
-        await handleNicknameSelection(ctx, originalMessage, session?._id.toString(), true);
-      } else if (hasText) {
-        await ctx.editMessageText('How should the text be handled?', {
-          reply_markup: createTextHandlingKeyboard(),
-        });
-      } else {
-        await handleNicknameSelection(ctx, originalMessage, session?._id.toString());
-      }
-      logger.debug(`Non-forwarded message ${originalMessage.message_id}: auto-selected transform`);
-      return;
-    }
-
-    // Forwarded message - show transform/forward options
+    // Show action keyboard for all non-green, non-poll messages
     const keyboard = createForwardActionKeyboard();
     await ctx.editMessageText(
       'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
