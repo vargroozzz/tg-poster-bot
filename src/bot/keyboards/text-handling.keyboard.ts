@@ -1,6 +1,6 @@
-import { InlineKeyboard } from 'grammy';
+import type { InlineKeyboardMarkup } from 'grammy/types';
 
-export function createTextHandlingKeyboard() {
+export function createTextHandlingKeyboard(): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
@@ -9,5 +9,5 @@ export function createTextHandlingKeyboard() {
       ],
       [{ text: 'Wrap in quote', callback_data: 'text:quote' }],
     ],
-  } as unknown as InlineKeyboard;
+  };
 }

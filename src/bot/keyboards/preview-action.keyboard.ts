@@ -1,11 +1,6 @@
-import { InlineKeyboard } from 'grammy';
+import type { InlineKeyboardMarkup } from 'grammy/types';
 
-/**
- * Creates keyboard for preview actions
- * User can schedule the post or cancel
- * @param sessionId - The session ID to embed in callback data for lookup
- */
-export function createPreviewActionKeyboard(sessionId: string): InlineKeyboard {
+export function createPreviewActionKeyboard(sessionId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
@@ -16,5 +11,5 @@ export function createPreviewActionKeyboard(sessionId: string): InlineKeyboard {
         { text: '⬅️ Back to start', callback_data: `preview:back:${sessionId}` },
       ],
     ],
-  } as unknown as InlineKeyboard;
+  };
 }

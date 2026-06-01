@@ -1,6 +1,6 @@
-import { InlineKeyboard } from 'grammy';
+import type { InlineKeyboardMarkup } from 'grammy/types';
 
-export function createForwardActionKeyboard(): InlineKeyboard {
+export function createForwardActionKeyboard(): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [{ text: '⚡ Quick post', callback_data: 'action:quick', style: 'primary' }],
@@ -9,5 +9,5 @@ export function createForwardActionKeyboard(): InlineKeyboard {
         { text: '➡️ Forward', callback_data: 'action:forward' },
       ],
     ],
-  } as unknown as InlineKeyboard;
+  };
 }
