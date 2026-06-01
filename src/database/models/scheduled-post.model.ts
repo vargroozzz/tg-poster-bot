@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import type { ForwardInfo, MessageContent, TransformAction } from '../../types/message.types.js';
+import type { ForwardInfo, MessageContent, TransformAction, TextHandling } from '../../types/message.types.js';
 
 /**
  * Metadata for tracking retry attempts
@@ -19,7 +19,7 @@ export interface IScheduledPost extends Document {
   content: MessageContent;
   action: TransformAction;
   rawContent?: MessageContent;
-  textHandling?: 'keep' | 'remove' | 'quote';
+  textHandling?: TextHandling;
   selectedUserId?: number | null;
   customText?: string;
   status: 'pending' | 'posted' | 'failed';
