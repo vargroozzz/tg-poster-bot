@@ -10,6 +10,8 @@ import {
 } from '../../keyboards/interval.keyboard.js';
 import { QueueRepackService } from '../../../core/queue/queue-repack.service.js';
 
+export function registerInterval(): void {
+
 // interval:ch:<channelId> — show picker for a single channel
 bot.callbackQuery(/^interval:ch:(-?\d+)$/, async (ctx: Context) => {
   try {
@@ -98,3 +100,5 @@ bot.callbackQuery('interval:back', async (ctx: Context) => {
     await ErrorMessages.catchAndReply(ctx, error, 'Error loading intervals. Please try again.', 'interval:back callback');
   }
 });
+
+}

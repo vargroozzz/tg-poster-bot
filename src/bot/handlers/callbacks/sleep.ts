@@ -52,6 +52,8 @@ async function saveSleepSettings(
   await Promise.all(ops);
 }
 
+export function registerSleep(): void {
+
 bot.callbackQuery('sleep:enable', async (ctx: Context) => {
   try {
     await ctx.answerCallbackQuery().catch(() => {});
@@ -139,3 +141,5 @@ bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
     await ErrorMessages.catchAndReply(ctx, error, 'Error cancelling. Please try again.', 'sleep:cancel callback');
   }
 });
+
+}
