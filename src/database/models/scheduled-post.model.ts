@@ -135,8 +135,6 @@ scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: tr
 // Sparse index for usage-count aggregation in nickname keyboard
 scheduledPostSchema.index({ selectedUserId: 1 }, { sparse: true });
 
-// TTL index for automatic cleanup after 90 days
-scheduledPostSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90 days
 
 export const ScheduledPost = mongoose.model<IScheduledPost>(
   'ScheduledPost',
