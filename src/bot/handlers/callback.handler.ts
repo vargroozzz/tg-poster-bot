@@ -186,7 +186,7 @@ async function renderQueuePage(
 // Handle channel selection
 bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const match = ctx.callbackQuery?.data?.match(/^select_channel:(.+)$/);
     const selectedChannelId = match?.[1];
@@ -274,7 +274,7 @@ bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
 // Handle custom text selection
 bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const match = ctx.callbackQuery?.data?.match(/^custom_text:(add|skip)$/);
     const action = match?.[1];
@@ -327,7 +327,7 @@ bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
 // Handle preset custom text selection
 bot.callbackQuery(/^custom_text:preset:(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const presetId = ctx.callbackQuery?.data?.match(/^custom_text:preset:(.+)$/)?.[1];
     if (!presetId) {
@@ -430,7 +430,7 @@ async function showPreview(ctx: Context, sessionKey: string) {
 // Handle nickname selection
 bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const match = ctx.callbackQuery?.data?.match(/^select_nickname:(.+)$/);
     const nicknameSelection = match?.[1];
@@ -500,7 +500,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
 // Handle text handling selection
 bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const match = ctx.callbackQuery?.data?.match(/^text:(keep|remove|quote)$/);
     const textHandling = match?.[1] as 'keep' | 'remove' | 'quote';
@@ -547,7 +547,7 @@ bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
 
 bot.callbackQuery('action:quick', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
     if (!originalMessage) {
@@ -589,7 +589,7 @@ bot.callbackQuery('action:quick', async (ctx: Context) => {
 
 bot.callbackQuery('action:transform', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     // Find the original message from pending forwards
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
@@ -634,7 +634,7 @@ bot.callbackQuery('action:transform', async (ctx: Context) => {
 
 bot.callbackQuery('action:forward', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     // Find the original message
     const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
@@ -675,7 +675,7 @@ bot.callbackQuery('action:forward', async (ctx: Context) => {
 // Handle preview schedule button
 bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const match = ctx.callbackQuery?.data?.match(/^preview:schedule:(.+)$/);
     const sessionKey = match?.[1];
@@ -852,7 +852,7 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
 // Handle preview cancel button
 bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const match = ctx.callbackQuery?.data?.match(/^preview:cancel:(.+)$/);
     const sessionKey = match?.[1];
@@ -907,7 +907,7 @@ bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
 // Handle preview back button — returns to channel selection
 bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const match = ctx.callbackQuery?.data?.match(/^preview:back:(.+)$/);
     const sessionKey = match?.[1];
@@ -1010,13 +1010,13 @@ bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
 
 // queue:noop — pagination label button, does nothing
 bot.callbackQuery('queue:noop', async (ctx: Context) => {
-  await ctx.answerCallbackQuery();
+  await ctx.answerCallbackQuery().catch(() => {});
 });
 
 // queue:channels — back to channel selection screen
 bot.callbackQuery('queue:channels', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const channels = await getActivePostingChannels();
 
     if (channels.length === 0) {
@@ -1034,7 +1034,7 @@ bot.callbackQuery('queue:channels', async (ctx: Context) => {
 // queue:ch:{channelId}:{page} — show paginated queue for a channel
 bot.callbackQuery(/^queue:ch:(.+):(\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const match = ctx.callbackQuery?.data?.match(/^queue:ch:(.+):(\d+)$/);
     if (!match) return;
 
@@ -1050,7 +1050,7 @@ bot.callbackQuery(/^queue:ch:(.+):(\d+)$/, async (ctx: Context) => {
 // queue:preview:{postId}:{channelId}:{page} — send preview of a scheduled post
 bot.callbackQuery(/^queue:preview:([^:]+):(.+):(\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const match = ctx.callbackQuery?.data?.match(/^queue:preview:([^:]+):(.+):(\d+)$/);
     if (!match) return;
 
@@ -1086,7 +1086,7 @@ bot.callbackQuery(/^queue:preview:([^:]+):(.+):(\d+)$/, async (ctx: Context) => 
 // queue:del:{postId} — delete post, cascade reschedule, refresh queue
 bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const match = ctx.callbackQuery?.data?.match(/^queue:del:(.+)$/);
     if (!match) return;
 
@@ -1127,7 +1127,7 @@ bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
 // queue:back — clean up preview messages, leave queue list unchanged
 bot.callbackQuery('queue:back', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const userId = ctx.from?.id;
     if (!userId) return;
 
@@ -1205,7 +1205,7 @@ async function saveSleepSettings(
 // sleep:enable — show start hour picker
 bot.callbackQuery('sleep:enable', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     await ctx.editMessageText('Select start hour:', {
       reply_markup: createHourPickerKeyboard('start'),
     });
@@ -1222,7 +1222,7 @@ bot.callbackQuery('sleep:enable', async (ctx: Context) => {
 // sleep:change — same as enable (show start hour picker)
 bot.callbackQuery('sleep:change', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     await ctx.editMessageText('Select start hour:', {
       reply_markup: createHourPickerKeyboard('start'),
     });
@@ -1239,7 +1239,7 @@ bot.callbackQuery('sleep:change', async (ctx: Context) => {
 // sleep:disable — disable and show updated status
 bot.callbackQuery('sleep:disable', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     await saveSleepSettings(false);
     await showSleepStatus(ctx);
   } catch (error) {
@@ -1255,7 +1255,7 @@ bot.callbackQuery('sleep:disable', async (ctx: Context) => {
 // sleep:start:<h> — store start, show end picker
 bot.callbackQuery(/^sleep:start:(\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const match = ctx.callbackQuery?.data?.match(/^sleep:start:(\d+)$/);
     const startHour = parseInt(match![1], 10);
     await ctx.editMessageText('Select end hour:', {
@@ -1283,7 +1283,7 @@ bot.callbackQuery(/^sleep:end:(\d+):(\d+)$/, async (ctx: Context) => {
       return;
     }
 
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const startStr = startHour.toString().padStart(2, '0');
     const endStr = endHour.toString().padStart(2, '0');
@@ -1303,7 +1303,7 @@ bot.callbackQuery(/^sleep:end:(\d+):(\d+)$/, async (ctx: Context) => {
 // sleep:confirm:<start>:<end> — save and show status
 bot.callbackQuery(/^sleep:confirm:(\d+):(\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const match = ctx.callbackQuery?.data?.match(/^sleep:confirm:(\d+):(\d+)$/);
     const startHour = parseInt(match![1], 10);
     const endHour = parseInt(match![2], 10);
@@ -1322,7 +1322,7 @@ bot.callbackQuery(/^sleep:confirm:(\d+):(\d+)$/, async (ctx: Context) => {
 // sleep:cancel — discard changes, show current status
 bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     await showSleepStatus(ctx);
   } catch (error) {
     await ErrorMessages.catchAndReply(
@@ -1341,7 +1341,7 @@ bot.callbackQuery('sleep:cancel', async (ctx: Context) => {
 // interval:ch:<channelId> — show picker for a specific channel
 bot.callbackQuery(/^interval:ch:(-?\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const channelId = (ctx.match as RegExpExecArray)[1];
     const [channel, currentInterval] = await Promise.all([
       PostingChannel.findOne({ channelId }),
@@ -1373,7 +1373,7 @@ bot.callbackQuery(/^interval:set:(-?\d+):(\d+)$/, async (ctx: Context) => {
       return;
     }
 
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     await setChannelInterval(channelId, minutes as PostInterval);
 
     const channel = await PostingChannel.findOne({ channelId });
@@ -1395,7 +1395,7 @@ bot.callbackQuery(/^interval:set:(-?\d+):(\d+)$/, async (ctx: Context) => {
 // interval:repack:<channelId> — repack queue for a specific channel
 bot.callbackQuery(/^interval:repack:(-?\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const channelId = (ctx.match as RegExpExecArray)[1];
     const repackService = new QueueRepackService();
     const [count, currentInterval, channel] = await Promise.all([
@@ -1424,7 +1424,7 @@ bot.callbackQuery(/^interval:repack:(-?\d+)$/, async (ctx: Context) => {
 // interval:back — return to channel list
 bot.callbackQuery('interval:back', async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const channels = await getActivePostingChannels();
     const intervals = await Promise.all(channels.map((ch) => getPostInterval(ch.channelId)));
     const lines = channels
