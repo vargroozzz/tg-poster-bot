@@ -1,5 +1,9 @@
-// Imports each module to register its bot.callbackQuery handlers.
-import './scheduling.js';
-import './queue.js';
-import './sleep.js';
-import './interval.js';
+import { registerScheduling } from './scheduling.js';
+import { registerQueue } from './queue.js';
+import { registerSleep } from './sleep.js';
+import { registerInterval } from './interval.js';
+
+registerScheduling();
+registerQueue();
+registerSleep();
+registerInterval();

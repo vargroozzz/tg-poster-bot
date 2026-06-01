@@ -45,6 +45,8 @@ async function getPendingForward(userId: number, messageId: number): Promise<ISe
   }
 }
 
+export function registerScheduling(): void {
+
 // Handle channel selection
 bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
   try {
@@ -804,3 +806,5 @@ bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
     );
   }
 });
+
+}

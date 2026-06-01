@@ -148,6 +148,8 @@ async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<vo
   });
 }
 
+export function registerQueue(): void {
+
 // ── Queue browsing callbacks ──────────────────────────────────────────────────
 
 // queue:noop — pagination label button, does nothing
@@ -564,3 +566,5 @@ bot.callbackQuery(/^ec:preset:([^:]+):(.+)$/, async (ctx: Context) => {
     await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting preset.', 'ec:preset');
   }
 });
+
+}
