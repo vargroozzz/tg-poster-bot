@@ -10,8 +10,7 @@ import { DIContainer } from './shared/di/container.js';
 // Import handlers to register them
 import './bot/handlers/command.handler.js';
 import './bot/handlers/forward.handler.js';
-import './bot/handlers/callback.handler.js';
-import './bot/handlers/queue-edit.handler.js';
+import './bot/handlers/callbacks/index.js';
 
 let server: http.Server | null = null;
 let postWorker: PostWorkerService | null = null;
