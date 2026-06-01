@@ -44,7 +44,7 @@ bot.callbackQuery(/^queue:edit:([a-f0-9]{24})$/, async (ctx: Context) => {
       return;
     }
 
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const state = queuePreviewStateMap.get(userId);
     if (state) {
@@ -85,7 +85,7 @@ bot.callbackQuery(/^queue:edit:([a-f0-9]{24})$/, async (ctx: Context) => {
 
 bot.callbackQuery(/^queue:edit:ch:([^:]+):(-?\d+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const [, sessionId, channelId] = ctx.match as RegExpExecArray;
 
     const sessionSvc = getSessionService();
@@ -146,7 +146,7 @@ bot.callbackQuery(/^queue:edit:ch:([^:]+):(-?\d+)$/, async (ctx: Context) => {
 
 bot.callbackQuery(/^queue:edit:action:([^:]+):(transform|forward|quick)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const [, sessionId, action] = ctx.match as RegExpExecArray;
 
     const sessionSvc = getSessionService();
@@ -196,7 +196,7 @@ bot.callbackQuery(/^queue:edit:action:([^:]+):(transform|forward|quick)$/, async
 
 bot.callbackQuery(/^queue:edit:text:([^:]+):(keep|remove|quote)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const [, sessionId, textHandling] = ctx.match as RegExpExecArray;
 
     const sessionSvc = getSessionService();
@@ -219,7 +219,7 @@ bot.callbackQuery(/^queue:edit:text:([^:]+):(keep|remove|quote)$/, async (ctx: C
 
 bot.callbackQuery(/^queue:edit:nickname:([^:]+):([^:]+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const [, sessionId, nicknameKey] = ctx.match as RegExpExecArray;
 
     const sessionSvc = getSessionService();
@@ -252,7 +252,7 @@ bot.callbackQuery(/^queue:edit:nickname:([^:]+):([^:]+)$/, async (ctx: Context) 
 
 bot.callbackQuery(/^queue:edit:custom:([^:]+):(add|skip)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const [, sessionId, choice] = ctx.match as RegExpExecArray;
 
     const sessionSvc = getSessionService();
@@ -281,7 +281,7 @@ bot.callbackQuery(/^queue:edit:custom:([^:]+):(add|skip)$/, async (ctx: Context)
 // ec:preset:{sessionId}:{presetId} — shortened to stay under Telegram's 64-byte callback_data limit
 bot.callbackQuery(/^ec:preset:([^:]+):(.+)$/, async (ctx: Context) => {
   try {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const [, sessionId, presetId] = ctx.match as RegExpExecArray;
 
     const sessionSvc = getSessionService();
