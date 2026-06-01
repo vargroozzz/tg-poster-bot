@@ -15,9 +15,6 @@ export class SessionService {
 
   constructor(private repository: SessionRepository) {}
 
-  /**
-   * Create a new session for a user message
-   */
   async create(userId: number, message: Message): Promise<ISession> {
     const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);
 
@@ -71,23 +68,14 @@ export class SessionService {
     return session;
   }
 
-  /**
-   * Find a session by user ID and message ID
-   */
   async findByMessage(userId: number, messageId: number): Promise<ISession | null> {
     return await this.repository.findByUserAndMessage(userId, messageId);
   }
 
-  /**
-   * Find a session by ID
-   */
   async findById(sessionId: string): Promise<ISession | null> {
     return await this.repository.findById(sessionId);
   }
 
-  /**
-   * Update session state and data
-   */
   async updateState(
     sessionId: string,
     newState: SessionState,
@@ -102,9 +90,6 @@ export class SessionService {
     return updated;
   }
 
-  /**
-   * Update session data without changing state
-   */
   async update(sessionId: string, updates: Partial<ISession>): Promise<ISession | null> {
     const session = await this.repository.findById(sessionId);
     if (!session) {
@@ -117,9 +102,6 @@ export class SessionService {
     });
   }
 
-  /**
-   * Mark session as completed and delete it
-   */
   async complete(sessionId: string): Promise<void> {
     await this.repository.delete(sessionId);
     logger.debug(`Completed and deleted session ${sessionId}`);
@@ -132,10 +114,6 @@ export class SessionService {
     return await this.repository.findWaitingForCustomText(userId);
   }
 
-  /**
-   * Clean up expired sessions
-   * Returns number of sessions cleaned up
-   */
   async cleanupExpired(): Promise<number> {
     const count = await this.repository.cleanupExpired();
     if (count > 0) {
@@ -144,9 +122,6 @@ export class SessionService {
     return count;
   }
 
-  /**
-   * Get all active sessions for a user
-   */
   async getActiveUserSessions(userId: number): Promise<ISession[]> {
     return await this.repository.findByUser(userId);
   }

@@ -130,8 +130,6 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 
     // Check if this is part of a media group
     const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
-    logger.info(`[RC-DEBUG] handler received: id=${message.message_id}, type=${Object.keys(message).filter(k => ['text','photo','video','document','animation','poll'].includes(k))[0] ?? 'other'}, mediaGroupId=${mediaGroupId ?? 'none'}, forwardType=${message.forward_origin?.type ?? 'none'}`);
-
     if (mediaGroupId) {
       // Buffer this message
       const buffer = mediaGroupBuffers.get(mediaGroupId);
@@ -176,7 +174,6 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
     // the same buffer rather than starting a new one.
     const forwardOrigin = message.forward_origin;
     const userId = ctx.from?.id;
-    logger.info(`[RC-DEBUG] incoming msg: id=${message.message_id}, forwardType=${forwardOrigin?.type ?? 'none'}`);
 
     if (forwardOrigin && userId) {
       // If this message is a reply to one we already buffered, reuse that buffer.
@@ -316,8 +313,7 @@ async function processSingleMessage(ctx: Context, message: Message) {
     ? '\n\n🟢 This is from a green-listed channel - will be forwarded as-is.'
     : '';
 
-  const messageType = forwardInfo ? 'post' : 'message';
-  await ctx.reply(`📍 Select target channel for this ${messageType}:${greenListNote}`, {
+  await ctx.reply(`📍 Select target channel for this post:${greenListNote}`, {
     reply_markup: keyboard,
     reply_to_message_id: message.message_id,
   });
@@ -457,10 +453,9 @@ async function processReplyChain(bufferKey: string) {
       const session = await sessionSvc.create(ctx.from.id, primaryMessage);
       sessionId = session._id.toString();
       // Store reply chain messages and pre-select forward action
-      const updatedSession = await sessionSvc.update(sessionId, {
+      await sessionSvc.update(sessionId, {
         replyChainMessages: messages,
       });
-      logger.info(`[RC-DEBUG] session created: id=${sessionId}, messageCount=${messages.length}, ids=[${messages.map((m) => m.message_id).join(',')}], updateResult=${updatedSession ? `ok(${updatedSession.replyChainMessages?.length})` : 'null'}`);
     } catch (err) {
       logger.error('Failed to create session for reply chain:', err);
     }

@@ -562,9 +562,11 @@ bot.command('interval', async (ctx: Context) => {
       await ctx.reply('No posting channels configured. Add one with /addchannel first.');
       return;
     }
-    const intervals = await Promise.all(channels.map((ch) => getPostInterval(ch.channelId)));
-    const lines = channels
-      .map((ch, i) => `• ${ch.channelTitle ?? ch.channelId} — ${intervals[i]} min`)
+    const rows = await Promise.all(
+      channels.map(async (ch) => ({ ch, interval: await getPostInterval(ch.channelId) }))
+    );
+    const lines = rows
+      .map(({ ch, interval }) => `• ${ch.channelTitle ?? ch.channelId} — ${interval} min`)
       .join('\n');
     await ctx.reply(`Post intervals:\n${lines}`, {
       reply_markup: createChannelIntervalListKeyboard(channels),
