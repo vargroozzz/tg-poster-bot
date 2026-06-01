@@ -21,17 +21,28 @@ export async function migrateSelectedNicknameToUserId(): Promise<void> {
   const allNicknames = await UserNickname.find().lean();
   const nicknameToUserId = new Map(allNicknames.map((n) => [n.nickname, n.userId]));
 
+  // Optional: map old nickname strings to their current names for renamed users.
+  // Set env var: NICKNAME_RENAMES='{"old name":"new name"}'
+  const renameMap: Record<string, string> = process.env.NICKNAME_RENAMES
+    ? JSON.parse(process.env.NICKNAME_RENAMES)
+    : {};
+
   let migrated = 0;
   let skipped = 0;
 
   for (const post of postsWithNickname) {
     const nickname = post.selectedNickname as string;
-    const userId = nicknameToUserId.get(nickname);
+    const resolvedNickname = renameMap[nickname] ?? nickname;
+    const userId = nicknameToUserId.get(resolvedNickname);
 
     if (userId == null) {
-      console.warn(`No UserNickname found for nickname "${nickname}" (post ${post._id}) — skipping`);
+      console.warn(`Cannot resolve nickname "${nickname}" (post ${post._id}) — skipping`);
       skipped++;
       continue;
+    }
+
+    if (resolvedNickname !== nickname) {
+      console.log(`Renamed "${nickname}" → "${resolvedNickname}" → userId ${userId} (post ${post._id})`);
     }
 
     await collection.updateOne({ _id: post._id }, { $set: { selectedUserId: userId }, $unset: { selectedNickname: '' } });
