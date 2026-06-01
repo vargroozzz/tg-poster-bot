@@ -5,6 +5,13 @@
 - Do NOT commit design docs or implementation plans. Write them to disk if needed but skip the commit — execution follows immediately.
 - After completing any code change, always commit and push without waiting to be asked.
 
+## Code Style
+
+- **Declarative over imperative**: prefer expressions over statements. Use `.map()`, `.filter()`, spread, and ternaries instead of `for`/`forEach` + `push`.
+- **Immutable by default**: never mutate arrays or objects in place. Use `.toSorted()`, `.toReversed()`, spread (`[...a, b]`), or `Object.assign({}, ...)` instead.
+- **`??` over `||`**: use nullish coalescing when the intent is "fallback on null/undefined". Reserve `||` for actual boolean-falsy logic.
+- **Named constants for magic strings**: any string used as a discriminant or key in more than one file must be extracted to an exported `const`.
+
 ## Checking Render Logs (MCP)
 
 Use the Render MCP tools to check production logs without leaving the session:

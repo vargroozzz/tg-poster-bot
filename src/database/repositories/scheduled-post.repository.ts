@@ -153,7 +153,7 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
       action: TransformAction;
       rawContent: MessageContent;
       textHandling?: TextHandling;
-      selectedNickname?: string | null;
+      selectedUserId?: number | null;
       customText?: string;
     }
   ): Promise<IScheduledPost | null> {
