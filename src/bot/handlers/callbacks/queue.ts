@@ -150,253 +150,306 @@ async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<vo
 
 export function registerQueue(): void {
 
-// ── Queue browsing callbacks ──────────────────────────────────────────────────
+  // ── Queue browsing callbacks ──────────────────────────────────────────────────
 
-// queue:noop — pagination label button, does nothing
-bot.callbackQuery('queue:noop', async (ctx: Context) => {
-  await ctx.answerCallbackQuery().catch(() => {});
-});
-
-// queue:channels — back to channel selection screen
-bot.callbackQuery('queue:channels', async (ctx: Context) => {
-  try {
+  // queue:noop — pagination label button, does nothing
+  bot.callbackQuery('queue:noop', async (ctx: Context) => {
     await ctx.answerCallbackQuery().catch(() => {});
-    const channels = await getActivePostingChannels();
+  });
 
-    if (channels.length === 0) {
-      await ctx.editMessageText('⚠️ No posting channels configured. Use /addchannel first.');
-      return;
+  // queue:channels — back to channel selection screen
+  bot.callbackQuery('queue:channels', async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const channels = await getActivePostingChannels();
+
+      if (channels.length === 0) {
+        await ctx.editMessageText('⚠️ No posting channels configured. Use /addchannel first.');
+        return;
+      }
+
+      const keyboard = createQueueChannelSelectKeyboard(channels);
+      await ctx.editMessageText('📋 Select a channel to view its queue:', { reply_markup: keyboard });
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error loading channels.', 'queue:channels');
     }
+  });
 
-    const keyboard = createQueueChannelSelectKeyboard(channels);
-    await ctx.editMessageText('📋 Select a channel to view its queue:', { reply_markup: keyboard });
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error loading channels.', 'queue:channels');
-  }
-});
+  // queue:ch:{channelId}:{page} — show paginated queue for a channel
+  bot.callbackQuery(/^queue:ch:(.+):(\d+)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const match = ctx.callbackQuery?.data?.match(/^queue:ch:(.+):(\d+)$/);
+      if (!match) return;
 
-// queue:ch:{channelId}:{page} — show paginated queue for a channel
-bot.callbackQuery(/^queue:ch:(.+):(\d+)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const match = ctx.callbackQuery?.data?.match(/^queue:ch:(.+):(\d+)$/);
-    if (!match) return;
+      const channelId = match[1];
+      const page = parseInt(match[2], 10);
 
-    const channelId = match[1];
-    const page = parseInt(match[2], 10);
-
-    await renderQueuePage(ctx, channelId, page);
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error loading queue.', 'queue:ch callback');
-  }
-});
-
-// queue:preview:{postId}:{channelId}:{page} — send preview of a scheduled post
-bot.callbackQuery(/^queue:preview:([^:]+):(.+):(\d+)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const match = ctx.callbackQuery?.data?.match(/^queue:preview:([^:]+):(.+):(\d+)$/);
-    if (!match) return;
-
-    const postId = match[1];
-    const channelId = match[2];
-    const page = parseInt(match[3], 10);
-    const userId = ctx.from?.id;
-    const queueMessageId = ctx.callbackQuery?.message?.message_id;
-
-    if (!userId || !queueMessageId) return;
-
-    const repository = new ScheduledPostRepository();
-    const post = await repository.findById(postId);
-    if (!post) {
-      await ctx.reply('❌ Post not found — it may have already been published or deleted.');
-      return;
+      await renderQueuePage(ctx, channelId, page);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error loading queue.', 'queue:ch callback');
     }
+  });
 
-    const previewSender = new QueuePreviewSenderService(ctx.api);
-    const { previewMessageIds } = await previewSender.sendPreview(userId, post);
+  // queue:preview:{postId}:{channelId}:{page} — send preview of a scheduled post
+  bot.callbackQuery(/^queue:preview:([^:]+):(.+):(\d+)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const match = ctx.callbackQuery?.data?.match(/^queue:preview:([^:]+):(.+):(\d+)$/);
+      if (!match) return;
 
-    queuePreviewStateMap.set(userId, {
-      previewMessageIds,
-      queueMessageId,
-      channelId,
-      page,
-    });
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error generating preview.', 'queue:preview callback');
-  }
-});
+      const postId = match[1];
+      const channelId = match[2];
+      const page = parseInt(match[3], 10);
+      const userId = ctx.from?.id;
+      const queueMessageId = ctx.callbackQuery?.message?.message_id;
 
-// queue:del:{postId} — delete post, cascade reschedule, refresh queue
-bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const match = ctx.callbackQuery?.data?.match(/^queue:del:(.+)$/);
-    if (!match) return;
+      if (!userId || !queueMessageId) return;
 
-    const postId = match[1];
-    const userId = ctx.from?.id;
-    if (!userId) return;
+      const repository = new ScheduledPostRepository();
+      const post = await repository.findById(postId);
+      if (!post) {
+        await ctx.reply('❌ Post not found — it may have already been published or deleted.');
+        return;
+      }
 
-    const state = queuePreviewStateMap.get(userId);
-    if (!state) {
-      await ctx.reply('❌ Preview state expired. Please use /queue again.');
-      return;
+      const previewSender = new QueuePreviewSenderService(ctx.api);
+      const { previewMessageIds } = await previewSender.sendPreview(userId, post);
+
+      queuePreviewStateMap.set(userId, {
+        previewMessageIds,
+        queueMessageId,
+        channelId,
+        page,
+      });
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error generating preview.', 'queue:preview callback');
     }
+  });
 
-    const { previewMessageIds, queueMessageId, channelId, page } = state;
-    queuePreviewStateMap.delete(userId);
+  // queue:del:{postId} — delete post, cascade reschedule, refresh queue
+  bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const match = ctx.callbackQuery?.data?.match(/^queue:del:(.+)$/);
+      if (!match) return;
 
-    const result = await queueService.deleteAndCascade(postId);
+      const postId = match[1];
+      const userId = ctx.from?.id;
+      if (!userId) return;
 
-    // Always clean up preview messages regardless of whether the post was found
-    await Promise.all(
-      previewMessageIds.map((msgId) =>
-        ctx.api.deleteMessage(userId, msgId).catch((err) =>
-          logger.warn(`Failed to delete preview message ${msgId}:`, err)
-        )
-      )
-    );
-    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+      const state = queuePreviewStateMap.get(userId);
+      if (!state) {
+        await ctx.reply('❌ Preview state expired. Please use /queue again.');
+        return;
+      }
 
-    if (!result) {
-      await ctx.reply('❌ Post not found — it may have already been published or deleted.');
-    }
+      const { previewMessageIds, queueMessageId, channelId, page } = state;
+      queuePreviewStateMap.delete(userId);
 
-    // Refresh the queue list message (even if post was already gone, to show current state)
-    await renderQueuePage(ctx, channelId, page, queueMessageId);
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error deleting post.', 'queue:del callback');
-  }
-});
+      const result = await queueService.deleteAndCascade(postId);
 
-// queue:back — clean up preview messages, leave queue list unchanged
-bot.callbackQuery('queue:back', async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const userId = ctx.from?.id;
-    if (!userId) return;
-
-    const state = queuePreviewStateMap.get(userId);
-    if (!state) {
-      // State gone (bot restarted) — just delete the control message
-      await ctx.deleteMessage().catch(() => {});
-      return;
-    }
-
-    const { previewMessageIds } = state;
-    queuePreviewStateMap.delete(userId);
-
-    await Promise.all(
-      previewMessageIds.map((msgId) =>
-        ctx.api.deleteMessage(userId, msgId).catch((err) =>
-          logger.warn(`Failed to delete preview message ${msgId}:`, err)
-        )
-      )
-    );
-
-    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error going back.', 'queue:back callback');
-  }
-});
-
-// ── Queue edit callbacks ──────────────────────────────────────────────────────
-
-// queue:edit:{postId} — entry point for editing a scheduled post
-bot.callbackQuery(/^queue:edit:([a-f0-9]{24})$/, async (ctx: Context) => {
-  try {
-    const postId = (ctx.match as RegExpExecArray)[1];
-    const userId = ctx.from?.id;
-    if (!userId) return;
-
-    const repository = new ScheduledPostRepository();
-    const post = await repository.findById(postId);
-    if (!post) {
-      await ctx.answerCallbackQuery({ text: '❌ Post already published or deleted', show_alert: true });
-      return;
-    }
-
-    await ctx.answerCallbackQuery().catch(() => {});
-
-    // Clean up stale preview messages for this user
-    const state = queuePreviewStateMap.get(userId);
-    if (state) {
+      // Always clean up preview messages regardless of whether the post was found
       await Promise.all(
-        state.previewMessageIds.map((msgId) =>
-          ctx.api.deleteMessage(userId, msgId).catch(() => {})
+        previewMessageIds.map((msgId) =>
+          ctx.api.deleteMessage(userId, msgId).catch((err) =>
+            logger.warn(`Failed to delete preview message ${msgId}:`, err)
+          )
         )
       );
+      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+
+      if (!result) {
+        await ctx.reply('❌ Post not found — it may have already been published or deleted.');
+      }
+
+      // Refresh the queue list message (even if post was already gone, to show current state)
+      await renderQueuePage(ctx, channelId, page, queueMessageId);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error deleting post.', 'queue:del callback');
+    }
+  });
+
+  // queue:back — clean up preview messages, leave queue list unchanged
+  bot.callbackQuery('queue:back', async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const state = queuePreviewStateMap.get(userId);
+      if (!state) {
+        // State gone (bot restarted) — just delete the control message
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
+      const { previewMessageIds } = state;
       queuePreviewStateMap.delete(userId);
+
+      await Promise.all(
+        previewMessageIds.map((msgId) =>
+          ctx.api.deleteMessage(userId, msgId).catch((err) =>
+            logger.warn(`Failed to delete preview message ${msgId}:`, err)
+          )
+        )
+      );
+
+      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error going back.', 'queue:back callback');
     }
-    await ctx.deleteMessage().catch(() => {});
+  });
 
-    const sessionSvc = getSessionService();
-    if (!sessionSvc) {
-      await ctx.reply('❌ Service unavailable. Please try again.');
-      return;
+  // ── Queue edit callbacks ──────────────────────────────────────────────────────
+
+  // queue:edit:{postId} — entry point for editing a scheduled post
+  bot.callbackQuery(/^queue:edit:([a-f0-9]{24})$/, async (ctx: Context) => {
+    try {
+      const postId = (ctx.match as RegExpExecArray)[1];
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const repository = new ScheduledPostRepository();
+      const post = await repository.findById(postId);
+      if (!post) {
+        await ctx.answerCallbackQuery({ text: '❌ Post already published or deleted', show_alert: true });
+        return;
+      }
+
+      await ctx.answerCallbackQuery().catch(() => {});
+
+      // Clean up stale preview messages for this user
+      const state = queuePreviewStateMap.get(userId);
+      if (state) {
+        await Promise.all(
+          state.previewMessageIds.map((msgId) =>
+            ctx.api.deleteMessage(userId, msgId).catch(() => {})
+          )
+        );
+        queuePreviewStateMap.delete(userId);
+      }
+      await ctx.deleteMessage().catch(() => {});
+
+      const sessionSvc = getSessionService();
+      if (!sessionSvc) {
+        await ctx.reply('❌ Service unavailable. Please try again.');
+        return;
+      }
+
+      const session = await sessionSvc.createForEdit(userId, post);
+      const sessionId = session._id.toString();
+
+      const channels = await getActivePostingChannels();
+      if (channels.length === 0) {
+        await ctx.reply('⚠️ No posting channels configured.');
+        return;
+      }
+
+      const keyboard = createEditChannelSelectKeyboard(channels, sessionId);
+      await ctx.api.sendMessage(userId, '📍 Select target channel:', {
+        reply_markup: keyboard as any,
+      });
+
+      logger.debug(`Edit session ${sessionId} started for user ${userId}, post ${postId}`);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error starting edit.', 'queue:edit entry');
     }
+  });
 
-    const session = await sessionSvc.createForEdit(userId, post);
-    const sessionId = session._id.toString();
+  // queue:edit:ch:{sessionId}:{channelId} — channel selection for edit flow
+  bot.callbackQuery(/^queue:edit:ch:([^:]+):(-?\d+)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const [, sessionId, channelId] = ctx.match as RegExpExecArray;
 
-    const channels = await getActivePostingChannels();
-    if (channels.length === 0) {
-      await ctx.reply('⚠️ No posting channels configured.');
-      return;
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc?.findById(sessionId);
+      if (!session) {
+        await ctx.reply('❌ Edit session expired. Use /queue to start again.');
+        return;
+      }
+
+      const isGreenListed = session.editingOriginalForward
+        ? await transformerService.shouldAutoForward(session.editingOriginalForward)
+        : false;
+      const isRedListed = session.editingOriginalForward?.fromChannelId
+        ? await transformerService.isRedListed(String(session.editingOriginalForward.fromChannelId))
+        : false;
+      const rawContent = session.editingRawContent!;
+      const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
+      const isPoll = rawContent.type === 'poll';
+
+      await sessionSvc!.updateState(sessionId, SessionState.CHANNEL_SELECT, {
+        selectedChannel: channelId,
+      });
+
+      if (isPoll) {
+        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
+        await showEditPreview(ctx, sessionId);
+        return;
+      }
+
+      if (isGreenListed) {
+        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
+        await showEditPreview(ctx, sessionId);
+        return;
+      }
+
+      if (isRedListed) {
+        await sessionSvc!.update(sessionId, { selectedAction: 'transform' });
+        if (hasText) {
+          await ctx.editMessageText('How should the text be handled?', {
+            reply_markup: createEditTextHandlingKeyboard(sessionId) as any,
+          });
+        } else {
+          await showEditNicknameStep(ctx, sessionId);
+        }
+        return;
+      }
+
+      await ctx.editMessageText(
+        'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
+        { reply_markup: createEditForwardActionKeyboard(sessionId) as any, parse_mode: 'HTML' }
+      );
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting channel.', 'queue:edit:ch');
     }
+  });
 
-    const keyboard = createEditChannelSelectKeyboard(channels, sessionId);
-    await ctx.api.sendMessage(userId, '📍 Select target channel:', {
-      reply_markup: keyboard as any,
-    });
+  // queue:edit:action:{sessionId}:{action} — action selection for edit flow
+  bot.callbackQuery(/^queue:edit:action:([^:]+):(transform|forward|quick)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const [, sessionId, action] = ctx.match as RegExpExecArray;
 
-    logger.debug(`Edit session ${sessionId} started for user ${userId}, post ${postId}`);
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error starting edit.', 'queue:edit entry');
-  }
-});
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc?.findById(sessionId);
+      if (!session) {
+        await ctx.reply('❌ Edit session expired. Use /queue to start again.');
+        return;
+      }
 
-// queue:edit:ch:{sessionId}:{channelId} — channel selection for edit flow
-bot.callbackQuery(/^queue:edit:ch:([^:]+):(-?\d+)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const [, sessionId, channelId] = ctx.match as RegExpExecArray;
+      const rawContent = session.editingRawContent!;
+      const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
 
-    const sessionSvc = getSessionService();
-    const session = await sessionSvc?.findById(sessionId);
-    if (!session) {
-      await ctx.reply('❌ Edit session expired. Use /queue to start again.');
-      return;
-    }
+      if (action === 'quick') {
+        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, {
+          selectedAction: 'transform',
+          textHandling: 'remove',
+          selectedUserId: session.editingOriginalForward?.fromUserId ?? null,
+          customText: undefined,
+        });
+        await showEditPreview(ctx, sessionId);
+        return;
+      }
 
-    const isGreenListed = session.editingOriginalForward
-      ? await transformerService.shouldAutoForward(session.editingOriginalForward)
-      : false;
-    const isRedListed = session.editingOriginalForward?.fromChannelId
-      ? await transformerService.isRedListed(String(session.editingOriginalForward.fromChannelId))
-      : false;
-    const rawContent = session.editingRawContent!;
-    const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
-    const isPoll = rawContent.type === 'poll';
+      if (action === 'forward') {
+        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
+        await showEditPreview(ctx, sessionId);
+        return;
+      }
 
-    await sessionSvc!.updateState(sessionId, SessionState.CHANNEL_SELECT, {
-      selectedChannel: channelId,
-    });
-
-    if (isPoll) {
-      await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
-      await showEditPreview(ctx, sessionId);
-      return;
-    }
-
-    if (isGreenListed) {
-      await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
-      await showEditPreview(ctx, sessionId);
-      return;
-    }
-
-    if (isRedListed) {
       await sessionSvc!.update(sessionId, { selectedAction: 'transform' });
       if (hasText) {
         await ctx.editMessageText('How should the text be handled?', {
@@ -405,166 +458,113 @@ bot.callbackQuery(/^queue:edit:ch:([^:]+):(-?\d+)$/, async (ctx: Context) => {
       } else {
         await showEditNicknameStep(ctx, sessionId);
       }
-      return;
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting action.', 'queue:edit:action');
     }
+  });
 
-    await ctx.editMessageText(
-      'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
-      { reply_markup: createEditForwardActionKeyboard(sessionId) as any, parse_mode: 'HTML' }
-    );
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting channel.', 'queue:edit:ch');
-  }
-});
+  // queue:edit:text:{sessionId}:{textHandling} — text handling for edit flow
+  bot.callbackQuery(/^queue:edit:text:([^:]+):(keep|remove|quote)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const [, sessionId, textHandling] = ctx.match as RegExpExecArray;
 
-// queue:edit:action:{sessionId}:{action} — action selection for edit flow
-bot.callbackQuery(/^queue:edit:action:([^:]+):(transform|forward|quick)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const [, sessionId, action] = ctx.match as RegExpExecArray;
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc?.findById(sessionId);
+      if (!session) {
+        await ctx.reply('❌ Edit session expired. Use /queue to start again.');
+        return;
+      }
 
-    const sessionSvc = getSessionService();
-    const session = await sessionSvc?.findById(sessionId);
-    if (!session) {
-      await ctx.reply('❌ Edit session expired. Use /queue to start again.');
-      return;
-    }
-
-    const rawContent = session.editingRawContent!;
-    const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
-
-    if (action === 'quick') {
-      await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, {
-        selectedAction: 'transform',
-        textHandling: 'remove',
-        selectedUserId: session.editingOriginalForward?.fromUserId ?? null,
-        customText: undefined,
+      await sessionSvc!.update(sessionId, {
+        textHandling: textHandling as 'keep' | 'remove' | 'quote',
       });
-      await showEditPreview(ctx, sessionId);
-      return;
-    }
-
-    if (action === 'forward') {
-      await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
-      await showEditPreview(ctx, sessionId);
-      return;
-    }
-
-    await sessionSvc!.update(sessionId, { selectedAction: 'transform' });
-    if (hasText) {
-      await ctx.editMessageText('How should the text be handled?', {
-        reply_markup: createEditTextHandlingKeyboard(sessionId) as any,
-      });
-    } else {
       await showEditNicknameStep(ctx, sessionId);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting text handling.', 'queue:edit:text');
     }
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting action.', 'queue:edit:action');
-  }
-});
+  });
 
-// queue:edit:text:{sessionId}:{textHandling} — text handling for edit flow
-bot.callbackQuery(/^queue:edit:text:([^:]+):(keep|remove|quote)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const [, sessionId, textHandling] = ctx.match as RegExpExecArray;
+  // queue:edit:nickname:{sessionId}:{nicknameKey} — nickname selection for edit flow
+  bot.callbackQuery(/^queue:edit:nickname:([^:]+):([^:]+)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const [, sessionId, nicknameKey] = ctx.match as RegExpExecArray;
 
-    const sessionSvc = getSessionService();
-    const session = await sessionSvc?.findById(sessionId);
-    if (!session) {
-      await ctx.reply('❌ Edit session expired. Use /queue to start again.');
-      return;
-    }
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc?.findById(sessionId);
+      if (!session) {
+        await ctx.reply('❌ Edit session expired. Use /queue to start again.');
+        return;
+      }
 
-    await sessionSvc!.update(sessionId, {
-      textHandling: textHandling as 'keep' | 'remove' | 'quote',
-    });
-    await showEditNicknameStep(ctx, sessionId);
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting text handling.', 'queue:edit:text');
-  }
-});
+      const parsedUserId = parseInt(nicknameKey, 10);
+      const selectedUserId = nicknameKey === NICKNAME_NONE_KEY || isNaN(parsedUserId) ? null : parsedUserId;
 
-// queue:edit:nickname:{sessionId}:{nicknameKey} — nickname selection for edit flow
-bot.callbackQuery(/^queue:edit:nickname:([^:]+):([^:]+)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const [, sessionId, nicknameKey] = ctx.match as RegExpExecArray;
+      await sessionSvc!.update(sessionId, { selectedUserId });
 
-    const sessionSvc = getSessionService();
-    const session = await sessionSvc?.findById(sessionId);
-    if (!session) {
-      await ctx.reply('❌ Edit session expired. Use /queue to start again.');
-      return;
-    }
-
-    const parsedUserId = parseInt(nicknameKey, 10);
-    const selectedUserId = nicknameKey === NICKNAME_NONE_KEY || isNaN(parsedUserId) ? null : parsedUserId;
-
-    await sessionSvc!.update(sessionId, { selectedUserId });
-
-    const keyboard = await createEditCustomTextKeyboard(sessionId);
-    await ctx.editMessageText('Do you want to add custom text to this post?', {
-      reply_markup: keyboard as any,
-    });
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting nickname.', 'queue:edit:nickname');
-  }
-});
-
-// queue:edit:custom:{sessionId}:{choice} — custom text choice for edit flow
-bot.callbackQuery(/^queue:edit:custom:([^:]+):(add|skip)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const [, sessionId, choice] = ctx.match as RegExpExecArray;
-
-    const sessionSvc = getSessionService();
-    const session = await sessionSvc?.findById(sessionId);
-    if (!session) {
-      await ctx.reply('❌ Edit session expired. Use /queue to start again.');
-      return;
-    }
-
-    if (choice === 'skip') {
-      await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { customText: undefined });
-      await showEditPreview(ctx, sessionId);
-    } else {
-      await sessionSvc!.updateState(sessionId, SessionState.CUSTOM_TEXT, {
-        waitingForCustomText: true,
+      const keyboard = await createEditCustomTextKeyboard(sessionId);
+      await ctx.editMessageText('Do you want to add custom text to this post?', {
+        reply_markup: keyboard as any,
       });
-      await ctx.editMessageText(
-        '✍️ Reply to this message with your custom text.\n\nThis text will be added at the beginning of your post.'
-      );
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting nickname.', 'queue:edit:nickname');
     }
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error with custom text.', 'queue:edit:custom');
-  }
-});
+  });
 
-// ec:preset:{sessionId}:{presetId} — shortened to stay under Telegram's 64-byte callback_data limit
-bot.callbackQuery(/^ec:preset:([^:]+):(.+)$/, async (ctx: Context) => {
-  try {
-    await ctx.answerCallbackQuery().catch(() => {});
-    const [, sessionId, presetId] = ctx.match as RegExpExecArray;
+  // queue:edit:custom:{sessionId}:{choice} — custom text choice for edit flow
+  bot.callbackQuery(/^queue:edit:custom:([^:]+):(add|skip)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const [, sessionId, choice] = ctx.match as RegExpExecArray;
 
-    const sessionSvc = getSessionService();
-    const session = await sessionSvc?.findById(sessionId);
-    if (!session) {
-      await ctx.reply('❌ Edit session expired. Use /queue to start again.');
-      return;
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc?.findById(sessionId);
+      if (!session) {
+        await ctx.reply('❌ Edit session expired. Use /queue to start again.');
+        return;
+      }
+
+      if (choice === 'skip') {
+        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { customText: undefined });
+        await showEditPreview(ctx, sessionId);
+      } else {
+        await sessionSvc!.updateState(sessionId, SessionState.CUSTOM_TEXT, {
+          waitingForCustomText: true,
+        });
+        await ctx.editMessageText(
+          '✍️ Reply to this message with your custom text.\n\nThis text will be added at the beginning of your post.'
+        );
+      }
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error with custom text.', 'queue:edit:custom');
     }
+  });
 
-    const preset = await CustomTextPreset.findById(presetId).lean();
-    if (!preset) {
-      await ctx.editMessageText('❌ Preset not found. It may have been deleted.');
-      return;
+  // ec:preset:{sessionId}:{presetId} — shortened to stay under Telegram's 64-byte callback_data limit
+  bot.callbackQuery(/^ec:preset:([^:]+):(.+)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+      const [, sessionId, presetId] = ctx.match as RegExpExecArray;
+
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc?.findById(sessionId);
+      if (!session) {
+        await ctx.reply('❌ Edit session expired. Use /queue to start again.');
+        return;
+      }
+
+      const preset = await CustomTextPreset.findById(presetId).lean();
+      if (!preset) {
+        await ctx.editMessageText('❌ Preset not found. It may have been deleted.');
+        return;
+      }
+
+      await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { customText: preset.text });
+      await showEditPreview(ctx, sessionId);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting preset.', 'ec:preset');
     }
-
-    await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { customText: preset.text });
-    await showEditPreview(ctx, sessionId);
-  } catch (error) {
-    await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting preset.', 'ec:preset');
-  }
-});
+  });
 
 }
