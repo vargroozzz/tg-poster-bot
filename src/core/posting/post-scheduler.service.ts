@@ -3,6 +3,7 @@ import type { ForwardInfo, MessageContent, TextHandling } from '../../types/mess
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
 import { findNextAvailableSlot } from '../../utils/time-slots.js';
 import { transformerService } from '../../services/transformer.service.js';
+import { getUserNickname } from '../../database/models/user-nickname.model.js';
 
 /**
  * Service for scheduling posts
@@ -25,7 +26,7 @@ export class PostSchedulerService {
     forwardInfo: ForwardInfo;
     content: MessageContent;
     textHandling: TextHandling;
-    selectedNickname?: string | null;
+    selectedUserId?: number | null;
     customText?: string;
   }): Promise<{ scheduledTime: Date; postId: string }> {
     const {
@@ -33,9 +34,11 @@ export class PostSchedulerService {
       forwardInfo,
       content,
       textHandling,
-      selectedNickname,
+      selectedUserId,
       customText,
     } = params;
+
+    const selectedNickname = selectedUserId ? await getUserNickname(selectedUserId) : null;
 
     const nextSlot = await findNextAvailableSlot(targetChannelId);
 
@@ -63,7 +66,7 @@ export class PostSchedulerService {
       content: transformedContent,
       rawContent: content,
       textHandling,
-      selectedNickname: selectedNickname ?? null,
+      selectedUserId: selectedUserId ?? null,
       customText,
       createdAt: new Date(),
     });
@@ -110,7 +113,7 @@ export class PostSchedulerService {
       content: processedContent,
       rawContent: content,
       textHandling: 'keep',
-      selectedNickname: null,
+      selectedUserId: null,
       createdAt: new Date(),
     });
 

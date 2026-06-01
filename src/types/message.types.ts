@@ -37,7 +37,7 @@ export interface PostSelections {
   selectedChannel?: string;
   selectedAction?: TransformAction;
   textHandling?: TextHandling;
-  selectedNickname?: string | null;
+  selectedUserId?: number | null;
   customText?: string;
   waitingForCustomText?: boolean;
   mediaGroupMessages?: Message[];

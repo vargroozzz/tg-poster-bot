@@ -14,8 +14,8 @@ import { ErrorMessages } from '../../shared/constants/error-messages.js';
 import {
   findNicknameByUserId,
   getNicknameKeyboard,
-  parseNicknameSelection,
 } from '../../shared/helpers/nickname.helper.js';
+import { NICKNAME_NONE_KEY } from '../keyboards/nickname-select.keyboard.js';
 import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
@@ -88,7 +88,7 @@ async function handleNicknameSelection(
 
       const sessionSvc = getSessionService();
       if (sessionId && sessionSvc) {
-        await sessionSvc.update(sessionId, { selectedNickname: nickname });
+        await sessionSvc.update(sessionId, { selectedUserId: fromUserId });
       }
 
       if (isPlainText && sessionId) {
@@ -448,8 +448,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    // Parse nickname selection
-    const selectedNickname = await parseNicknameSelection(nicknameSelection);
+    const selectedUserId = nicknameSelection === NICKNAME_NONE_KEY ? null : parseInt(nicknameSelection, 10);
 
     const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
     const foundKey = session?._id.toString();
@@ -474,7 +473,7 @@ bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
     const nextState = getNextState(SessionState.NICKNAME_SELECT, {
       isGreenListed: false, isRedListed: false, hasText: false, isForward: false, isPlainText,
     });
-    await getSessionService()?.updateState(foundKey, nextState, { selectedNickname });
+    await getSessionService()?.updateState(foundKey, nextState, { selectedUserId });
 
     if (nextState === SessionState.PREVIEW) {
       await showPreview(ctx, foundKey);
@@ -561,17 +560,13 @@ bot.callbackQuery('action:quick', async (ctx: Context) => {
       return;
     }
 
-    // Auto-apply nickname if the forwarded user is in the nickname list
     const forwardInfo = parseForwardInfo(originalMessage);
-    const selectedNickname = forwardInfo.fromUserId
-      ? await findNicknameByUserId(forwardInfo.fromUserId) ?? null
-      : null;
 
     // Collapse transform + remove text + auto-nickname + skip custom text into one step
     await getSessionService()?.updateState(session._id.toString(), SessionState.PREVIEW, {
       selectedAction: 'transform',
       textHandling: 'remove',
-      selectedNickname,
+      selectedUserId: forwardInfo.fromUserId ?? null,
     });
 
     await showPreview(ctx, session._id.toString());
@@ -715,12 +710,15 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
       if (sameChannel) {
         let newContent = editingRawContent!;
         if (session.selectedAction === 'transform') {
+          const selectedNickname = session.selectedUserId
+            ? await findNicknameByUserId(session.selectedUserId)
+            : null;
           const transformedText = await transformerService.transformMessage(
             editingRawContent!.text ?? '',
             editingOriginalForward!,
             'transform',
             session.textHandling ?? 'keep',
-            session.selectedNickname,
+            selectedNickname,
             session.customText
           );
           newContent = { ...editingRawContent!, text: transformedText };
@@ -731,7 +729,7 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
           action: session.selectedAction ?? 'transform',
           rawContent: editingRawContent!,
           textHandling: session.textHandling,
-          selectedNickname: session.selectedNickname,
+          selectedUserId: session.selectedUserId,
           customText: session.customText,
         });
 
@@ -765,7 +763,7 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
                 forwardInfo: editingOriginalForward!,
                 content: editingRawContent!,
                 textHandling: session.textHandling ?? 'keep',
-                selectedNickname: session.selectedNickname,
+                selectedUserId: session.selectedUserId,
                 customText: session.customText,
               });
 
@@ -814,13 +812,13 @@ bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
       return;
     }
 
-    const { textHandling = 'keep', selectedNickname, customText } = session;
+    const { textHandling = 'keep', selectedUserId, customText } = session;
 
     const baseParams = { targetChannelId: selectedChannel, originalMessage, forwardInfo, content };
 
     const { scheduledTime } = session.selectedAction === 'forward'
       ? await postScheduler.scheduleForwardPost(baseParams)
-      : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedNickname, customText });
+      : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedUserId, customText });
 
     if (fromId) {
       await deletePreviewMessages(ctx, fromId, session);
@@ -943,7 +941,7 @@ bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
         selectedChannel: session.editingOriginalChannelId,
         selectedAction: undefined,
         textHandling: undefined,
-        selectedNickname: undefined,
+        selectedUserId: undefined,
         customText: undefined,
         previewMessageId: undefined,
         previewMessageIds: undefined,
@@ -968,7 +966,7 @@ bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
     await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
       selectedChannel: undefined,
       selectedAction: undefined,
-      selectedNickname: undefined,
+      selectedUserId: undefined,
       textHandling: undefined,
       customText: undefined,
       previewMessageId: undefined,

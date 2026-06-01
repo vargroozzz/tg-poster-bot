@@ -20,7 +20,7 @@ export interface IScheduledPost extends Document {
   action: TransformAction;
   rawContent?: MessageContent;
   textHandling?: 'keep' | 'remove' | 'quote';
-  selectedNickname?: string | null;
+  selectedUserId?: number | null;
   customText?: string;
   status: 'pending' | 'posted' | 'failed';
   postedAt?: Date;
@@ -97,8 +97,8 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     type: String,
     enum: ['keep', 'remove', 'quote'],
   },
-  selectedNickname: {
-    type: String,
+  selectedUserId: {
+    type: Number,
     default: null,
   },
   customText: String,
@@ -131,6 +131,9 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
 
 // Compound unique index to prevent double-booking
 scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true });
+
+// Sparse index for usage-count aggregation in nickname keyboard
+scheduledPostSchema.index({ selectedUserId: 1 }, { sparse: true });
 
 // TTL index for automatic cleanup after 90 days
 scheduledPostSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90 days

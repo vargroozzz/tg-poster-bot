@@ -55,7 +55,7 @@ const sessionSchema = new Schema<ISession>({
     type: String,
     enum: ['keep', 'remove', 'quote'],
   },
-  selectedNickname: String,
+  selectedUserId: Number,
   customText: String,
   waitingForCustomText: Boolean,
   mediaGroupMessages: [Schema.Types.Mixed],

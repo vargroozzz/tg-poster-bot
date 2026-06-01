@@ -60,7 +60,7 @@ export class SessionService {
       selectedChannel: post.targetChannelId,
       selectedAction: post.action,
       textHandling: post.textHandling,
-      selectedNickname: post.selectedNickname,
+      selectedUserId: post.selectedUserId,
       customText: post.customText,
       createdAt: new Date(),
       updatedAt: new Date(),

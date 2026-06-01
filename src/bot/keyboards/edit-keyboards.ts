@@ -1,4 +1,5 @@
 import { listCustomTextPresets } from '../../database/models/custom-text-preset.model.js';
+import { NICKNAME_NONE_KEY } from './nickname-select.keyboard.js';
 
 interface Channel {
   channelId: string;
@@ -46,13 +47,12 @@ export function createEditNicknameKeyboard(
   nicknames: Array<{ userId: number; nickname: string }>,
   sessionId: string
 ): object {
-  const rows: object[][] = [
-    [{ text: 'No attribution', callback_data: `queue:edit:nickname:${sessionId}:none`, style: 'primary' }],
-  ];
-  nicknames.forEach((n) => {
-    rows.push([{ text: n.nickname, callback_data: `queue:edit:nickname:${sessionId}:${n.userId}` }]);
-  });
-  return { inline_keyboard: rows };
+  return {
+    inline_keyboard: [
+      ...nicknames.map((n) => [{ text: n.nickname, callback_data: `queue:edit:nickname:${sessionId}:${n.userId}` }]),
+      [{ text: 'No attribution', callback_data: `queue:edit:nickname:${sessionId}:${NICKNAME_NONE_KEY}`, style: 'primary' }],
+    ],
+  };
 }
 
 export async function createEditCustomTextKeyboard(sessionId: string): Promise<object> {

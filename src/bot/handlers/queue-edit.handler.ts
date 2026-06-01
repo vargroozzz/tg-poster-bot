@@ -10,6 +10,7 @@ import { PreviewGeneratorService } from '../../core/preview/preview-generator.se
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 import { CustomTextPreset } from '../../database/models/custom-text-preset.model.js';
 import { findNicknameByUserId, getNicknameOptions } from '../../shared/helpers/nickname.helper.js';
+import { NICKNAME_NONE_KEY } from '../keyboards/nickname-select.keyboard.js';
 import { ErrorMessages } from '../../shared/constants/error-messages.js';
 import { logger } from '../../utils/logger.js';
 import { queuePreviewStateMap } from './callback.handler.js';
@@ -160,13 +161,10 @@ bot.callbackQuery(/^queue:edit:action:([^:]+):(transform|forward|quick)$/, async
     const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
 
     if (action === 'quick') {
-      const autoNickname = session.editingOriginalForward?.fromUserId
-        ? await findNicknameByUserId(session.editingOriginalForward.fromUserId) ?? null
-        : null;
       await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, {
         selectedAction: 'transform',
         textHandling: 'remove',
-        selectedNickname: autoNickname,
+        selectedUserId: session.editingOriginalForward?.fromUserId ?? null,
         customText: undefined,
       });
       await showEditPreview(ctx, sessionId);
@@ -229,15 +227,10 @@ bot.callbackQuery(/^queue:edit:nickname:([^:]+):([^:]+)$/, async (ctx: Context) 
       return;
     }
 
-    let selectedNickname: string | null = null;
-    if (nicknameKey !== 'none') {
-      const uid = parseInt(nicknameKey, 10);
-      if (!isNaN(uid)) {
-        selectedNickname = await findNicknameByUserId(uid);
-      }
-    }
+    const parsedUserId = parseInt(nicknameKey, 10);
+    const selectedUserId = nicknameKey === NICKNAME_NONE_KEY || isNaN(parsedUserId) ? null : parsedUserId;
 
-    await sessionSvc!.update(sessionId, { selectedNickname });
+    await sessionSvc!.update(sessionId, { selectedUserId });
 
     const keyboard = await createEditCustomTextKeyboard(sessionId);
     await ctx.editMessageText('Do you want to add custom text to this post?', {
@@ -342,7 +335,7 @@ async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<vo
   if (fromUserId) {
     const autoNickname = await findNicknameByUserId(fromUserId);
     if (autoNickname) {
-      await sessionSvc!.update(sessionId, { selectedNickname: autoNickname });
+      await sessionSvc!.update(sessionId, { selectedUserId: fromUserId });
       const keyboard = await createEditCustomTextKeyboard(sessionId);
       await ctx.editMessageText('Do you want to add custom text to this post?', {
         reply_markup: keyboard as any,

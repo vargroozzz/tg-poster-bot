@@ -3,6 +3,7 @@ import type { MessageContent } from '../../types/message.types.js';
 import { extractMessageContent } from '../../bot/handlers/forward.handler.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
+import { getUserNickname } from '../../database/models/user-nickname.model.js';
 import { logger } from '../../utils/logger.js';
 
 /**
@@ -53,9 +54,11 @@ export class PreviewGeneratorService {
     const originalText = content.text ?? '';
     const textHandling = session.textHandling ?? 'keep';
 
+    const selectedNickname = session.selectedUserId ? await getUserNickname(session.selectedUserId) : null;
+
     logger.debug(`Transforming preview text for session ${session._id}`, {
       textHandling,
-      selectedNickname: session.selectedNickname,
+      selectedNickname,
       hasCustomText: !!session.customText,
     });
 
@@ -64,7 +67,7 @@ export class PreviewGeneratorService {
       forwardInfo,
       'transform',
       textHandling,
-      session.selectedNickname,
+      selectedNickname,
       session.customText
     );
 
@@ -89,12 +92,14 @@ export class PreviewGeneratorService {
       throw new Error(`Edit session ${session._id} has no editingOriginalForward`);
     }
 
+    const selectedNickname = session.selectedUserId ? await getUserNickname(session.selectedUserId) : null;
+
     const transformedText = await transformerService.transformMessage(
       rawContent.text ?? '',
       forwardInfo,
       'transform',
       session.textHandling ?? 'keep',
-      session.selectedNickname,
+      selectedNickname,
       session.customText
     );
 
