@@ -20,14 +20,57 @@ export interface MediaGroupItem {
   hasSpoiler?: boolean;
 }
 
-export interface MessageContent {
-  type: 'text' | 'photo' | 'video' | 'document' | 'animation' | 'media_group' | 'poll';
-  text?: string;
-  fileId?: string;
-  hasSpoiler?: boolean;
-  mediaGroup?: MediaGroupItem[];
+export interface TextContent {
+  type: 'text';
+  text: string;
   linkPreviewOptions?: { is_disabled?: boolean };
 }
+
+export interface PhotoContent {
+  type: 'photo';
+  fileId: string;
+  text?: string;
+  hasSpoiler?: boolean;
+}
+
+export interface VideoContent {
+  type: 'video';
+  fileId: string;
+  text?: string;
+  hasSpoiler?: boolean;
+}
+
+export interface DocumentContent {
+  type: 'document';
+  fileId: string;
+  text?: string;
+}
+
+export interface AnimationContent {
+  type: 'animation';
+  fileId: string;
+  text?: string;
+}
+
+export interface MediaGroupContent {
+  type: 'media_group';
+  mediaGroup: MediaGroupItem[];
+  text?: string;
+}
+
+export interface PollContent {
+  type: 'poll';
+  text?: string;
+}
+
+export type MessageContent =
+  | TextContent
+  | PhotoContent
+  | VideoContent
+  | DocumentContent
+  | AnimationContent
+  | MediaGroupContent
+  | PollContent;
 
 export type TransformAction = 'transform' | 'forward';
 

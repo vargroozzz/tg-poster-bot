@@ -756,7 +756,7 @@ export function registerScheduling(): void {
         if (!fromId) return;
         const keyboard = createEditChannelSelectKeyboard(channels, sessionKey);
         await ctx.api.sendMessage(fromId, '📍 Select target channel:', {
-          reply_markup: keyboard as any,
+          reply_markup: keyboard,
         });
 
         logger.info(`Edit back: re-showing channel select for session ${sessionKey}`);

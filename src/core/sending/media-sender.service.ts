@@ -21,17 +21,17 @@ export class MediaSenderService {
   ): Promise<number> {
     switch (content.type) {
       case 'photo':
-        return await this.sendPhoto(chatId, content.fileId!, content.text, replyParameters, content.hasSpoiler);
+        return await this.sendPhoto(chatId, content.fileId, content.text, replyParameters, content.hasSpoiler);
       case 'video':
-        return await this.sendVideo(chatId, content.fileId!, content.text, replyParameters, content.hasSpoiler);
+        return await this.sendVideo(chatId, content.fileId, content.text, replyParameters, content.hasSpoiler);
       case 'document':
-        return await this.sendDocument(chatId, content.fileId!, content.text, replyParameters);
+        return await this.sendDocument(chatId, content.fileId, content.text, replyParameters);
       case 'animation':
-        return await this.sendAnimation(chatId, content.fileId!, content.text, replyParameters);
+        return await this.sendAnimation(chatId, content.fileId, content.text, replyParameters);
       case 'media_group':
-        return await this.sendMediaGroup(chatId, content.mediaGroup!, content.text, replyParameters);
+        return await this.sendMediaGroup(chatId, content.mediaGroup, content.text, replyParameters);
       case 'text':
-        return await this.sendText(chatId, content.text!, replyParameters, content.linkPreviewOptions);
+        return await this.sendText(chatId, content.text, replyParameters, content.linkPreviewOptions);
       default:
         throw new Error(`Unsupported content type: ${(content as unknown as { type: string }).type}`);
     }

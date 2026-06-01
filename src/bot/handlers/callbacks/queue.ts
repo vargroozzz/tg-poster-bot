@@ -24,6 +24,7 @@ import {
   createEditNicknameKeyboard,
   createEditCustomTextKeyboard,
 } from '../../keyboards/edit-keyboards.js';
+import type { TextHandling } from '../../../types/message.types.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
 import { getSessionService } from './shared.js';
 
@@ -135,7 +136,7 @@ async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<vo
       await sessionSvc!.update(sessionId, { selectedUserId: fromUserId });
       const keyboard = await createEditCustomTextKeyboard(sessionId);
       await ctx.editMessageText('Do you want to add custom text to this post?', {
-        reply_markup: keyboard as any,
+        reply_markup: keyboard,
       });
       return;
     }
@@ -144,7 +145,7 @@ async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<vo
   const options = await getNicknameOptions();
   const keyboard = createEditNicknameKeyboard(options, sessionId);
   await ctx.editMessageText('Who should be credited for this post?', {
-    reply_markup: keyboard as any,
+    reply_markup: keyboard,
   });
 }
 
@@ -348,7 +349,7 @@ export function registerQueue(): void {
 
       const keyboard = createEditChannelSelectKeyboard(channels, sessionId);
       await ctx.api.sendMessage(userId, '📍 Select target channel:', {
-        reply_markup: keyboard as any,
+        reply_markup: keyboard,
       });
 
       logger.debug(`Edit session ${sessionId} started for user ${userId}, post ${postId}`);
@@ -400,7 +401,7 @@ export function registerQueue(): void {
         await sessionSvc!.update(sessionId, { selectedAction: 'transform' });
         if (hasText) {
           await ctx.editMessageText('How should the text be handled?', {
-            reply_markup: createEditTextHandlingKeyboard(sessionId) as any,
+            reply_markup: createEditTextHandlingKeyboard(sessionId),
           });
         } else {
           await showEditNicknameStep(ctx, sessionId);
@@ -410,7 +411,7 @@ export function registerQueue(): void {
 
       await ctx.editMessageText(
         'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
-        { reply_markup: createEditForwardActionKeyboard(sessionId) as any, parse_mode: 'HTML' }
+        { reply_markup: createEditForwardActionKeyboard(sessionId), parse_mode: 'HTML' }
       );
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting channel.', 'queue:edit:ch');
@@ -453,7 +454,7 @@ export function registerQueue(): void {
       await sessionSvc!.update(sessionId, { selectedAction: 'transform' });
       if (hasText) {
         await ctx.editMessageText('How should the text be handled?', {
-          reply_markup: createEditTextHandlingKeyboard(sessionId) as any,
+          reply_markup: createEditTextHandlingKeyboard(sessionId),
         });
       } else {
         await showEditNicknameStep(ctx, sessionId);
@@ -477,7 +478,7 @@ export function registerQueue(): void {
       }
 
       await sessionSvc!.update(sessionId, {
-        textHandling: textHandling as 'keep' | 'remove' | 'quote',
+        textHandling: textHandling as TextHandling,
       });
       await showEditNicknameStep(ctx, sessionId);
     } catch (error) {
@@ -505,7 +506,7 @@ export function registerQueue(): void {
 
       const keyboard = await createEditCustomTextKeyboard(sessionId);
       await ctx.editMessageText('Do you want to add custom text to this post?', {
-        reply_markup: keyboard as any,
+        reply_markup: keyboard,
       });
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting nickname.', 'queue:edit:nickname');
