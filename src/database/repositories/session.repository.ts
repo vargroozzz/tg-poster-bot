@@ -68,4 +68,12 @@ export class SessionRepository extends BaseRepository<ISession> {
       expiresAt: { $gt: new Date() },
     });
   }
+
+  async findWaitingForReplyContent(userId: number): Promise<ISession | null> {
+    return await this.model.findOne({
+      userId,
+      state: SessionState.WAITING_FOR_REPLY_CONTENT,
+      expiresAt: { $gt: new Date() },
+    });
+  }
 }

@@ -68,6 +68,35 @@ export class SessionService {
     return session;
   }
 
+  /**
+   * Create a session waiting for the user to send reply content.
+   * messageId: -1 is a sentinel — will be updated to the real message_id when content arrives.
+   */
+  async createForReply(userId: number, parentPostId: string): Promise<ISession> {
+    const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);
+    // Remove any existing reply sentinel session to avoid unique-index conflict
+    await this.repository.deleteMany({ userId, messageId: -1 });
+
+    const session = await this.repository.create({
+      userId,
+      messageId: -1,
+      chatId: userId,
+      state: SessionState.WAITING_FOR_REPLY_CONTENT,
+      isReply: true,
+      replyParentPostId: parentPostId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      expiresAt,
+    } as Partial<ISession>);
+
+    logger.debug(`Created reply session ${session._id} for user ${userId}, parent ${parentPostId}`);
+    return session;
+  }
+
+  async findWaitingForReplyContent(userId: number): Promise<ISession | null> {
+    return await this.repository.findWaitingForReplyContent(userId);
+  }
+
   async findByMessage(userId: number, messageId: number): Promise<ISession | null> {
     return await this.repository.findByUserAndMessage(userId, messageId);
   }
