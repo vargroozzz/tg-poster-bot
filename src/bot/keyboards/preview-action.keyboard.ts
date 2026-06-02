@@ -13,3 +13,13 @@ export function createPreviewActionKeyboard(sessionId: string): InlineKeyboardMa
     ],
   };
 }
+
+export function createAddReplyKeyboard(postId: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: '💬 Add a reply', callback_data: `reply_trigger:${postId}` },
+      ],
+    ],
+  };
+}
