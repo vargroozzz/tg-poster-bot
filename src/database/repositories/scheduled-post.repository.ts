@@ -1,5 +1,5 @@
 import { BaseRepository } from './base.repository.js';
-import { ScheduledPost, type IScheduledPost } from '../models/scheduled-post.model.js';
+import { ScheduledPost, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
 import type { RetryMetadata } from '../models/scheduled-post.model.js';
 import type { MessageContent, TextHandling, TransformAction } from '../../types/message.types.js';
 
@@ -161,6 +161,63 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
       { _id: postId, status: 'pending' },
       { $set: updates },
       { new: true }
+    );
+  }
+
+  /**
+   * Set embeddedReply on a pending parent post.
+   * Only updates posts with status 'pending' — returns null if already published.
+   */
+  async attachEmbeddedReply(
+    parentPostId: string,
+    replyData: EmbeddedReplyData
+  ): Promise<IScheduledPost | null> {
+    return await this.model.findOneAndUpdate(
+      { _id: parentPostId, status: 'pending' },
+      { $set: { embeddedReply: replyData } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Convert a freshly-created pending post into a separated reply.
+   * If the parent is already posted, fills replyToMessageId/replyToChannelId and keeps status 'pending'.
+   * If the parent is still pending, sets status to 'waiting_parent'.
+   */
+  async convertToSeparatedReply(
+    postId: string,
+    parentPostId: string,
+    parentPost: IScheduledPost | null
+  ): Promise<void> {
+    const update: Record<string, unknown> = { parentPostId };
+
+    if (parentPost?.status === 'posted' && parentPost.telegramScheduledMessageId) {
+      update.replyToMessageId = parentPost.telegramScheduledMessageId;
+      update.replyToChannelId = parentPost.targetChannelId;
+    } else {
+      update.status = 'waiting_parent';
+    }
+
+    await this.model.findByIdAndUpdate(postId, { $set: update });
+  }
+
+  /**
+   * After the parent post publishes, fill in the reply link and flip status to 'pending'.
+   */
+  async unblockSeparatedReplies(
+    parentPostId: string,
+    parentMessageId: number,
+    parentChannelId: string
+  ): Promise<void> {
+    await this.model.updateMany(
+      { parentPostId, status: 'waiting_parent' },
+      {
+        $set: {
+          replyToMessageId: parentMessageId,
+          replyToChannelId: parentChannelId,
+          status: 'pending',
+        },
+      }
     );
   }
 }
