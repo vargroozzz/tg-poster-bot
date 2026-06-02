@@ -507,30 +507,35 @@ export function registerScheduling(): void {
           editingOriginalForward,
         } = session;
 
+        if (!editingPostId || !editingRawContent || !editingOriginalForward || !editingOriginalScheduledTime || !editingOriginalChannelId) {
+          await ctx.reply('❌ Edit session is corrupted. Please start over.');
+          return;
+        }
+
         const sameChannel = session.selectedChannel === editingOriginalChannelId;
         const repository = new ScheduledPostRepository();
 
         if (sameChannel) {
-          let newContent = editingRawContent!;
+          let newContent = editingRawContent;
           if (session.selectedAction === 'transform') {
             const selectedNickname = session.selectedUserId
               ? await findNicknameByUserId(session.selectedUserId)
               : null;
             const transformedText = await transformerService.transformMessage(
-              editingRawContent!.text ?? '',
-              editingOriginalForward!,
+              editingRawContent.text ?? '',
+              editingOriginalForward,
               'transform',
               session.textHandling ?? 'keep',
               selectedNickname,
               session.customText
             );
-            newContent = { ...editingRawContent!, text: transformedText };
+            newContent = { ...editingRawContent, text: transformedText };
           }
 
-          const updated = await repository.updatePost(editingPostId!, {
+          const updated = await repository.updatePost(editingPostId, {
             content: newContent,
             action: session.selectedAction ?? 'transform',
-            rawContent: editingRawContent!,
+            rawContent: editingRawContent,
             textHandling: session.textHandling,
             selectedUserId: session.selectedUserId,
             customText: session.customText,
@@ -548,23 +553,23 @@ export function registerScheduling(): void {
           const channelDoc = await PostingChannel.findOne({ channelId: editingOriginalChannelId }).lean();
           const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? editingOriginalChannelId;
           await ctx.reply(
-            `✅ Post updated!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime!)}`
+            `✅ Post updated!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`
           );
         } else {
-          await queueService.deleteAndCascade(editingPostId!);
+          await queueService.deleteAndCascade(editingPostId);
 
-          const newChannelId = session.selectedChannel!;
+          const newChannelId = session.selectedChannel ?? editingOriginalChannelId;
           const { scheduledTime } =
             session.selectedAction === 'forward'
               ? await postScheduler.scheduleForwardPost({
                   targetChannelId: newChannelId,
-                  forwardInfo: editingOriginalForward!,
-                  content: editingRawContent!,
+                  forwardInfo: editingOriginalForward,
+                  content: editingRawContent,
                 })
               : await postScheduler.scheduleTransformPost({
                   targetChannelId: newChannelId,
-                  forwardInfo: editingOriginalForward!,
-                  content: editingRawContent!,
+                  forwardInfo: editingOriginalForward,
+                  content: editingRawContent,
                   textHandling: session.textHandling ?? 'keep',
                   selectedUserId: session.selectedUserId,
                   customText: session.customText,
@@ -586,7 +591,11 @@ export function registerScheduling(): void {
       }
       // ── End edit-session confirm ──────────────────────────────────────────
 
-      const originalMessage = session.originalMessage!;
+      const originalMessage = session.originalMessage;
+      if (!originalMessage) {
+        await ctx.reply('Session is corrupted. Please forward the message again.');
+        return;
+      }
       const mediaGroupMessages = session.mediaGroupMessages;
       const selectedChannel = session.selectedChannel;
 
@@ -787,12 +796,15 @@ export function registerScheduling(): void {
         username: ch.channelUsername,
       }));
 
+      const origMsg = session.originalMessage;
+      if (!origMsg) return;
+
       await ctx.api.sendMessage(
-        session.originalMessage!.chat.id,
+        origMsg.chat.id,
         '📍 Select target channel:',
         {
           reply_markup: createChannelSelectKeyboard(channels),
-          reply_to_message_id: session.originalMessage!.message_id,
+          reply_to_message_id: origMsg.message_id,
         }
       );
 

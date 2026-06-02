@@ -47,6 +47,9 @@ async function renderQueuePage(
   page: number,
   messageId?: number
 ): Promise<void> {
+  const chatId = ctx.chatId;
+  if (!chatId) return;
+
   const channels = await getActivePostingChannels();
   const channel = channels.find((ch) => ch.channelId === channelId);
   const channelTitle = channel?.channelTitle ?? channelId;
@@ -68,7 +71,7 @@ async function renderQueuePage(
     const text = `${header}\n\nNo pending posts.`;
     const keyboard = new InlineKeyboard().text('← Channels', 'queue:channels');
     if (messageId) {
-      await ctx.api.editMessageText(ctx.chat!.id, messageId, text, { reply_markup: keyboard });
+      await ctx.api.editMessageText(chatId, messageId, text, { reply_markup: keyboard });
     } else {
       await ctx.editMessageText(text, { reply_markup: keyboard });
     }
@@ -91,7 +94,7 @@ async function renderQueuePage(
   });
 
   if (messageId) {
-    await ctx.api.editMessageText(ctx.chat!.id, messageId, text, { reply_markup: keyboard });
+    await ctx.api.editMessageText(chatId, messageId, text, { reply_markup: keyboard });
   } else {
     await ctx.editMessageText(text, { reply_markup: keyboard });
   }
@@ -102,7 +105,7 @@ async function showEditPreview(ctx: Context, sessionId: string): Promise<void> {
   if (!userId) return;
 
   const sessionSvc = getSessionService();
-  const session = await sessionSvc?.findById(sessionId);
+  const session = await sessionSvc.findById(sessionId);
   if (!session) {
     await ctx.reply('❌ Edit session expired. Use /queue to start again.');
     return;
@@ -116,7 +119,7 @@ async function showEditPreview(ctx: Context, sessionId: string): Promise<void> {
     await previewSender.sendPreview(userId, previewContent, sessionId);
 
     await ctx.deleteMessage().catch(() => {});
-    await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, {});
+    await sessionSvc.updateState(sessionId, SessionState.PREVIEW, {});
     logger.debug(`Edit preview shown for session ${sessionId}`);
   } catch (error) {
     logger.error('Error showing edit preview:', error);
@@ -126,14 +129,14 @@ async function showEditPreview(ctx: Context, sessionId: string): Promise<void> {
 
 async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<void> {
   const sessionSvc = getSessionService();
-  const session = await sessionSvc?.findById(sessionId);
+  const session = await sessionSvc.findById(sessionId);
   if (!session) return;
 
   const fromUserId = session.editingOriginalForward?.fromUserId;
   if (fromUserId) {
     const autoNickname = await findNicknameByUserId(fromUserId);
     if (autoNickname) {
-      await sessionSvc!.update(sessionId, { selectedUserId: fromUserId });
+      await sessionSvc.update(sessionId, { selectedUserId: fromUserId });
       const keyboard = await createEditCustomTextKeyboard(sessionId);
       await ctx.editMessageText('Do you want to add custom text to this post?', {
         reply_markup: keyboard,
@@ -365,7 +368,7 @@ export function registerQueue(): void {
       const [, sessionId, channelId] = ctx.match as RegExpExecArray;
 
       const sessionSvc = getSessionService();
-      const session = await sessionSvc?.findById(sessionId);
+      const session = await sessionSvc.findById(sessionId);
       if (!session) {
         await ctx.reply('❌ Edit session expired. Use /queue to start again.');
         return;
@@ -377,28 +380,32 @@ export function registerQueue(): void {
       const isRedListed = session.editingOriginalForward?.fromChannelId
         ? await transformerService.isRedListed(String(session.editingOriginalForward.fromChannelId))
         : false;
-      const rawContent = session.editingRawContent!;
+      const rawContent = session.editingRawContent;
+      if (!rawContent) {
+        await ctx.reply('❌ Edit session is corrupted. Please start over.');
+        return;
+      }
       const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
       const isPoll = rawContent.type === 'poll';
 
-      await sessionSvc!.updateState(sessionId, SessionState.CHANNEL_SELECT, {
+      await sessionSvc.updateState(sessionId, SessionState.CHANNEL_SELECT, {
         selectedChannel: channelId,
       });
 
       if (isPoll) {
-        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
+        await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
         await showEditPreview(ctx, sessionId);
         return;
       }
 
       if (isGreenListed) {
-        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
+        await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
         await showEditPreview(ctx, sessionId);
         return;
       }
 
       if (isRedListed) {
-        await sessionSvc!.update(sessionId, { selectedAction: 'transform' });
+        await sessionSvc.update(sessionId, { selectedAction: 'transform' });
         if (hasText) {
           await ctx.editMessageText('How should the text be handled?', {
             reply_markup: createEditTextHandlingKeyboard(sessionId),
@@ -425,17 +432,21 @@ export function registerQueue(): void {
       const [, sessionId, action] = ctx.match as RegExpExecArray;
 
       const sessionSvc = getSessionService();
-      const session = await sessionSvc?.findById(sessionId);
+      const session = await sessionSvc.findById(sessionId);
       if (!session) {
         await ctx.reply('❌ Edit session expired. Use /queue to start again.');
         return;
       }
 
-      const rawContent = session.editingRawContent!;
+      const rawContent = session.editingRawContent;
+      if (!rawContent) {
+        await ctx.reply('❌ Edit session is corrupted. Please start over.');
+        return;
+      }
       const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
 
       if (action === 'quick') {
-        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, {
+        await sessionSvc.updateState(sessionId, SessionState.PREVIEW, {
           selectedAction: 'transform',
           textHandling: 'remove',
           selectedUserId: session.editingOriginalForward?.fromUserId ?? null,
@@ -446,12 +457,12 @@ export function registerQueue(): void {
       }
 
       if (action === 'forward') {
-        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
+        await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
         await showEditPreview(ctx, sessionId);
         return;
       }
 
-      await sessionSvc!.update(sessionId, { selectedAction: 'transform' });
+      await sessionSvc.update(sessionId, { selectedAction: 'transform' });
       if (hasText) {
         await ctx.editMessageText('How should the text be handled?', {
           reply_markup: createEditTextHandlingKeyboard(sessionId),
@@ -471,13 +482,13 @@ export function registerQueue(): void {
       const [, sessionId, textHandling] = ctx.match as RegExpExecArray;
 
       const sessionSvc = getSessionService();
-      const session = await sessionSvc?.findById(sessionId);
+      const session = await sessionSvc.findById(sessionId);
       if (!session) {
         await ctx.reply('❌ Edit session expired. Use /queue to start again.');
         return;
       }
 
-      await sessionSvc!.update(sessionId, {
+      await sessionSvc.update(sessionId, {
         textHandling: textHandling as TextHandling,
       });
       await showEditNicknameStep(ctx, sessionId);
@@ -493,7 +504,7 @@ export function registerQueue(): void {
       const [, sessionId, nicknameKey] = ctx.match as RegExpExecArray;
 
       const sessionSvc = getSessionService();
-      const session = await sessionSvc?.findById(sessionId);
+      const session = await sessionSvc.findById(sessionId);
       if (!session) {
         await ctx.reply('❌ Edit session expired. Use /queue to start again.');
         return;
@@ -502,7 +513,7 @@ export function registerQueue(): void {
       const parsedUserId = parseInt(nicknameKey, 10);
       const selectedUserId = nicknameKey === NICKNAME_NONE_KEY || isNaN(parsedUserId) ? null : parsedUserId;
 
-      await sessionSvc!.update(sessionId, { selectedUserId });
+      await sessionSvc.update(sessionId, { selectedUserId });
 
       const keyboard = await createEditCustomTextKeyboard(sessionId);
       await ctx.editMessageText('Do you want to add custom text to this post?', {
@@ -520,17 +531,17 @@ export function registerQueue(): void {
       const [, sessionId, choice] = ctx.match as RegExpExecArray;
 
       const sessionSvc = getSessionService();
-      const session = await sessionSvc?.findById(sessionId);
+      const session = await sessionSvc.findById(sessionId);
       if (!session) {
         await ctx.reply('❌ Edit session expired. Use /queue to start again.');
         return;
       }
 
       if (choice === 'skip') {
-        await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { customText: undefined });
+        await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { customText: undefined });
         await showEditPreview(ctx, sessionId);
       } else {
-        await sessionSvc!.updateState(sessionId, SessionState.CUSTOM_TEXT, {
+        await sessionSvc.updateState(sessionId, SessionState.CUSTOM_TEXT, {
           waitingForCustomText: true,
         });
         await ctx.editMessageText(
@@ -549,7 +560,7 @@ export function registerQueue(): void {
       const [, sessionId, presetId] = ctx.match as RegExpExecArray;
 
       const sessionSvc = getSessionService();
-      const session = await sessionSvc?.findById(sessionId);
+      const session = await sessionSvc.findById(sessionId);
       if (!session) {
         await ctx.reply('❌ Edit session expired. Use /queue to start again.');
         return;
@@ -561,7 +572,7 @@ export function registerQueue(): void {
         return;
       }
 
-      await sessionSvc!.updateState(sessionId, SessionState.PREVIEW, { customText: preset.text });
+      await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { customText: preset.text });
       await showEditPreview(ctx, sessionId);
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting preset.', 'ec:preset');
