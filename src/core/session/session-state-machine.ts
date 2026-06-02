@@ -29,6 +29,12 @@ export function getNextState(current: SessionState, context: SessionContext): Se
     case SessionState.COMPLETED:
       return SessionState.COMPLETED;
 
+    case SessionState.WAITING_FOR_REPLY_CONTENT:
+      return SessionState.CHANNEL_SELECT;
+
+    case SessionState.REPLY_SLOT_CHOICE:
+      return SessionState.ACTION_SELECT;
+
     default:
       throw new Error(`Unknown state: ${current}`);
   }
@@ -63,6 +69,10 @@ export function getPossibleNextStates(current: SessionState): SessionState[] {
       return [SessionState.COMPLETED];
     case SessionState.COMPLETED:
       return [];
+    case SessionState.WAITING_FOR_REPLY_CONTENT:
+      return [SessionState.CHANNEL_SELECT];
+    case SessionState.REPLY_SLOT_CHOICE:
+      return [SessionState.ACTION_SELECT];
     default:
       return [];
   }
