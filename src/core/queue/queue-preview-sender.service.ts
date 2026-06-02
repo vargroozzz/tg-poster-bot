@@ -21,10 +21,10 @@ export class QueuePreviewSenderService {
       const { chatId, messageId, mediaGroupMessageIds, replyChainMessageIds } = post.originalForward;
 
       const bulkIds =
-        (replyChainMessageIds?.length ?? 0) > 1
-          ? replyChainMessageIds!
-          : (mediaGroupMessageIds?.length ?? 0) > 1
-            ? mediaGroupMessageIds!
+        replyChainMessageIds && replyChainMessageIds.length > 1
+          ? replyChainMessageIds
+          : mediaGroupMessageIds && mediaGroupMessageIds.length > 1
+            ? mediaGroupMessageIds
             : null;
 
       if (bulkIds) {

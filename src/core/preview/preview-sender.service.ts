@@ -46,14 +46,17 @@ export class PreviewSenderService {
 
       if (session.editingPostId) {
         // Edit session: source info comes from stored forwardInfo
-        const fwd = session.editingOriginalForward!;
+        const fwd = session.editingOriginalForward;
+        if (!fwd) throw new Error(`Edit session ${sessionId} missing editingOriginalForward`);
         sourceChatId = fwd.chatId;
         singleMessageId = fwd.messageId;
         const bulkIds = fwd.replyChainMessageIds ?? fwd.mediaGroupMessageIds ?? null;
-        bulkMessageIds = (bulkIds?.length ?? 0) > 1 ? bulkIds! : null;
+        bulkMessageIds = bulkIds && bulkIds.length > 1 ? bulkIds : null;
       } else {
-        sourceChatId = session.originalMessage!.chat.id;
-        singleMessageId = session.originalMessage!.message_id;
+        const origMsg = session.originalMessage;
+        if (!origMsg) throw new Error(`Session ${sessionId} missing originalMessage`);
+        sourceChatId = origMsg.chat.id;
+        singleMessageId = origMsg.message_id;
         const replyChain = session.replyChainMessages;
         const mediaGroup = session.mediaGroupMessages;
         const bulkMessages =
@@ -100,7 +103,7 @@ export class PreviewSenderService {
       const forwardInfo = session
         ? (session.editingPostId
             ? session.editingOriginalForward
-            : parseForwardInfo(session.originalMessage!))
+            : session.originalMessage ? parseForwardInfo(session.originalMessage) : undefined)
         : undefined;
       const replyParams = forwardInfo?.replyParameters ?? undefined;
 

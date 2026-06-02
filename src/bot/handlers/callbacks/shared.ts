@@ -17,8 +17,8 @@ import { createCustomTextKeyboard } from '../../keyboards/custom-text.keyboard.j
 
 let _sessionService: SessionService;
 
-export function getSessionService(): SessionService | undefined {
-  if (!_sessionService && DIContainer.has('SessionService')) {
+export function getSessionService(): SessionService {
+  if (!_sessionService) {
     _sessionService = DIContainer.resolve<SessionService>('SessionService');
   }
   return _sessionService;
@@ -51,11 +51,6 @@ export async function showPreview(ctx: Context, sessionKey: string): Promise<voi
     if (!fromId) return;
 
     const sessionSvc = getSessionService();
-    if (!sessionSvc) {
-      await ErrorMessages.sessionExpired(ctx);
-      return;
-    }
-
     const session = await sessionSvc.findById(sessionKey);
     if (!session) {
       await ErrorMessages.sessionExpired(ctx);
@@ -96,9 +91,8 @@ export async function handleNicknameSelection(
     const nickname = await findNicknameByUserId(fromUserId);
     if (nickname) {
       logger.debug(`Auto-selecting nickname "${nickname}" for user ${fromUserId}`);
-      const sessionSvc = getSessionService();
-      if (sessionId && sessionSvc) {
-        await sessionSvc.update(sessionId, { selectedUserId: fromUserId });
+      if (sessionId) {
+        await getSessionService().update(sessionId, { selectedUserId: fromUserId });
       }
 
       if (isPlainText && sessionId) {

@@ -51,7 +51,7 @@ export class MediaSenderService {
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
         : {}),
-    } as any);
+    });
     return result.message_id;
   }
 
@@ -69,7 +69,7 @@ export class MediaSenderService {
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
         : {}),
-    } as any);
+    });
     return result.message_id;
   }
 
