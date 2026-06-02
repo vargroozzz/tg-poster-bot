@@ -20,6 +20,9 @@ export interface ISession extends Document, PostSelections {
   editingOriginalScheduledTime?: Date;
   editingRawContent?: MessageContent;
   editingOriginalForward?: ForwardInfo;
+  isReply?: boolean;
+  replyParentPostId?: string;
+  replyMode?: 'together' | 'separated';
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date;
@@ -74,6 +77,9 @@ const sessionSchema = new Schema<ISession>({
   editingOriginalScheduledTime: { type: Date },
   editingRawContent: { type: Schema.Types.Mixed },
   editingOriginalForward: { type: Schema.Types.Mixed },
+  isReply: { type: Boolean },
+  replyParentPostId: { type: String },
+  replyMode: { type: String, enum: ['together', 'separated'] },
   createdAt: {
     type: Date,
     default: Date.now,
