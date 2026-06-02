@@ -1,5 +1,5 @@
 import { Api } from 'grammy';
-import type { IScheduledPost } from '../../database/models/scheduled-post.model.js';
+import type { IScheduledPost, EmbeddedReplyData } from '../../database/models/scheduled-post.model.js';
 import { MediaSenderService } from '../sending/media-sender.service.js';
 
 /**
@@ -23,12 +23,46 @@ export class PostPublisherService {
       return await this.copyMessage(post);
     }
 
-    // For 'transform' action, delegate to MediaSenderService
-    return await this.mediaSender.sendMessage(
-      post.targetChannelId,
-      post.content,
-      post.originalForward.replyParameters
-    );
+    // For 'transform' action, thread reply_parameters from separated reply or forward origin
+    const replyParams =
+      post.replyToMessageId && post.replyToChannelId
+        ? { messageId: post.replyToMessageId, chatId: parseInt(post.replyToChannelId, 10) }
+        : post.originalForward.replyParameters;
+
+    return await this.mediaSender.sendMessage(post.targetChannelId, post.content, replyParams);
+  }
+
+  /**
+   * Publish an embedded (together) reply, using the parent's message_id as reply target.
+   * For 'forward' action: uses copyMessage API so reply_parameters can be attached
+   * (forwardMessage does not support reply_parameters).
+   */
+  async publishEmbeddedReply(
+    reply: EmbeddedReplyData,
+    parentMessageId: number,
+    parentChannelId: string
+  ): Promise<number> {
+    const replyParams = {
+      messageId: parentMessageId,
+      chatId: parseInt(parentChannelId, 10),
+    };
+
+    if (reply.action === 'forward') {
+      const result = await this.api.copyMessage(
+        reply.targetChannelId,
+        reply.originalForward.chatId,
+        reply.originalForward.messageId,
+        {
+          reply_parameters: {
+            message_id: parentMessageId,
+            chat_id: parseInt(parentChannelId, 10),
+          },
+        }
+      );
+      return result.message_id;
+    }
+
+    return await this.mediaSender.sendMessage(reply.targetChannelId, reply.content, replyParams);
   }
 
   /**
@@ -58,6 +92,23 @@ export class PostPublisherService {
         bulkMessageIds
       );
       return result[0].message_id;
+    }
+
+    // If this is a separated reply, use copyMessage so reply_parameters can be passed.
+    // forwardMessage does not support reply_parameters.
+    if (post.replyToMessageId && post.replyToChannelId) {
+      const result = await this.api.copyMessage(
+        post.targetChannelId,
+        post.originalForward.chatId,
+        post.originalForward.messageId,
+        {
+          reply_parameters: {
+            message_id: post.replyToMessageId,
+            chat_id: parseInt(post.replyToChannelId, 10),
+          },
+        }
+      );
+      return result.message_id;
     }
 
     // Single message forward
