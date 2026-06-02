@@ -29,11 +29,7 @@ export class QueuePreviewSenderService {
 
       if (bulkIds) {
         try {
-          const result = (await this.api.raw.forwardMessages({
-            chat_id: userId,
-            from_chat_id: chatId,
-            message_ids: bulkIds,
-          })) as Array<{ message_id: number }>;
+          const result = await this.api.forwardMessages(userId, chatId, bulkIds);
           previewMessageIds.push(...result.map((r) => r.message_id));
         } catch (error) {
           logger.error('Failed to forward bulk messages for queue preview:', error);

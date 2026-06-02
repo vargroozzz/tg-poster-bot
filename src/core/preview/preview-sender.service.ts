@@ -60,11 +60,7 @@ export class PreviewSenderService {
 
       if (bulkMessageIds) {
         try {
-          const result = (await this.api.raw.forwardMessages({
-            chat_id: userId,
-            from_chat_id: sourceChatId,
-            message_ids: bulkMessageIds,
-          })) as Array<{ message_id: number }>;
+          const result = await this.api.forwardMessages(userId, sourceChatId, bulkMessageIds);
           previewMessageIds.push(...result.map((r) => r.message_id));
           logger.debug(`Forwarded ${bulkMessageIds.length} messages to user ${userId} for preview`);
         } catch (error) {

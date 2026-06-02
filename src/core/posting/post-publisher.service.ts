@@ -52,12 +52,11 @@ export class PostPublisherService {
           : null;
 
     if (bulkMessageIds) {
-      const result = (await this.api.raw.forwardMessages({
-        chat_id: post.targetChannelId,
-        from_chat_id: post.originalForward.chatId,
-        message_ids: bulkMessageIds,
-      })) as Array<{ message_id: number }>;
-
+      const result = await this.api.forwardMessages(
+        post.targetChannelId,
+        post.originalForward.chatId,
+        bulkMessageIds
+      );
       return result[0].message_id;
     }
 
