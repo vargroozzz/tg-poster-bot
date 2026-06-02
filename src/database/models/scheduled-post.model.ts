@@ -162,7 +162,7 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
 });
 
 // Compound unique index to prevent double-booking
-scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true, sparse: true });
+scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true });
 
 // Sparse index for usage-count aggregation in nickname keyboard
 scheduledPostSchema.index({ selectedUserId: 1 }, { sparse: true });
