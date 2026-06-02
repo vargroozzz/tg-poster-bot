@@ -1,5 +1,6 @@
 import { BaseRepository } from './base.repository.js';
 import { Session, type ISession } from '../models/session.model.js';
+import { SessionState } from '../../shared/constants/flow-states.js';
 
 /**
  * Repository for user sessions
@@ -43,7 +44,7 @@ export class SessionRepository extends BaseRepository<ISession> {
    */
   async updateState(
     sessionId: string,
-    state: string,
+    state: SessionState,
     updates: Partial<ISession>
   ): Promise<ISession | null> {
     return await this.model.findByIdAndUpdate(

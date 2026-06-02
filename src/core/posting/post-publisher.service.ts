@@ -42,11 +42,13 @@ export class PostPublisherService {
     }
 
     // For reply chains or media groups, forward all messages atomically
+    const replyChain = post.originalForward.replyChainMessageIds;
+    const mediaGroup = post.originalForward.mediaGroupMessageIds;
     const bulkMessageIds =
-      (post.originalForward.replyChainMessageIds?.length ?? 0) > 1
-        ? post.originalForward.replyChainMessageIds
-        : (post.originalForward.mediaGroupMessageIds?.length ?? 0) > 1
-          ? post.originalForward.mediaGroupMessageIds
+      replyChain && replyChain.length > 1
+        ? replyChain
+        : mediaGroup && mediaGroup.length > 1
+          ? mediaGroup
           : null;
 
     if (bulkMessageIds) {

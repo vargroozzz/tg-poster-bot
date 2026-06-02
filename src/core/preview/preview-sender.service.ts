@@ -16,30 +16,21 @@ export class PreviewSenderService {
     this.mediaSender = new MediaSenderService(api);
   }
 
-  private getSessionService(): SessionService | undefined {
-    if (DIContainer.has('SessionService')) {
-      return DIContainer.resolve<SessionService>('SessionService');
-    }
-    return undefined;
+  private getSessionService(): SessionService {
+    return DIContainer.resolve('SessionService');
   }
 
   async sendPreview(userId: number, content: MessageContent, sessionId: string): Promise<number> {
-    // Look up the session to determine the action
     const sessionSvc = this.getSessionService();
+    const session = await sessionSvc.findById(sessionId);
 
-    if (!sessionSvc) {
-      logger.warn('SessionService unavailable in PreviewSenderService, falling back to transform preview');
-    }
-
-    const session = sessionSvc ? await sessionSvc.findById(sessionId) : null;
-
-    if (sessionSvc && !session) {
+    if (!session) {
       throw new Error(`Session ${sessionId} not found when generating preview`);
     }
 
     const previewMessageIds: number[] = [];
 
-    if (session?.selectedAction === 'forward') {
+    if (session.selectedAction === 'forward') {
       let sourceChatId: number;
       let bulkMessageIds: number[] | null = null;
       let singleMessageId: number;
@@ -100,11 +91,9 @@ export class PreviewSenderService {
       }
     } else {
       // For transform action (or unknown): use MediaSenderService
-      const forwardInfo = session
-        ? (session.editingPostId
-            ? session.editingOriginalForward
-            : session.originalMessage ? parseForwardInfo(session.originalMessage) : undefined)
-        : undefined;
+      const forwardInfo = session.editingPostId
+        ? session.editingOriginalForward
+        : session.originalMessage ? parseForwardInfo(session.originalMessage) : undefined;
       const replyParams = forwardInfo?.replyParameters ?? undefined;
 
       // For replies: forward the replied-to message into the PM as visual context,
@@ -112,7 +101,7 @@ export class PreviewSenderService {
       if (replyParams) {
         // external_reply.chat may point to a private linked discussion group copy.
         // Prefer external_reply.origin (always the original public channel) for forwarding.
-        const extOrigin = session?.originalMessage?.external_reply?.origin;
+        const extOrigin = session.originalMessage?.external_reply?.origin;
         const fwdChatId =
           extOrigin?.type === 'channel'
             ? (extOrigin as { type: 'channel'; chat: { id: number } }).chat.id
@@ -164,7 +153,7 @@ export class PreviewSenderService {
     // unreliable for other media types in some clients, so a dedicated text
     // message with the keyboard is the most reliable approach.
     const keyboard = createPreviewActionKeyboard(sessionId);
-    const controlText = await this.buildControlMessage(session?.selectedChannel);
+    const controlText = await this.buildControlMessage(session.selectedChannel);
     const controlMessage = await this.api.sendMessage(userId, controlText, {
       reply_markup: keyboard,
       parse_mode: 'HTML',
