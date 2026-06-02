@@ -1,4 +1,5 @@
 import { Api } from 'grammy';
+import type { MessageOriginChannel } from 'grammy/types';
 import type { MessageContent } from '../../types/message.types.js';
 import { MediaSenderService } from '../sending/media-sender.service.js';
 import { createPreviewActionKeyboard } from '../../bot/keyboards/preview-action.keyboard.js';
@@ -102,25 +103,17 @@ export class PreviewSenderService {
         // external_reply.chat may point to a private linked discussion group copy.
         // Prefer external_reply.origin (always the original public channel) for forwarding.
         const extOrigin = session.originalMessage?.external_reply?.origin;
-        const fwdChatId =
-          extOrigin?.type === 'channel'
-            ? (extOrigin as { type: 'channel'; chat: { id: number } }).chat.id
-            : replyParams.chatId;
-        const fwdMessageId =
-          extOrigin?.type === 'channel'
-            ? (extOrigin as { type: 'channel'; message_id: number }).message_id
-            : replyParams.messageId;
+        const channelOrigin =
+          extOrigin?.type === 'channel' ? (extOrigin as MessageOriginChannel) : null;
+        const fwdChatId = channelOrigin ? channelOrigin.chat.id : replyParams.chatId;
+        const fwdMessageId = channelOrigin ? channelOrigin.message_id : replyParams.messageId;
         logger.debug(`Preview reply context: chatId=${fwdChatId}, messageId=${fwdMessageId}`);
         try {
           const contextMsg = await this.api.forwardMessage(userId, fwdChatId, fwdMessageId);
           previewMessageIds.push(contextMsg.message_id);
         } catch (err) {
           logger.warn('Could not forward replied-to message for preview context, using placeholder:', err);
-          // Fall back to a text stub so the user still sees reply context.
-          const channelTitle =
-            extOrigin?.type === 'channel'
-              ? (extOrigin as { type: 'channel'; chat: { title?: string } }).chat.title
-              : undefined;
+          const channelTitle = channelOrigin?.chat.title;
           const placeholderContent: MessageContent = {
             type: 'text',
             text: `↩️ Reply to: ${channelTitle ?? 'channel post'}`,
