@@ -1,0 +1,36 @@
+import { describe, it, expect, vi } from 'vitest';
+import { PostPublisherService } from '../post-publisher.service.js';
+import type { EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
+
+describe('PostPublisherService.publishEmbeddedReply', () => {
+  it('sends transform reply with reply_parameters to target channel', async () => {
+    const mockSendMessage = vi.fn().mockResolvedValue({ message_id: 42 });
+    const mockApi = {
+      sendMessage: mockSendMessage,
+      sendPhoto: vi.fn(),
+      sendVideo: vi.fn(),
+      sendDocument: vi.fn(),
+      sendAnimation: vi.fn(),
+      sendMediaGroup: vi.fn(),
+    } as any;
+
+    const publisher = new PostPublisherService(mockApi);
+    const replyData: EmbeddedReplyData = {
+      targetChannelId: '-1001111',
+      content: { type: 'text', text: 'hello reply' },
+      action: 'transform',
+      originalForward: { messageId: 1, chatId: 100 },
+    };
+
+    const msgId = await publisher.publishEmbeddedReply(replyData, 99, '-1002222');
+
+    expect(msgId).toBe(42);
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      '-1001111',
+      'hello reply',
+      expect.objectContaining({
+        reply_parameters: { message_id: 99, chat_id: -1002222 },
+      })
+    );
+  });
+});
