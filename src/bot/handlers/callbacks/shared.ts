@@ -19,7 +19,7 @@ let _sessionService: SessionService;
 
 export function getSessionService(): SessionService {
   if (!_sessionService) {
-    _sessionService = DIContainer.resolve<SessionService>('SessionService');
+    _sessionService = DIContainer.resolve('SessionService');
   }
   return _sessionService;
 }

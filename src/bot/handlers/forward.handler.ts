@@ -14,13 +14,12 @@ import { PreviewGeneratorService } from '../../core/preview/preview-generator.se
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 import { entitiesToHtml } from '../../utils/entities-to-html.js';
 
-// Get SessionService from DI container (will be initialized in index.ts)
-let sessionService: SessionService;
-const getSessionService = () => {
-  if (!sessionService && DIContainer.has('SessionService')) {
-    sessionService = DIContainer.resolve<SessionService>('SessionService');
+let _sessionService: SessionService | undefined;
+const getSessionService = (): SessionService => {
+  if (!_sessionService) {
+    _sessionService = DIContainer.resolve('SessionService');
   }
-  return sessionService;
+  return _sessionService;
 };
 
 // Store media group buffers temporarily

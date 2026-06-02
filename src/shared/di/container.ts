@@ -7,26 +7,33 @@ import { PostWorkerService } from '../../services/post-worker.service.js';
 import { PostSchedulerService } from '../../core/posting/post-scheduler.service.js';
 import { SessionService } from '../../core/session/session.service.js';
 
-/**
- * Dependency Injection Container
- * Manages service lifecycle and dependencies
- */
-export class DIContainer {
-  private static instances = new Map<string, unknown>();
+export type ServiceRegistry = {
+  ScheduledPostRepository: ScheduledPostRepository;
+  ChannelListRepository: ChannelListRepository;
+  SessionRepository: SessionRepository;
+  PostPublisherService: PostPublisherService;
+  PostWorkerService: PostWorkerService;
+  PostSchedulerService: PostSchedulerService;
+  SessionService: SessionService;
+  Api: Api;
+};
 
-  static register<T>(key: string, instance: T): void {
+export class DIContainer {
+  private static instances = new Map<keyof ServiceRegistry, unknown>();
+
+  static register<K extends keyof ServiceRegistry>(key: K, instance: ServiceRegistry[K]): void {
     this.instances.set(key, instance);
   }
 
-  static resolve<T>(key: string): T {
+  static resolve<K extends keyof ServiceRegistry>(key: K): ServiceRegistry[K] {
     const instance = this.instances.get(key);
     if (!instance) {
       throw new Error(`No instance registered for key: ${key}`);
     }
-    return instance as T;
+    return instance as ServiceRegistry[K];
   }
 
-  static has(key: string): boolean {
+  static has(key: keyof ServiceRegistry): boolean {
     return this.instances.has(key);
   }
 
