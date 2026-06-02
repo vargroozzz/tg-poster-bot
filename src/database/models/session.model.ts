@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import type { Message } from 'grammy/types';
 import type { ForwardInfo, MessageContent, PostSelections } from '../../types/message.types.js';
+import { SessionState } from '../../shared/constants/flow-states.js';
 
 /**
  * Session model for database-backed flow state management
@@ -10,7 +11,7 @@ export interface ISession extends Document, PostSelections {
   userId: number;
   messageId: number;
   chatId: number;
-  state: string;
+  state: SessionState;
   originalMessage?: Message;
   previewMessageId?: number;
   previewMessageIds?: number[];
