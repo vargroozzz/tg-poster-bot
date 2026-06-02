@@ -10,6 +10,8 @@ export enum SessionState {
   CUSTOM_TEXT = 'custom_text',
   PREVIEW = 'preview',
   COMPLETED = 'completed',
+  WAITING_FOR_REPLY_CONTENT = 'waiting_for_reply_content',
+  REPLY_SLOT_CHOICE = 'reply_slot_choice',
 }
 
 /**
