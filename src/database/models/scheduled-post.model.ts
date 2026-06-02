@@ -1,14 +1,22 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import type { ForwardInfo, MessageContent, TransformAction, TextHandling } from '../../types/message.types.js';
 
-/**
- * Metadata for tracking retry attempts
- */
 export interface RetryMetadata {
   attemptCount: number;
   lastAttemptAt?: Date;
   nextRetryAt?: Date;
   lastError?: string;
+}
+
+export interface EmbeddedReplyData {
+  targetChannelId: string;
+  content: MessageContent;
+  rawContent?: MessageContent;
+  action: TransformAction;
+  textHandling?: TextHandling;
+  selectedUserId?: number | null;
+  customText?: string;
+  originalForward: ForwardInfo;
 }
 
 export interface IScheduledPost extends Document {
@@ -22,10 +30,17 @@ export interface IScheduledPost extends Document {
   textHandling?: TextHandling;
   selectedUserId?: number | null;
   customText?: string;
-  status: 'pending' | 'posted' | 'failed';
+  status: 'pending' | 'posted' | 'failed' | 'waiting_parent';
   postedAt?: Date;
   error?: string;
   retryMetadata?: RetryMetadata;
+  // Together reply — published atomically with this post
+  embeddedReply?: EmbeddedReplyData;
+  embeddedReplyError?: string;
+  // Separated reply — this post is a reply to parentPostId
+  parentPostId?: string;
+  replyToMessageId?: number;
+  replyToChannelId?: string;
   createdAt: Date;
 }
 
@@ -104,7 +119,7 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
   customText: String,
   status: {
     type: String,
-    enum: ['pending', 'posted', 'failed'],
+    enum: ['pending', 'posted', 'failed', 'waiting_parent'],
     default: 'pending',
     index: true,
   },
@@ -123,6 +138,23 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     nextRetryAt: Date,
     lastError: String,
   },
+  embeddedReply: {
+    type: Schema.Types.Mixed,
+  },
+  embeddedReplyError: {
+    type: String,
+  },
+  parentPostId: {
+    type: String,
+    index: true,
+    sparse: true,
+  },
+  replyToMessageId: {
+    type: Number,
+  },
+  replyToChannelId: {
+    type: String,
+  },
   createdAt: {
     type: Date,
     default: Date.now,
@@ -130,11 +162,10 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
 });
 
 // Compound unique index to prevent double-booking
-scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true });
+scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true, sparse: true });
 
 // Sparse index for usage-count aggregation in nickname keyboard
 scheduledPostSchema.index({ selectedUserId: 1 }, { sparse: true });
-
 
 export const ScheduledPost = mongoose.model<IScheduledPost>(
   'ScheduledPost',
