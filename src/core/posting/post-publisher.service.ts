@@ -42,22 +42,15 @@ export class PostPublisherService {
     parentMessageId: number,
     parentChannelId: string
   ): Promise<number> {
-    const replyParams = {
-      messageId: parentMessageId,
-      chatId: parseInt(parentChannelId, 10),
-    };
+    const parentChatId = parseInt(parentChannelId, 10);
+    const replyParams = { messageId: parentMessageId, chatId: parentChatId };
 
     if (reply.action === 'forward') {
       const result = await this.api.copyMessage(
         reply.targetChannelId,
         reply.originalForward.chatId,
         reply.originalForward.messageId,
-        {
-          reply_parameters: {
-            message_id: parentMessageId,
-            chat_id: parseInt(parentChannelId, 10),
-          },
-        }
+        { reply_parameters: { message_id: parentMessageId, chat_id: parentChatId } }
       );
       return result.message_id;
     }
