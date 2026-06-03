@@ -10,6 +10,8 @@ import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyb
 import { createCustomTextKeyboard } from '../../keyboards/custom-text.keyboard.js';
 import { createEditChannelSelectKeyboard } from '../../keyboards/edit-keyboards.js';
 import { createReplySlotKeyboard } from '../../keyboards/reply-slot.keyboard.js';
+import { createAddReplyKeyboard } from '../../keyboards/preview-action.keyboard.js';
+import type { EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
 import { CustomTextPreset } from '../../../database/models/custom-text-preset.model.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
 import { logger } from '../../../utils/logger.js';
@@ -602,6 +604,118 @@ export function registerScheduling(): void {
       }
       // ── End edit-session confirm ──────────────────────────────────────────
 
+      // ── Reply-session confirm ──────────────────────────────────────────────
+      if (session.isReply && session.replyParentPostId) {
+        const replyOriginalMessage = session.originalMessage;
+        if (!replyOriginalMessage) {
+          await ctx.reply('Reply session is corrupted. Please start over.');
+          return;
+        }
+
+        const replySelectedChannel = session.selectedChannel;
+        if (!replySelectedChannel) {
+          await ctx.reply('No channel selected for reply.');
+          return;
+        }
+
+        const repository = new ScheduledPostRepository();
+        const parentPost = await repository.findById(session.replyParentPostId);
+
+        const replyForwardInfo = parseForwardInfo(replyOriginalMessage);
+        const replyMediaGroupMessages = session.mediaGroupMessages;
+        if (replyMediaGroupMessages && replyMediaGroupMessages.length > 1) {
+          replyForwardInfo.mediaGroupMessageIds = replyMediaGroupMessages.map((m) => m.message_id);
+        }
+
+        const replyContent = extractMessageContent(replyOriginalMessage, replyMediaGroupMessages);
+        if (!replyContent) {
+          await ctx.reply('Unsupported reply content type.');
+          return;
+        }
+
+        const {
+          textHandling: replyTextHandling = 'keep',
+          selectedUserId: replyUserId,
+          customText: replyCustomText,
+          selectedAction: replyAction = 'transform',
+        } = session;
+
+        if (session.replyMode === 'together') {
+          const replyNickname = replyUserId ? await findNicknameByUserId(replyUserId) : null;
+          const replyText =
+            replyAction === 'transform'
+              ? await transformerService.transformMessage(
+                  replyContent.text ?? '',
+                  replyForwardInfo,
+                  'transform',
+                  replyTextHandling,
+                  replyNickname,
+                  replyCustomText
+                )
+              : replyContent.text ?? '';
+
+          const transformedReplyContent = { ...replyContent, text: replyText };
+
+          const replyData: EmbeddedReplyData = {
+            targetChannelId: replySelectedChannel,
+            content: transformedReplyContent,
+            rawContent: replyContent,
+            action: replyAction,
+            textHandling: replyTextHandling,
+            selectedUserId: replyUserId ?? null,
+            customText: replyCustomText,
+            originalForward: replyForwardInfo,
+          };
+
+          const attached = await repository.attachEmbeddedReply(session.replyParentPostId, replyData);
+
+          if (fromId) await deletePreviewMessages(ctx, fromId, session);
+          await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+          await sessionSvc.complete(sessionKey);
+
+          if (!attached) {
+            await ctx.reply('⚠️ Parent post was already published — reply could not be attached.');
+            return;
+          }
+
+          const parentSlotTime = parentPost?.scheduledTime;
+          await ctx.reply(
+            `↩️ Reply scheduled with the parent post${parentSlotTime ? ` at ${formatSlotTime(parentSlotTime)}` : ''}`
+          );
+          logger.info(`Together reply attached to parent post ${session.replyParentPostId}`);
+          return;
+        }
+
+        // Separated reply: schedule normally, then convert to separated reply
+        const baseReplyParams = {
+          targetChannelId: replySelectedChannel,
+          originalMessage: replyOriginalMessage,
+          forwardInfo: replyForwardInfo,
+          content: replyContent,
+        };
+
+        const { scheduledTime: replySlotTime, postId: replyPostId } =
+          replyAction === 'forward'
+            ? await postScheduler.scheduleForwardPost(baseReplyParams)
+            : await postScheduler.scheduleTransformPost({
+                ...baseReplyParams,
+                textHandling: replyTextHandling,
+                selectedUserId: replyUserId,
+                customText: replyCustomText,
+              });
+
+        await repository.convertToSeparatedReply(replyPostId, session.replyParentPostId, parentPost ?? null);
+
+        if (fromId) await deletePreviewMessages(ctx, fromId, session);
+        await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+        await sessionSvc.complete(sessionKey);
+
+        await ctx.reply(`↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`);
+        logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
+        return;
+      }
+      // ── End reply-session confirm ──────────────────────────────────────────
+
       const originalMessage = session.originalMessage;
       if (!originalMessage) {
         await ctx.reply('Session is corrupted. Please forward the message again.');
@@ -637,7 +751,7 @@ export function registerScheduling(): void {
 
       const baseParams = { targetChannelId: selectedChannel, originalMessage, forwardInfo, content };
 
-      const { scheduledTime } = session.selectedAction === 'forward'
+      const { scheduledTime, postId } = session.selectedAction === 'forward'
         ? await postScheduler.scheduleForwardPost(baseParams)
         : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedUserId, customText });
 
@@ -654,7 +768,8 @@ export function registerScheduling(): void {
       const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? selectedChannel;
 
       await ctx.reply(
-        `Post scheduled!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(scheduledTime)}`
+        `Post scheduled!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
+        { reply_markup: createAddReplyKeyboard(postId) }
       );
 
       logger.info(`Post scheduled from preview for session ${sessionKey}`);
