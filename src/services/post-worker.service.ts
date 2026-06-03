@@ -120,16 +120,20 @@ export class PostWorkerService {
       }
 
       // Unblock separated reply posts that were waiting for this parent
-      await ScheduledPost.updateMany(
-        { parentPostId: post._id.toString(), status: 'waiting_parent' },
-        {
-          $set: {
-            replyToMessageId: messageId,
-            replyToChannelId: post.targetChannelId,
-            status: 'pending',
-          },
-        }
-      );
+      try {
+        await ScheduledPost.updateMany(
+          { parentPostId: post._id.toString(), status: 'waiting_parent' },
+          {
+            $set: {
+              replyToMessageId: messageId,
+              replyToChannelId: post.targetChannelId,
+              status: 'pending',
+            },
+          }
+        );
+      } catch (error) {
+        logger.error(`Failed to unblock separated replies for post ${post._id}:`, error);
+      }
 
       logger.info(`Successfully published post ${post._id} with message_id ${messageId}`);
     } catch (error) {
