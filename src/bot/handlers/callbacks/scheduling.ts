@@ -851,7 +851,7 @@ export function registerScheduling(): void {
         return;
       }
 
-      await sessionSvc.update(sessionId, { replyMode: mode });
+      await sessionSvc.updateState(sessionId, SessionState.ACTION_SELECT, { replyMode: mode });
 
       // Check for green-listed source — auto-forward if applicable
       const originalMessage = session.originalMessage;
