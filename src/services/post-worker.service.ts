@@ -102,15 +102,38 @@ export class PostWorkerService {
         `Publishing ${post.content.type} post to ${post.targetChannelId} (scheduled for ${formatSlotTime(post.scheduledTime)})`
       );
 
-      // Delegate publishing to the publisher service
       const messageId = await this.publisher.publish(post);
 
       await post.updateOne({ status: 'posted', postedAt: new Date(), telegramScheduledMessageId: messageId });
 
+      // Publish together (embedded) reply atomically in the same cycle
+      if (post.embeddedReply) {
+        try {
+          await this.publisher.publishEmbeddedReply(post.embeddedReply, messageId, post.targetChannelId);
+          logger.info(`Published embedded reply for post ${post._id}`);
+        } catch (error) {
+          logger.error(`Failed to publish embedded reply for post ${post._id}:`, error);
+          await post.updateOne({
+            embeddedReplyError: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      // Unblock separated reply posts that were waiting for this parent
+      await ScheduledPost.updateMany(
+        { parentPostId: post._id.toString(), status: 'waiting_parent' },
+        {
+          $set: {
+            replyToMessageId: messageId,
+            replyToChannelId: post.targetChannelId,
+            status: 'pending',
+          },
+        }
+      );
+
       logger.info(`Successfully published post ${post._id} with message_id ${messageId}`);
     } catch (error) {
       logger.error(`Failed to publish post ${post._id}:`, error);
-
       await post.updateOne({ status: 'failed', error: error instanceof Error ? error.message : String(error) });
     }
   }
