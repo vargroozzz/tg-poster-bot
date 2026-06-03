@@ -9,6 +9,7 @@ import { createTextHandlingKeyboard } from '../../keyboards/text-handling.keyboa
 import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyboard.js';
 import { createCustomTextKeyboard } from '../../keyboards/custom-text.keyboard.js';
 import { createEditChannelSelectKeyboard } from '../../keyboards/edit-keyboards.js';
+import { createReplySlotKeyboard } from '../../keyboards/reply-slot.keyboard.js';
 import { CustomTextPreset } from '../../../database/models/custom-text-preset.model.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
 import { logger } from '../../../utils/logger.js';
@@ -81,6 +82,16 @@ export function registerScheduling(): void {
 
       const sessionSvc = getSessionService();
       if (session && sessionSvc) {
+        // Reply sessions: advance to REPLY_SLOT_CHOICE and show slot keyboard
+        if (session.isReply) {
+          await sessionSvc.updateState(session._id.toString(), SessionState.REPLY_SLOT_CHOICE, {
+            selectedChannel: selectedChannelId,
+          });
+          const slotKeyboard = createReplySlotKeyboard(session._id.toString());
+          await ctx.editMessageText('When should this reply be sent?', { reply_markup: slotKeyboard });
+          return;
+        }
+
         const nextState = getNextState(SessionState.CHANNEL_SELECT, {
           isGreenListed: shouldAutoForward,
           isRedListed: false,
@@ -815,6 +826,66 @@ export function registerScheduling(): void {
         error,
         'Error going back.',
         'Error in preview:back callback'
+      );
+    }
+  });
+
+  // Handle reply slot choice: together (same cycle as parent) or separated (own slot)
+  bot.callbackQuery(/^reply_slot:(together|separated):(.+)$/, async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+
+      const match = ctx.callbackQuery?.data?.match(/^reply_slot:(together|separated):(.+)$/);
+      const mode = match?.[1] as 'together' | 'separated';
+      const sessionId = match?.[2];
+
+      if (!mode || !sessionId) {
+        await ctx.editMessageText('❌ Invalid reply slot selection.');
+        return;
+      }
+
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc.findById(sessionId);
+      if (!session) {
+        await ErrorMessages.sessionExpired(ctx);
+        return;
+      }
+
+      await sessionSvc.update(sessionId, { replyMode: mode });
+
+      // Check for green-listed source — auto-forward if applicable
+      const originalMessage = session.originalMessage;
+      if (originalMessage) {
+        const forwardInfo = parseForwardInfo(originalMessage);
+        const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
+
+        if (shouldAutoForward) {
+          await sessionSvc.update(sessionId, { selectedAction: 'forward' });
+          await showPreview(ctx, sessionId);
+          return;
+        }
+
+        const content = extractMessageContent(originalMessage);
+        if (content?.type === 'poll') {
+          await sessionSvc.update(sessionId, { selectedAction: 'forward' });
+          await showPreview(ctx, sessionId);
+          return;
+        }
+      }
+
+      const keyboard = createForwardActionKeyboard();
+      await ctx.editMessageText(
+        'Choose how to post this reply:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
+        { reply_markup: keyboard, parse_mode: 'HTML' }
+      );
+
+      logger.debug(`Reply slot mode "${mode}" set for session ${sessionId}`);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(
+        ctx,
+        error,
+        'Error processing reply slot selection. Please try again.',
+        'Error in reply_slot callback'
       );
     }
   });
