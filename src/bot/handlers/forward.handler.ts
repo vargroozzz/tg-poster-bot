@@ -9,6 +9,7 @@ import type { MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
+import type { ISession } from '../../database/models/session.model.js';
 import { SessionState } from '../../shared/constants/flow-states.js';
 import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
@@ -21,6 +22,37 @@ const getSessionService = (): SessionService => {
   }
   return _sessionService;
 };
+
+async function handleReplyContent(
+  ctx: Context,
+  message: Message,
+  replySession: ISession,
+  sessionSvc: SessionService
+): Promise<void> {
+  const sessionId = replySession._id.toString();
+
+  // Update session: set the real message, advance to CHANNEL_SELECT
+  await sessionSvc.updateState(sessionId, SessionState.CHANNEL_SELECT, {
+    originalMessage: message,
+    messageId: message.message_id,
+    chatId: message.chat.id,
+  });
+
+  const postingChannels = await getActivePostingChannels();
+  if (postingChannels.length === 0) {
+    await ctx.reply('⚠️ No posting channels configured. Add channels first with /addchannel.');
+    return;
+  }
+
+  const channels = postingChannels.map((ch) => ({
+    id: ch.channelId,
+    title: ch.channelTitle ?? ch.channelId,
+    username: ch.channelUsername,
+  }));
+
+  const keyboard = createChannelSelectKeyboard(channels);
+  await ctx.reply('Choose the target channel for this reply:', { reply_markup: keyboard });
+}
 
 // Store media group buffers temporarily
 interface MediaGroupBuffer {
@@ -256,6 +288,22 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 });
 
 async function processSingleMessage(ctx: Context, message: Message) {
+  // Check for a reply session waiting for content before starting a new standalone session
+  try {
+    const userId = ctx.from?.id;
+    if (userId) {
+      const sessionSvc = getSessionService();
+      const replySession = await sessionSvc.findWaitingForReplyContent(userId);
+      if (replySession) {
+        await handleReplyContent(ctx, message, replySession, sessionSvc);
+        return;
+      }
+    }
+  } catch (error) {
+    logger.error('Error checking for reply session:', error);
+    // Fall through to normal processing
+  }
+
   // Idempotency check: Skip if we already have a session for this message
   // This prevents duplicate processing during zero-downtime deployments
   const sessionSvc = getSessionService();
