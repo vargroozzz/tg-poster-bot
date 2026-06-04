@@ -414,17 +414,21 @@ export function registerScheduling(): void {
 
       const content = extractMessageContent(originalMessage);
       const hasText = !!(content?.text && content.text.trim().length > 0);
+      // Text already containing blockquotes should be kept as-is without prompting
+      const hasBlockquotes = hasText && (content?.text?.includes('<blockquote>') ?? false);
+      const effectiveHasText = hasText && !hasBlockquotes;
 
       if (session) {
         const nextState = getNextState(SessionState.ACTION_SELECT, {
-          isGreenListed: false, isRedListed: false, hasText, isForward: false,
+          isGreenListed: false, isRedListed: false, hasText: effectiveHasText, isForward: false,
         });
         await getSessionService()?.updateState(session._id.toString(), nextState, {
           selectedAction: 'transform',
+          ...(hasBlockquotes ? { textHandling: 'keep' } : {}),
         });
       }
 
-      if (hasText) {
+      if (effectiveHasText) {
         await ctx.editMessageText('How should the text be handled?', {
           reply_markup: createTextHandlingKeyboard(),
         });

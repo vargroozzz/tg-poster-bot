@@ -386,6 +386,8 @@ export function registerQueue(): void {
         return;
       }
       const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
+      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote>') ?? false);
+      const effectiveHasText = hasText && !hasBlockquotes;
       const isPoll = rawContent.type === 'poll';
 
       await sessionSvc.updateState(sessionId, SessionState.CHANNEL_SELECT, {
@@ -406,7 +408,8 @@ export function registerQueue(): void {
 
       if (isRedListed) {
         await sessionSvc.update(sessionId, { selectedAction: 'transform' });
-        if (hasText) {
+        if (hasBlockquotes) await sessionSvc.update(sessionId, { textHandling: 'keep' });
+        if (effectiveHasText) {
           await ctx.editMessageText('How should the text be handled?', {
             reply_markup: createEditTextHandlingKeyboard(sessionId),
           });
@@ -444,6 +447,8 @@ export function registerQueue(): void {
         return;
       }
       const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
+      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote>') ?? false);
+      const effectiveHasText = hasText && !hasBlockquotes;
 
       if (action === 'quick') {
         await sessionSvc.updateState(sessionId, SessionState.PREVIEW, {
@@ -462,8 +467,9 @@ export function registerQueue(): void {
         return;
       }
 
-      await sessionSvc.update(sessionId, { selectedAction: 'transform' });
-      if (hasText) {
+      if (hasBlockquotes) await sessionSvc.update(sessionId, { selectedAction: 'transform', textHandling: 'keep' });
+      else await sessionSvc.update(sessionId, { selectedAction: 'transform' });
+      if (effectiveHasText) {
         await ctx.editMessageText('How should the text be handled?', {
           reply_markup: createEditTextHandlingKeyboard(sessionId),
         });
