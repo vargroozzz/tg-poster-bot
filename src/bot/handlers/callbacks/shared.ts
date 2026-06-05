@@ -10,7 +10,6 @@ import { logger } from '../../../utils/logger.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
 import { PreviewGeneratorService } from '../../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../../core/preview/preview-sender.service.js';
-import { parseForwardInfo } from '../../../utils/message-parser.js';
 import {
   findNicknameByUserId,
   getNicknameKeyboard,
@@ -123,42 +122,3 @@ export async function showPreview(ctx: Context, sessionKey: string): Promise<voi
   }
 }
 
-/**
- * Auto-selects a nickname if the message is from a known user; otherwise shows the
- * nickname selection keyboard. Returns true when auto-selected (caller need not show keyboard).
- */
-export async function handleNicknameSelection(
-  ctx: Context,
-  originalMessage: Message,
-  sessionId?: string,
-  isPlainText?: boolean
-): Promise<boolean> {
-  const forwardInfo = parseForwardInfo(originalMessage);
-  const fromUserId = forwardInfo?.fromUserId;
-
-  if (fromUserId) {
-    const nickname = await findNicknameByUserId(fromUserId);
-    if (nickname) {
-      logger.debug(`Auto-selecting nickname "${nickname}" for user ${fromUserId}`);
-      if (sessionId) {
-        await getSessionService().update(sessionId, { selectedUserId: fromUserId });
-      }
-
-      if (isPlainText && sessionId) {
-        await showPreview(ctx, sessionId);
-      } else {
-        const keyboard = await createCustomTextKeyboard();
-        await ctx.editMessageText('Do you want to add custom text to this post?', {
-          reply_markup: keyboard,
-        });
-      }
-      return true;
-    }
-  }
-
-  const keyboard = await getNicknameKeyboard();
-  await ctx.editMessageText('Who should be credited for this post?', {
-    reply_markup: keyboard,
-  });
-  return false;
-}

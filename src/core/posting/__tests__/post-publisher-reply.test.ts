@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { Api } from 'grammy';
 import { PostPublisherService } from '../post-publisher.service.js';
 import type { EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
 
@@ -12,7 +13,7 @@ describe('PostPublisherService.publishEmbeddedReply', () => {
       sendDocument: vi.fn(),
       sendAnimation: vi.fn(),
       sendMediaGroup: vi.fn(),
-    } as any;
+    } as unknown as Api;
 
     const publisher = new PostPublisherService(mockApi);
     const replyData: EmbeddedReplyData = {
@@ -44,7 +45,7 @@ describe('PostPublisherService.publishEmbeddedReply', () => {
       sendAnimation: vi.fn(),
       sendMediaGroup: vi.fn(),
       copyMessage: mockCopyMessage,
-    } as any;
+    } as unknown as Api;
 
     const publisher = new PostPublisherService(mockApi);
     const replyData: EmbeddedReplyData = {
