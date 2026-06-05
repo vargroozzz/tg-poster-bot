@@ -149,6 +149,7 @@ export function registerScheduling(): void {
       const foundKey = session._id.toString();
 
       if (action === 'add') {
+        // Self-loop: stays in CUSTOM_TEXT, waiting for the user's reply with the text
         await getSessionService().updateState(foundKey, SessionState.CUSTOM_TEXT, { waitingForCustomText: true });
         await ctx.editMessageText(
           '✍️ Reply to this message with your custom text.\n\n' +
@@ -446,9 +447,15 @@ export function registerScheduling(): void {
         return;
       }
 
+      if (!session.selectedChannel) {
+        await ErrorMessages.channelSelectionRequired(ctx);
+        return;
+      }
+
       const event: FlowEvent = {
         type: 'ACTION_SELECTED',
         action: 'forward',
+        // The forward edge fires unconditionally on action='forward'; these fields are unused by its guard
         hasText: false,
         hasBlockquotes: false,
         isPlainText: false,
