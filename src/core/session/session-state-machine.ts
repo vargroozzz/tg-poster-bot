@@ -1,79 +1,160 @@
-import { SessionState, type SessionContext } from '../../shared/constants/flow-states.js';
+import { SessionState } from '../../shared/constants/flow-states.js';
+import type { FlowEvent, FlowStep } from '../../shared/constants/flow-states.js';
+import type { ISession } from '../../database/models/session.model.js';
 
-export function getNextState(current: SessionState, context: SessionContext): SessionState {
+export type TransitionResult = Readonly<{
+  newState: SessionState;
+  step: FlowStep;
+  sessionUpdates: Readonly<Partial<ISession>>;
+}>;
+
+interface EdgeDefinition {
+  readonly from: SessionState;
+  readonly on: FlowEvent['type'];
+  readonly when?: (event: FlowEvent) => boolean;
+  readonly to: SessionState;
+  readonly step: FlowStep | ((event: FlowEvent) => FlowStep);
+  readonly updates: (event: FlowEvent) => Readonly<Partial<ISession>>;
+}
+
+function edge<ET extends FlowEvent['type']>(e: {
+  from: SessionState;
+  on: ET;
+  when?: (event: Extract<FlowEvent, { type: ET }>) => boolean;
+  to: SessionState;
+  step: FlowStep | ((event: Extract<FlowEvent, { type: ET }>) => FlowStep);
+  updates: (event: Extract<FlowEvent, { type: ET }>) => Readonly<Partial<ISession>>;
+}): EdgeDefinition {
+  return e as unknown as EdgeDefinition;
+}
+
+const nicknameStep = (e: { knownNicknameUserId?: number; isPlainText: boolean }): FlowStep => {
+  if (e.knownNicknameUserId != null) {
+    return e.isPlainText ? { type: 'show_preview' } : { type: 'show_custom_text' };
+  }
+  return { type: 'show_nickname_select' };
+};
+
+const TRANSITIONS: readonly EdgeDefinition[] = [
+  // ── CHANNEL_SELECT ──────────────────────────────────────────────────────────
+  edge({
+    from: SessionState.CHANNEL_SELECT, on: 'CHANNEL_SELECTED',
+    when: e => e.isGreenListed || e.isPoll,
+    to: SessionState.PREVIEW,
+    step: { type: 'show_preview' },
+    updates: e => ({ selectedChannel: e.channelId, selectedAction: 'forward' }),
+  }),
+  edge({
+    from: SessionState.CHANNEL_SELECT, on: 'CHANNEL_SELECTED',
+    to: SessionState.ACTION_SELECT,
+    step: { type: 'show_action_select' },
+    updates: e => ({ selectedChannel: e.channelId }),
+  }),
+
+  // ── ACTION_SELECT ────────────────────────────────────────────────────────────
+  edge({
+    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
+    when: e => e.action === 'forward',
+    to: SessionState.PREVIEW,
+    step: { type: 'show_preview' },
+    updates: () => ({ selectedAction: 'forward' }),
+  }),
+  edge({
+    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
+    when: e => e.action === 'quick',
+    to: SessionState.PREVIEW,
+    step: { type: 'show_preview' },
+    updates: e => ({ selectedAction: 'transform', textHandling: 'remove', selectedUserId: e.fromUserId ?? null }),
+  }),
+  edge({
+    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
+    when: e => e.action === 'transform' && (!e.hasText || e.hasBlockquotes),
+    to: SessionState.NICKNAME_SELECT,
+    step: nicknameStep,
+    updates: e => ({
+      selectedAction: 'transform',
+      ...(e.hasBlockquotes && { textHandling: 'keep' }),
+      ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
+    }),
+  }),
+  edge({
+    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
+    when: e => e.action === 'transform' && e.hasText,
+    to: SessionState.TEXT_HANDLING,
+    step: { type: 'show_text_handling' },
+    updates: () => ({ selectedAction: 'transform' }),
+  }),
+
+  // ── TEXT_HANDLING ────────────────────────────────────────────────────────────
+  edge({
+    from: SessionState.TEXT_HANDLING, on: 'TEXT_HANDLING_SELECTED',
+    to: SessionState.NICKNAME_SELECT,
+    step: nicknameStep,
+    updates: e => ({
+      textHandling: e.handling,
+      ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
+    }),
+  }),
+
+  // ── NICKNAME_SELECT ──────────────────────────────────────────────────────────
+  edge({
+    from: SessionState.NICKNAME_SELECT, on: 'NICKNAME_SELECTED',
+    when: e => e.isPlainText,
+    to: SessionState.PREVIEW,
+    step: { type: 'show_preview' },
+    updates: e => ({ selectedUserId: e.userId }),
+  }),
+  edge({
+    from: SessionState.NICKNAME_SELECT, on: 'NICKNAME_SELECTED',
+    to: SessionState.CUSTOM_TEXT,
+    step: { type: 'show_custom_text' },
+    updates: e => ({ selectedUserId: e.userId }),
+  }),
+
+  // ── CUSTOM_TEXT ──────────────────────────────────────────────────────────────
+  edge({
+    from: SessionState.CUSTOM_TEXT, on: 'CUSTOM_TEXT_SELECTED',
+    to: SessionState.PREVIEW,
+    step: { type: 'show_preview' },
+    updates: e => ({ customText: e.text }),
+  }),
+];
+
+// ── Legacy shim — remove once scheduling.ts is migrated (Tasks 4-7) ─────────
+type LegacyContext = Readonly<{
+  isGreenListed: boolean;
+  isRedListed?: boolean;
+  hasText: boolean;
+  isForward?: boolean;
+  isPlainText?: boolean;
+}>;
+
+/** @deprecated Use `transition()` instead. Removed once scheduling.ts is migrated. */
+export function getNextState(current: SessionState, ctx: LegacyContext): SessionState {
   switch (current) {
     case SessionState.CHANNEL_SELECT:
-      if (context.isGreenListed) return SessionState.COMPLETED;
-      return SessionState.ACTION_SELECT;
-
+      return ctx.isGreenListed ? SessionState.PREVIEW : SessionState.ACTION_SELECT;
     case SessionState.ACTION_SELECT:
-      if (!context.isForward) {
-        if (context.isPlainText) return SessionState.NICKNAME_SELECT;
-        return context.hasText ? SessionState.TEXT_HANDLING : SessionState.NICKNAME_SELECT;
-      }
-      return SessionState.COMPLETED;
-
+      return ctx.hasText ? SessionState.TEXT_HANDLING : SessionState.NICKNAME_SELECT;
     case SessionState.TEXT_HANDLING:
       return SessionState.NICKNAME_SELECT;
-
     case SessionState.NICKNAME_SELECT:
-      if (context.isPlainText) return SessionState.PREVIEW;
-      return SessionState.CUSTOM_TEXT;
-
+      return ctx.isPlainText ? SessionState.PREVIEW : SessionState.CUSTOM_TEXT;
     case SessionState.CUSTOM_TEXT:
       return SessionState.PREVIEW;
-
-    case SessionState.PREVIEW:
-      return SessionState.COMPLETED;
-
-    case SessionState.COMPLETED:
-      return SessionState.COMPLETED;
-
-    case SessionState.WAITING_FOR_REPLY_CONTENT:
-      return SessionState.CHANNEL_SELECT;
-
-    case SessionState.REPLY_SLOT_CHOICE:
-      return SessionState.ACTION_SELECT;
-
     default:
-      throw new Error(`Unknown state: ${current}`);
+      return SessionState.COMPLETED;
   }
 }
 
-export function isValidTransition(
-  from: SessionState,
-  to: SessionState,
-  context: SessionContext
-): boolean {
-  return getNextState(from, context) === to;
-}
-
-export function getPossibleNextStates(current: SessionState): SessionState[] {
-  switch (current) {
-    case SessionState.CHANNEL_SELECT:
-      return [
-        SessionState.ACTION_SELECT,
-        SessionState.TEXT_HANDLING,
-        SessionState.NICKNAME_SELECT,
-        SessionState.COMPLETED,
-      ];
-    case SessionState.ACTION_SELECT:
-      return [SessionState.TEXT_HANDLING, SessionState.NICKNAME_SELECT, SessionState.COMPLETED];
-    case SessionState.TEXT_HANDLING:
-      return [SessionState.NICKNAME_SELECT];
-    case SessionState.NICKNAME_SELECT:
-      return [SessionState.CUSTOM_TEXT, SessionState.PREVIEW];
-    case SessionState.CUSTOM_TEXT:
-      return [SessionState.PREVIEW];
-    case SessionState.PREVIEW:
-      return [SessionState.COMPLETED];
-    case SessionState.COMPLETED:
-      return [];
-    case SessionState.WAITING_FOR_REPLY_CONTENT:
-      return [SessionState.CHANNEL_SELECT];
-    case SessionState.REPLY_SLOT_CHOICE:
-      return [SessionState.ACTION_SELECT];
-    default:
-      return [];
-  }
+export function transition(state: SessionState, event: FlowEvent): TransitionResult {
+  const matched = TRANSITIONS.find(
+    t => t.from === state && t.on === event.type && (t.when?.(event) ?? true)
+  );
+  if (!matched) throw new Error(`No transition: ${state} + ${event.type}`);
+  return Object.freeze({
+    newState: matched.to,
+    step: typeof matched.step === 'function' ? matched.step(event) : matched.step,
+    sessionUpdates: Object.freeze(matched.updates(event)),
+  });
 }
