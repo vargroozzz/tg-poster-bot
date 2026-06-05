@@ -79,7 +79,7 @@ const TRANSITIONS: readonly EdgeDefinition[] = [
   }),
   edge({
     from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
-    when: e => e.action === 'transform' && e.hasText,
+    when: e => e.action === 'transform' && e.hasText && !e.hasBlockquotes,
     to: SessionState.TEXT_HANDLING,
     step: { type: 'show_text_handling' },
     updates: () => ({ selectedAction: 'transform' }),
@@ -129,6 +129,8 @@ type LegacyContext = Readonly<{
   isPlainText?: boolean;
 }>;
 
+// WAITING_FOR_REPLY_CONTENT and REPLY_SLOT_CHOICE are handled by scheduling.ts
+// before getNextState is called — they intentionally fall through to COMPLETED here.
 /** @deprecated Use `transition()` instead. Removed once scheduling.ts is migrated. */
 export function getNextState(current: SessionState, ctx: LegacyContext): SessionState {
   switch (current) {
