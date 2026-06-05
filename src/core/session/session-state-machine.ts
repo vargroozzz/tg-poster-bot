@@ -120,35 +120,6 @@ const TRANSITIONS: readonly EdgeDefinition[] = [
   }),
 ];
 
-// ── Legacy shim — remove once scheduling.ts is migrated (Tasks 4-7) ─────────
-type LegacyContext = Readonly<{
-  isGreenListed: boolean;
-  isRedListed?: boolean;
-  hasText: boolean;
-  isForward?: boolean;
-  isPlainText?: boolean;
-}>;
-
-// WAITING_FOR_REPLY_CONTENT and REPLY_SLOT_CHOICE are handled by scheduling.ts
-// before getNextState is called — they intentionally fall through to COMPLETED here.
-/** @deprecated Use `transition()` instead. Removed once scheduling.ts is migrated. */
-export function getNextState(current: SessionState, ctx: LegacyContext): SessionState {
-  switch (current) {
-    case SessionState.CHANNEL_SELECT:
-      return ctx.isGreenListed ? SessionState.PREVIEW : SessionState.ACTION_SELECT;
-    case SessionState.ACTION_SELECT:
-      return ctx.hasText ? SessionState.TEXT_HANDLING : SessionState.NICKNAME_SELECT;
-    case SessionState.TEXT_HANDLING:
-      return SessionState.NICKNAME_SELECT;
-    case SessionState.NICKNAME_SELECT:
-      return ctx.isPlainText ? SessionState.PREVIEW : SessionState.CUSTOM_TEXT;
-    case SessionState.CUSTOM_TEXT:
-      return SessionState.PREVIEW;
-    default:
-      return SessionState.COMPLETED;
-  }
-}
-
 export function transition(state: SessionState, event: FlowEvent): TransitionResult {
   const matched = TRANSITIONS.find(
     t => t.from === state && t.on === event.type && (t.when?.(event) ?? true)
