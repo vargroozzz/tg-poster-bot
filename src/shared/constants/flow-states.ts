@@ -36,12 +36,3 @@ export type FlowStep =
   | Readonly<{ type: 'show_nickname_select' }>
   | Readonly<{ type: 'show_custom_text' }>
   | Readonly<{ type: 'show_preview' }>
-
-export interface SessionContext {
-  isGreenListed: boolean;
-  isRedListed: boolean;
-  isForward: boolean;
-  isPlainText?: boolean;
-  hasText: boolean;
-  isPoll?: boolean;
-}
