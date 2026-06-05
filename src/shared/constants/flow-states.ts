@@ -1,7 +1,3 @@
-/**
- * Session flow states for the scheduling flow
- * Represents the state machine for message scheduling
- */
 export enum SessionState {
   CHANNEL_SELECT = 'channel_select',
   ACTION_SELECT = 'action_select',
@@ -14,13 +10,29 @@ export enum SessionState {
   REPLY_SLOT_CHOICE = 'reply_slot_choice',
 }
 
-/**
- * Context for state transitions
- */
-export interface SessionContext {
-  isGreenListed: boolean;
-  isRedListed: boolean;
-  hasText: boolean;
-  isForward: boolean;
-  isPlainText?: boolean; // Non-forwarded text-only message: skip text handling and custom text
-}
+export type FlowEvent =
+  | Readonly<{ type: 'CHANNEL_SELECTED'; channelId: string; isGreenListed: boolean; isPoll: boolean }>
+  | Readonly<{
+      type: 'ACTION_SELECTED';
+      action: 'transform' | 'forward' | 'quick';
+      hasText: boolean;
+      hasBlockquotes: boolean;
+      isPlainText: boolean;
+      fromUserId?: number;
+      knownNicknameUserId?: number;
+    }>
+  | Readonly<{
+      type: 'TEXT_HANDLING_SELECTED';
+      handling: 'keep' | 'remove' | 'quote';
+      knownNicknameUserId?: number;
+      isPlainText: boolean;
+    }>
+  | Readonly<{ type: 'NICKNAME_SELECTED'; userId: number | null; isPlainText: boolean }>
+  | Readonly<{ type: 'CUSTOM_TEXT_SELECTED'; text?: string }>
+
+export type FlowStep =
+  | { type: 'show_action_select' }
+  | { type: 'show_text_handling' }
+  | { type: 'show_nickname_select' }
+  | { type: 'show_custom_text' }
+  | { type: 'show_preview' }
