@@ -5,9 +5,7 @@ import { parseForwardInfo } from '../../../utils/message-parser.js';
 import { transformerService } from '../../../services/transformer.service.js';
 import { extractMessageContent } from '../forward.handler.js';
 import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
-import { createTextHandlingKeyboard } from '../../keyboards/text-handling.keyboard.js';
 import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyboard.js';
-import { createCustomTextKeyboard } from '../../keyboards/custom-text.keyboard.js';
 import { createEditChannelSelectKeyboard } from '../../keyboards/edit-keyboards.js';
 import { createReplySlotKeyboard } from '../../keyboards/reply-slot.keyboard.js';
 import { createAddReplyKeyboard } from '../../keyboards/preview-action.keyboard.js';
@@ -20,7 +18,8 @@ import { NICKNAME_NONE_KEY } from '../../keyboards/nickname-select.keyboard.js';
 import { findNicknameByUserId } from '../../../shared/helpers/nickname.helper.js';
 import { PostSchedulerService } from '../../../core/posting/post-scheduler.service.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
-import { getNextState } from '../../../core/session/session-state-machine.js';
+import type { FlowEvent } from '../../../shared/constants/flow-states.js';
+import { transition } from '../../../core/session/session-state-machine.js';
 import { PostingChannel, getActivePostingChannels } from '../../../database/models/posting-channel.model.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
 import { QueueService } from '../../../core/queue/queue.service.js';
@@ -29,7 +28,9 @@ import {
   getSessionService,
   deletePreviewMessages,
   showPreview,
-  handleNicknameSelection,
+  renderStep,
+  computeIsPlainText,
+  resolveKnownNicknameUserId,
 } from './shared.js';
 
 const postScheduler = new PostSchedulerService();
@@ -78,62 +79,36 @@ export function registerScheduling(): void {
       // Check if message has text
       const content = extractMessageContent(originalMessage);
 
-      // DUAL READ: Try to find session in DB first, fall back to Map
       const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      const foundKey = session?._id.toString();
-
       const sessionSvc = getSessionService();
-      if (session && sessionSvc) {
-        // Reply sessions: advance to REPLY_SLOT_CHOICE and show slot keyboard
-        if (session.isReply) {
-          await sessionSvc.updateState(session._id.toString(), SessionState.REPLY_SLOT_CHOICE, {
-            selectedChannel: selectedChannelId,
-          });
-          const slotKeyboard = createReplySlotKeyboard(session._id.toString());
-          await ctx.editMessageText('When should this reply be sent?', { reply_markup: slotKeyboard });
-          return;
-        }
 
-        const nextState = getNextState(SessionState.CHANNEL_SELECT, {
-          isGreenListed: shouldAutoForward,
-          isRedListed: false,
-          hasText: false,
-          isForward: false,
-        });
-        await sessionSvc.updateState(session._id.toString(), nextState, {
+      // Reply sessions: advance to REPLY_SLOT_CHOICE and show slot keyboard
+      if (session && sessionSvc && session.isReply) {
+        await sessionSvc.updateState(session._id.toString(), SessionState.REPLY_SLOT_CHOICE, {
           selectedChannel: selectedChannelId,
         });
+        const slotKeyboard = createReplySlotKeyboard(session._id.toString());
+        await ctx.editMessageText('When should this reply be sent?', { reply_markup: slotKeyboard });
+        return;
       }
 
-      if (!foundKey) {
+      const isPoll = content?.type === 'poll';
+
+      if (!session || !sessionSvc) {
         await ErrorMessages.sessionExpired(ctx);
         return;
       }
 
-      if (shouldAutoForward) {
-        if (session && sessionSvc) {
-          await sessionSvc.update(session._id.toString(), { selectedAction: 'forward' });
-        }
-        await showPreview(ctx, foundKey);
-        return;
-      }
+      const event: FlowEvent = {
+        type: 'CHANNEL_SELECTED',
+        channelId: selectedChannelId,
+        isGreenListed: shouldAutoForward,
+        isPoll,
+      };
 
-      // Polls cannot be transformed — always forward regardless of origin
-      if (content?.type === 'poll') {
-        if (session && sessionSvc) {
-          await sessionSvc.update(session._id.toString(), { selectedAction: 'forward' });
-          await showPreview(ctx, session._id.toString());
-        }
-        logger.debug(`Poll message ${originalMessage.message_id}: auto-selected forward`);
-        return;
-      }
-
-      // Show action keyboard for all non-green, non-poll messages
-      const keyboard = createForwardActionKeyboard();
-      await ctx.editMessageText(
-        'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
-        { reply_markup: keyboard, parse_mode: 'HTML' }
-      );
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await sessionSvc.updateState(session._id.toString(), newState, sessionUpdates);
+      await renderStep(ctx, step, session._id.toString());
 
       logger.debug(`Channel ${selectedChannelId} selected for message ${originalMessage.message_id}`);
     } catch (error) {
@@ -167,28 +142,32 @@ export function registerScheduling(): void {
       }
 
       const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      const foundKey = session?._id.toString();
-
-      if (!foundKey) {
+      if (!session) {
         await ErrorMessages.sessionExpired(ctx);
         return;
       }
-
-      const updates = action === 'add' ? { waitingForCustomText: true } : { customText: undefined };
-      const nextState = action === 'add' ? SessionState.CUSTOM_TEXT : SessionState.PREVIEW;
-      await getSessionService()?.updateState(foundKey, nextState, updates);
+      const foundKey = session._id.toString();
 
       if (action === 'add') {
+        await getSessionService().updateState(foundKey, SessionState.CUSTOM_TEXT, { waitingForCustomText: true });
         await ctx.editMessageText(
           '✍️ Reply to this message with your custom text.\n\n' +
             'This text will be added at the beginning of your post.'
         );
-      } else {
-        // Skip custom text - show preview
-        await showPreview(ctx, foundKey);
+        logger.debug(`Custom text reply prompt shown for message ${originalMessage.message_id}`);
+        return;
       }
 
-      logger.debug(`Custom text action "${action}" for message ${originalMessage.message_id}`);
+      const event: FlowEvent = {
+        type: 'CUSTOM_TEXT_SELECTED',
+        text: undefined,
+      };
+
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(foundKey, newState, sessionUpdates);
+      await renderStep(ctx, step, foundKey);
+
+      logger.debug(`Custom text skipped for message ${originalMessage.message_id}`);
     } catch (error) {
       await ErrorMessages.catchAndReply(
         ctx,
@@ -223,14 +202,20 @@ export function registerScheduling(): void {
       }
 
       const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      const foundKey = session?._id.toString();
-      if (!foundKey) {
+      if (!session) {
         await ErrorMessages.sessionExpired(ctx);
         return;
       }
+      const foundKey = session._id.toString();
 
-      await getSessionService()?.updateState(foundKey, SessionState.PREVIEW, { customText: preset.text });
-      await showPreview(ctx, foundKey);
+      const event: FlowEvent = {
+        type: 'CUSTOM_TEXT_SELECTED',
+        text: preset.text,
+      };
+
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(foundKey, newState, sessionUpdates);
+      await renderStep(ctx, step, foundKey);
 
       logger.debug(`Preset custom text "${preset.label}" selected for message ${originalMessage.message_id}`);
     } catch (error) {
@@ -264,42 +249,26 @@ export function registerScheduling(): void {
         return;
       }
 
-      const selectedUserId = nicknameSelection === NICKNAME_NONE_KEY ? null : parseInt(nicknameSelection, 10);
-
       const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      const foundKey = session?._id.toString();
-
-      if (!foundKey) {
+      if (!session) {
         await ErrorMessages.sessionExpired(ctx);
         return;
       }
+      const foundKey = session._id.toString();
 
-      // Use the session's stored originalMessage (full data from DB) rather than
-      // reply_to_message from the callback, which Telegram may truncate (e.g. strips forward_origin).
-      const fullMessage = session?.originalMessage ?? originalMessage;
-      const isPlainText =
-        fullMessage.text !== undefined &&
-        !('photo' in fullMessage && fullMessage.photo) &&
-        !('video' in fullMessage && fullMessage.video) &&
-        !('document' in fullMessage && fullMessage.document) &&
-        !('animation' in fullMessage && fullMessage.animation) &&
-        !('external_reply' in fullMessage && fullMessage.external_reply) &&
-        !fullMessage.forward_origin;
+      const selectedUserId = nicknameSelection === NICKNAME_NONE_KEY ? null : parseInt(nicknameSelection, 10);
+      const fullMessage = session.originalMessage ?? originalMessage;
+      const isPlainText = computeIsPlainText(fullMessage);
 
-      const nextState = getNextState(SessionState.NICKNAME_SELECT, {
-        isGreenListed: false, isRedListed: false, hasText: false, isForward: false, isPlainText,
-      });
-      await getSessionService()?.updateState(foundKey, nextState, { selectedUserId });
+      const event: FlowEvent = {
+        type: 'NICKNAME_SELECTED',
+        userId: selectedUserId,
+        isPlainText,
+      };
 
-      if (nextState === SessionState.PREVIEW) {
-        await showPreview(ctx, foundKey);
-      } else {
-        // Show custom text keyboard
-        const keyboard = await createCustomTextKeyboard();
-        await ctx.editMessageText('Do you want to add custom text to this post?', {
-          reply_markup: keyboard,
-        });
-      }
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(foundKey, newState, sessionUpdates);
+      await renderStep(ctx, step, foundKey);
 
       logger.debug(`Nickname "${nicknameSelection}" selected for message ${originalMessage.message_id}`);
     } catch (error) {
@@ -334,20 +303,26 @@ export function registerScheduling(): void {
       }
 
       const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      const foundKey = session?._id.toString();
-
-      if (!foundKey) {
+      if (!session) {
         await ErrorMessages.sessionExpired(ctx);
         return;
       }
+      const foundKey = session._id.toString();
 
-      const nextState = getNextState(SessionState.TEXT_HANDLING, {
-        isGreenListed: false, isRedListed: false, hasText: true, isForward: false,
-      });
-      await getSessionService()?.updateState(foundKey, nextState, { textHandling });
+      const fullMessage = session.originalMessage ?? originalMessage;
+      const isPlainText = computeIsPlainText(fullMessage);
+      const knownNicknameUserId = await resolveKnownNicknameUserId(parseForwardInfo(fullMessage));
 
-      // After text handling, try auto-selecting nickname or show selection keyboard
-      await handleNicknameSelection(ctx, originalMessage, foundKey);
+      const event: FlowEvent = {
+        type: 'TEXT_HANDLING_SELECTED',
+        handling: textHandling,
+        isPlainText,
+        knownNicknameUserId,
+      };
+
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(foundKey, newState, sessionUpdates);
+      await renderStep(ctx, step, foundKey);
 
       logger.debug(`Text handling "${textHandling}" selected for message ${originalMessage.message_id}`);
     } catch (error) {
@@ -378,14 +353,18 @@ export function registerScheduling(): void {
 
       const forwardInfo = parseForwardInfo(originalMessage);
 
-      // Collapse transform + remove text + auto-nickname + skip custom text into one step
-      await getSessionService()?.updateState(session._id.toString(), SessionState.PREVIEW, {
-        selectedAction: 'transform',
-        textHandling: 'remove',
-        selectedUserId: forwardInfo.fromUserId ?? null,
-      });
+      const event: FlowEvent = {
+        type: 'ACTION_SELECTED',
+        action: 'quick',
+        hasText: false,
+        hasBlockquotes: false,
+        isPlainText: false,
+        fromUserId: forwardInfo.fromUserId,
+      };
 
-      await showPreview(ctx, session._id.toString());
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(session._id.toString(), newState, sessionUpdates);
+      await renderStep(ctx, step, session._id.toString());
 
       logger.debug(`Quick post selected for message ${originalMessage.message_id}`);
     } catch (error) {
@@ -411,30 +390,32 @@ export function registerScheduling(): void {
       }
 
       const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
+      if (!session) {
+        await ErrorMessages.sessionExpired(ctx);
+        return;
+      }
 
       const content = extractMessageContent(originalMessage);
-      const hasText = !!(content?.text && content.text.trim().length > 0);
-      // Text already containing blockquotes should be kept as-is without prompting
+      const hasText = !!(content?.text?.trim());
       const hasBlockquotes = hasText && (content?.text?.includes('<blockquote>') ?? false);
-      const effectiveHasText = hasText && !hasBlockquotes;
+      const fullMessage = session.originalMessage ?? originalMessage;
+      const isPlainText = computeIsPlainText(fullMessage);
+      const forwardInfo = parseForwardInfo(fullMessage);
+      const knownNicknameUserId = await resolveKnownNicknameUserId(forwardInfo);
 
-      if (session) {
-        const nextState = getNextState(SessionState.ACTION_SELECT, {
-          isGreenListed: false, isRedListed: false, hasText: effectiveHasText, isForward: false,
-        });
-        await getSessionService()?.updateState(session._id.toString(), nextState, {
-          selectedAction: 'transform',
-          ...(hasBlockquotes ? { textHandling: 'keep' } : {}),
-        });
-      }
+      const event: FlowEvent = {
+        type: 'ACTION_SELECTED',
+        action: 'transform',
+        hasText,
+        hasBlockquotes,
+        isPlainText,
+        fromUserId: forwardInfo.fromUserId,
+        knownNicknameUserId,
+      };
 
-      if (effectiveHasText) {
-        await ctx.editMessageText('How should the text be handled?', {
-          reply_markup: createTextHandlingKeyboard(),
-        });
-      } else {
-        await handleNicknameSelection(ctx, originalMessage, session?._id.toString());
-      }
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(session._id.toString(), newState, sessionUpdates);
+      await renderStep(ctx, step, session._id.toString());
 
       logger.debug(`Transform action selected for message ${originalMessage.message_id}`);
     } catch (error) {
@@ -460,21 +441,22 @@ export function registerScheduling(): void {
       }
 
       const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      const foundKey = session?._id.toString();
-      const { selectedChannel } = session ?? {};
-
-      if (!foundKey) {
+      if (!session) {
         await ErrorMessages.sessionExpired(ctx);
         return;
       }
 
-      if (!selectedChannel) {
-        await ErrorMessages.channelSelectionRequired(ctx);
-        return;
-      }
+      const event: FlowEvent = {
+        type: 'ACTION_SELECTED',
+        action: 'forward',
+        hasText: false,
+        hasBlockquotes: false,
+        isPlainText: false,
+      };
 
-      await getSessionService()?.update(foundKey, { selectedAction: 'forward' });
-      await showPreview(ctx, foundKey);
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(session._id.toString(), newState, sessionUpdates);
+      await renderStep(ctx, step, session._id.toString());
 
       logger.debug(`Forward action selected for message ${originalMessage.message_id}`);
     } catch (error) {
