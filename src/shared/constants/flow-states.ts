@@ -31,8 +31,17 @@ export type FlowEvent =
   | Readonly<{ type: 'CUSTOM_TEXT_SELECTED'; text?: string }>
 
 export type FlowStep =
-  | { type: 'show_action_select' }
-  | { type: 'show_text_handling' }
-  | { type: 'show_nickname_select' }
-  | { type: 'show_custom_text' }
-  | { type: 'show_preview' }
+  | Readonly<{ type: 'show_action_select' }>
+  | Readonly<{ type: 'show_text_handling' }>
+  | Readonly<{ type: 'show_nickname_select' }>
+  | Readonly<{ type: 'show_custom_text' }>
+  | Readonly<{ type: 'show_preview' }>
+
+export interface SessionContext {
+  isGreenListed: boolean;
+  isRedListed: boolean;
+  isForward: boolean;
+  isPlainText?: boolean;
+  hasText: boolean;
+  isPoll?: boolean;
+}
