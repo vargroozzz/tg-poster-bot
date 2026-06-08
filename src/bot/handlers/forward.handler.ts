@@ -280,12 +280,14 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
       if (buffer) {
         buffer.messages.push(message);
         clearTimeout(buffer.timeout);
+        logger.info(`Reply chain: joined buffer ${batchKey} (${buffer.messages.length} messages so far)`);
         buffer.timeout = setTimeout(() => {
           processReplyChain(batchKey).catch((err) => {
             logger.error('Error processing forward batch:', err);
           });
         }, 1000);
       } else {
+        logger.info(`Reply chain: new buffer ${batchKey} origin=${message.forward_origin?.type ?? 'none'}`);
         const timeout = setTimeout(() => {
           processReplyChain(batchKey).catch((err) => {
             logger.error('Error processing forward batch:', err);
@@ -480,6 +482,8 @@ async function processReplyChain(bufferKey: string) {
 
   const { messages, ctx } = buffer;
   if (messages.length === 0) return;
+
+  logger.info(`Reply chain fired: key=${bufferKey}, messages=${messages.length}`);
 
   // If only one message ended up in the buffer, treat as single message
   if (messages.length === 1) {
