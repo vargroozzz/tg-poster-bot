@@ -153,6 +153,19 @@ bot.on('message:text').filter(
   }
 });
 
+// Returns a stable grouping key derived from the forward origin so that multiple
+// messages forwarded from the same source (a reply thread) share a buffer.
+// Telegram does NOT preserve reply_to_message links between forwarded copies, so
+// this source-based key is the only reliable way to detect a batch-forwarded thread.
+function getForwardSourceKey(message: Message): string | undefined {
+  const origin = message.forward_origin;
+  if (!origin) return undefined;
+  if (origin.type === 'channel') return `channel_${origin.chat.id}`;
+  if (origin.type === 'user') return `user_${origin.sender_user.id}`;
+  if (origin.type === 'chat') return `chat_${origin.sender_chat.id}`;
+  return undefined; // hidden_user — no stable ID, don't group
+}
+
 // Handle both forwarded and non-forwarded messages
 bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:text', 'message:poll'], async (ctx: Context) => {
   try {
@@ -250,8 +263,13 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 
       // Use the linked key only when it's an actual reply-chain key; an mg: key
       // at this point means the media group was already flushed, so start fresh.
+      // For un-linked messages, group by forward origin so that multiple messages
+      // forwarded from the same channel/user are buffered together as one thread.
+      const sourceKey = getForwardSourceKey(message);
       const batchKey = linkedKey && !linkedKey.startsWith('mg:')
         ? linkedKey
+        : sourceKey
+        ? `fwd_${userId}_${sourceKey}`
         : `fwd_${userId}_${message.message_id}`;
 
       // Register so future replies to this message can find the same buffer.
