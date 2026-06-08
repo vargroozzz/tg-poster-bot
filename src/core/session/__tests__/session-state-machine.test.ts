@@ -77,20 +77,20 @@ describe('transition — ACTION_SELECT', () => {
     expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'keep' });
   });
 
-  it('transform with plain text goes to NICKNAME_SELECT and skips to show_custom_text when nickname known', () => {
+  it('transform with known nickname (not plain text) auto-skips to CUSTOM_TEXT', () => {
     const result = transition(SessionState.ACTION_SELECT, {
       type: 'ACTION_SELECTED', action: 'transform', ...base, knownNicknameUserId: 42,
     });
-    expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
+    expect(result.newState).toBe(SessionState.CUSTOM_TEXT);
     expect(result.step).toEqual({ type: 'show_custom_text' });
     expect(result.sessionUpdates).toMatchObject({ selectedUserId: 42 });
   });
 
-  it('transform with isPlainText + known nickname skips to show_preview', () => {
+  it('transform with known nickname + plain text auto-skips to PREVIEW', () => {
     const result = transition(SessionState.ACTION_SELECT, {
       type: 'ACTION_SELECTED', action: 'transform', hasText: false, hasBlockquotes: false, isPlainText: true, knownNicknameUserId: 42,
     });
-    expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
+    expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
     expect(result.sessionUpdates).toMatchObject({ selectedUserId: 42 });
   });
@@ -115,18 +115,20 @@ describe('transition — TEXT_HANDLING', () => {
     expect(result.sessionUpdates).toMatchObject({ textHandling: 'quote' });
   });
 
-  it('auto-skips nickname select when nickname is known', () => {
+  it('auto-skips to CUSTOM_TEXT when nickname is known and not plain text', () => {
     const result = transition(SessionState.TEXT_HANDLING, {
       type: 'TEXT_HANDLING_SELECTED', handling: 'keep', isPlainText: false, knownNicknameUserId: 7,
     });
+    expect(result.newState).toBe(SessionState.CUSTOM_TEXT);
     expect(result.step).toEqual({ type: 'show_custom_text' });
     expect(result.sessionUpdates).toMatchObject({ textHandling: 'keep', selectedUserId: 7 });
   });
 
-  it('auto-skips to show_preview for plain text with known nickname', () => {
+  it('auto-skips to PREVIEW when nickname is known and plain text', () => {
     const result = transition(SessionState.TEXT_HANDLING, {
       type: 'TEXT_HANDLING_SELECTED', handling: 'remove', isPlainText: true, knownNicknameUserId: 7,
     });
+    expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
   });
 });
@@ -167,6 +169,20 @@ describe('transition — CUSTOM_TEXT', () => {
     });
     expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
+  });
+});
+
+describe('transition — auto-skip regression', () => {
+  it('known nickname auto-skip: CUSTOM_TEXT_SELECTED works after ACTION_SELECTED lands in CUSTOM_TEXT', () => {
+    const first = transition(SessionState.ACTION_SELECT, {
+      type: 'ACTION_SELECTED', action: 'transform',
+      hasText: false, hasBlockquotes: false, isPlainText: false, knownNicknameUserId: 42,
+    });
+    expect(first.newState).toBe(SessionState.CUSTOM_TEXT);
+
+    const second = transition(first.newState, { type: 'CUSTOM_TEXT_SELECTED', text: 'hi' });
+    expect(second.newState).toBe(SessionState.PREVIEW);
+    expect(second.step).toEqual({ type: 'show_preview' });
   });
 });
 
