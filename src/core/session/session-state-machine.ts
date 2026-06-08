@@ -28,13 +28,6 @@ function edge<ET extends FlowEvent['type']>(e: {
   return e as unknown as EdgeDefinition;
 }
 
-const nicknameStep = (e: { knownNicknameUserId?: number; isPlainText: boolean }): FlowStep => {
-  if (e.knownNicknameUserId != null) {
-    return e.isPlainText ? { type: 'show_preview' } : { type: 'show_custom_text' };
-  }
-  return { type: 'show_nickname_select' };
-};
-
 const TRANSITIONS: readonly EdgeDefinition[] = [
   // ── CHANNEL_SELECT ──────────────────────────────────────────────────────────
   edge({
@@ -66,15 +59,37 @@ const TRANSITIONS: readonly EdgeDefinition[] = [
     step: { type: 'show_preview' },
     updates: e => ({ selectedAction: 'transform', textHandling: 'remove', selectedUserId: e.fromUserId ?? null }),
   }),
+  // transform + (no text | blockquotes): three edges keyed on (knownNicknameUserId, isPlainText)
   edge({
     from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
-    when: e => e.action === 'transform' && (!e.hasText || e.hasBlockquotes),
-    to: SessionState.NICKNAME_SELECT,
-    step: nicknameStep,
+    when: e => e.action === 'transform' && (!e.hasText || e.hasBlockquotes) && e.knownNicknameUserId != null && e.isPlainText,
+    to: SessionState.PREVIEW,
+    step: { type: 'show_preview' },
     updates: e => ({
       selectedAction: 'transform',
       ...(e.hasBlockquotes && { textHandling: 'keep' }),
-      ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
+      selectedUserId: e.knownNicknameUserId,
+    }),
+  }),
+  edge({
+    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
+    when: e => e.action === 'transform' && (!e.hasText || e.hasBlockquotes) && e.knownNicknameUserId != null && !e.isPlainText,
+    to: SessionState.CUSTOM_TEXT,
+    step: { type: 'show_custom_text' },
+    updates: e => ({
+      selectedAction: 'transform',
+      ...(e.hasBlockquotes && { textHandling: 'keep' }),
+      selectedUserId: e.knownNicknameUserId,
+    }),
+  }),
+  edge({
+    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
+    when: e => e.action === 'transform' && (!e.hasText || e.hasBlockquotes) && e.knownNicknameUserId == null,
+    to: SessionState.NICKNAME_SELECT,
+    step: { type: 'show_nickname_select' },
+    updates: e => ({
+      selectedAction: 'transform',
+      ...(e.hasBlockquotes && { textHandling: 'keep' }),
     }),
   }),
   edge({
@@ -88,12 +103,24 @@ const TRANSITIONS: readonly EdgeDefinition[] = [
   // ── TEXT_HANDLING ────────────────────────────────────────────────────────────
   edge({
     from: SessionState.TEXT_HANDLING, on: 'TEXT_HANDLING_SELECTED',
+    when: e => e.knownNicknameUserId != null && e.isPlainText,
+    to: SessionState.PREVIEW,
+    step: { type: 'show_preview' },
+    updates: e => ({ textHandling: e.handling, selectedUserId: e.knownNicknameUserId }),
+  }),
+  edge({
+    from: SessionState.TEXT_HANDLING, on: 'TEXT_HANDLING_SELECTED',
+    when: e => e.knownNicknameUserId != null && !e.isPlainText,
+    to: SessionState.CUSTOM_TEXT,
+    step: { type: 'show_custom_text' },
+    updates: e => ({ textHandling: e.handling, selectedUserId: e.knownNicknameUserId }),
+  }),
+  edge({
+    from: SessionState.TEXT_HANDLING, on: 'TEXT_HANDLING_SELECTED',
+    when: e => e.knownNicknameUserId == null,
     to: SessionState.NICKNAME_SELECT,
-    step: nicknameStep,
-    updates: e => ({
-      textHandling: e.handling,
-      ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
-    }),
+    step: { type: 'show_nickname_select' },
+    updates: e => ({ textHandling: e.handling }),
   }),
 
   // ── NICKNAME_SELECT ──────────────────────────────────────────────────────────
