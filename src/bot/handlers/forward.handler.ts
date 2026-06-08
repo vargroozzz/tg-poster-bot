@@ -51,7 +51,10 @@ async function handleReplyContent(
   }));
 
   const keyboard = createChannelSelectKeyboard(channels);
-  await ctx.reply('Choose the target channel for this reply:', { reply_markup: keyboard });
+  await ctx.reply('Choose the target channel for this reply:', {
+    reply_markup: keyboard,
+    reply_to_message_id: message.message_id,
+  });
 }
 
 // Store media group buffers temporarily
