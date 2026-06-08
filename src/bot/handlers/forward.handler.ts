@@ -175,10 +175,51 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
       return;
     }
 
+    const forwardOrigin = message.forward_origin;
+    const userId = ctx.from?.id;
+
     // Check if this is part of a media group
     const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
+
     if (mediaGroupId) {
-      // Buffer this message
+      if (forwardOrigin && userId) {
+        // Forwarded album: route through the same source-keyed reply chain buffer so
+        // it merges with any other forwarded messages from the same channel/thread.
+        const sourceKey = getForwardSourceKey(message);
+        const batchKey = sourceKey
+          ? `fwd_${userId}_${sourceKey}`
+          : `fwd_${userId}_mg_${mediaGroupId}`;
+
+        forwardedMsgToBufferKey.set(message.message_id, batchKey);
+
+        const chainBuf = replyChainBuffers.get(batchKey);
+        if (chainBuf) {
+          chainBuf.messages.push(message);
+          clearTimeout(chainBuf.timeout);
+          logger.info(`Reply chain: joined (fwd album) ${batchKey} (${chainBuf.messages.length} messages)`);
+          chainBuf.timeout = setTimeout(() => {
+            processReplyChain(batchKey).catch((err) => {
+              logger.error('Error processing forward batch:', err);
+            });
+          }, 1000);
+        } else {
+          logger.info(`Reply chain: new buffer (fwd album) ${batchKey} origin=${forwardOrigin.type}`);
+          const timeout = setTimeout(() => {
+            processReplyChain(batchKey).catch((err) => {
+              logger.error('Error processing forward batch:', err);
+            });
+          }, 1000);
+          replyChainBuffers.set(batchKey, {
+            messages: [message],
+            timeout,
+            ctx,
+            createdAt: Date.now(),
+          });
+        }
+        return;
+      }
+
+      // Non-forwarded media group: existing handling unchanged
       const buffer = mediaGroupBuffers.get(mediaGroupId);
 
       if (buffer) {
@@ -213,15 +254,8 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
       return; // Don't process yet
     }
 
-    // Single message (not part of media group)
-    // Group forwarded messages that form a thread using reply-chain linkage.
-    // When Telegram batch-forwards a thread, the forwarded copies preserve reply
-    // relationships using the new message IDs in the bot chat. We track each
-    // forwarded message_id → bufferKey so that a reply arriving later can join
-    // the same buffer rather than starting a new one.
-    const forwardOrigin = message.forward_origin;
-    const userId = ctx.from?.id;
-
+    // Single message (not part of media group): group forwarded messages from the
+    // same source into one buffer so a batch-forwarded thread is handled together.
     if (forwardOrigin && userId) {
       // If this message is a reply to one we already buffered, reuse that buffer.
       const replyToId = message.reply_to_message?.message_id;
@@ -483,17 +517,28 @@ async function processReplyChain(bufferKey: string) {
   const { messages, ctx } = buffer;
   if (messages.length === 0) return;
 
-  logger.info(`Reply chain fired: key=${bufferKey}, messages=${messages.length}`);
+  // Sort by message_id for chronological order before any analysis
+  messages.sort((a, b) => a.message_id - b.message_id);
+  const primaryMessage = messages[0];
 
-  // If only one message ended up in the buffer, treat as single message
-  if (messages.length === 1) {
+  // Classify the buffer contents
+  const mgIdOf = (m: Message): string | undefined =>
+    'media_group_id' in m ? (m as Message & { media_group_id?: string }).media_group_id : undefined;
+
+  const uniqueMgIds = new Set(messages.map(mgIdOf).filter((id): id is string => id !== undefined));
+  const singleMessages = messages.filter((m) => !mgIdOf(m));
+  // "items" = distinct albums + standalone single messages
+  const itemCount = uniqueMgIds.size + singleMessages.length;
+
+  const isPureAlbum = uniqueMgIds.size === 1 && singleMessages.length === 0;
+
+  logger.info(`Reply chain fired: key=${bufferKey}, messages=${messages.length}, items=${itemCount}, isPureAlbum=${isPureAlbum}`);
+
+  // Single non-album message: use existing single-message flow unchanged
+  if (messages.length === 1 && !mgIdOf(primaryMessage)) {
     await processSingleMessage(ctx, messages[0]);
     return;
   }
-
-  // Sort by message_id for chronological order
-  messages.sort((a, b) => a.message_id - b.message_id);
-  const primaryMessage = messages[0];
 
   // Get available posting channels
   const postingChannels = await getActivePostingChannels();
@@ -524,10 +569,13 @@ async function processReplyChain(bufferKey: string) {
     try {
       const session = await sessionSvc.create(ctx.from.id, primaryMessage);
       sessionId = session._id.toString();
-      // Store reply chain messages and pre-select forward action
-      await sessionSvc.update(sessionId, {
-        replyChainMessages: messages,
-      });
+      if (isPureAlbum) {
+        // Standalone forwarded album: store as mediaGroupMessages (same as non-forwarded albums)
+        await sessionSvc.update(sessionId, { mediaGroupMessages: messages });
+      } else {
+        // Multi-item thread: store all messages for bulk forwarding
+        await sessionSvc.update(sessionId, { replyChainMessages: messages });
+      }
     } catch (err) {
       logger.error('Failed to create session for reply chain:', err);
     }
@@ -541,13 +589,14 @@ async function processReplyChain(bufferKey: string) {
   }));
   const keyboard = createChannelSelectKeyboard(channels);
 
-  await ctx.reply(
-    `📍 Select target channel for this thread (${messages.length} messages):`,
-    {
-      reply_markup: keyboard,
-      reply_to_message_id: primaryMessage.message_id,
-    }
-  );
+  const promptText = isPureAlbum
+    ? `📍 Select target channel for this album (${messages.length} items):`
+    : `📍 Select target channel for this thread (${itemCount} posts):`;
+
+  await ctx.reply(promptText, {
+    reply_markup: keyboard,
+    reply_to_message_id: primaryMessage.message_id,
+  });
 }
 
 export function extractMessageContent(
