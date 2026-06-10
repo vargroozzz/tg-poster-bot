@@ -80,8 +80,43 @@ interface ReplyChainBuffer {
 const replyChainBuffers = new Map<string, ReplyChainBuffer>();
 
 // Maps a forwarded message_id (in bot chat) to its buffer key, so that
-// subsequent messages replying to it can be linked to the same buffer.
+// subsequent messages replying to it (in the bot chat) can be linked to the same buffer.
 const forwardedMsgToBufferKey = new Map<number, string>();
+
+// Maps a message's "address" in its source channel (chatId_messageId of the ORIGINAL
+// message) to the buffer key it ended up in. This lets us detect when a newly-forwarded
+// message is itself a reply, in the source chat, to a message we already buffered —
+// the only reliable signal for "these forwards form a real reply chain". Messages that
+// are merely forwarded together (no such relationship) are NOT grouped.
+const originKeyToBufferKey = new Map<string, string>();
+
+// Returns the "address" (source chat + original message_id) of a forwarded message in
+// its origin channel, if known. Only channel-origin forwards expose the original message_id.
+function getForwardOriginKey(message: Message): string | undefined {
+  const origin = message.forward_origin;
+  if (origin?.type === 'channel') {
+    return `${origin.chat.id}_${origin.message_id}`;
+  }
+  return undefined;
+}
+
+// Returns the "address" of the message this one replies to in the source chat
+// (Bot API 7.0 external_reply), if known.
+function getExternalReplyKey(message: Message): string | undefined {
+  const ext = message.external_reply;
+  if (ext?.chat && ext.message_id !== undefined) {
+    return `${ext.chat.id}_${ext.message_id}`;
+  }
+  return undefined;
+}
+
+function cleanupBufferLinks(messages: Message[]): void {
+  messages.forEach((msg) => {
+    forwardedMsgToBufferKey.delete(msg.message_id);
+    const originKey = getForwardOriginKey(msg);
+    if (originKey) originKeyToBufferKey.delete(originKey);
+  });
+}
 
 // Clean up stale reply-chain buffers every 5 minutes
 setInterval(() => {
@@ -90,7 +125,7 @@ setInterval(() => {
   replyChainBuffers.forEach((buffer, key) => {
     if (now - buffer.createdAt > replyChainTtl) {
       clearTimeout(buffer.timeout);
-      buffer.messages.forEach((msg) => forwardedMsgToBufferKey.delete(msg.message_id));
+      cleanupBufferLinks(buffer.messages);
       replyChainBuffers.delete(key);
       logger.debug(`Cleaned up stale reply chain buffer: ${key}`);
     }
@@ -153,19 +188,6 @@ bot.on('message:text').filter(
   }
 });
 
-// Returns a stable grouping key derived from the forward origin so that multiple
-// messages forwarded from the same source (a reply thread) share a buffer.
-// Telegram does NOT preserve reply_to_message links between forwarded copies, so
-// this source-based key is the only reliable way to detect a batch-forwarded thread.
-function getForwardSourceKey(message: Message): string | undefined {
-  const origin = message.forward_origin;
-  if (!origin) return undefined;
-  if (origin.type === 'channel') return `channel_${origin.chat.id}`;
-  if (origin.type === 'user') return `user_${origin.sender_user.id}`;
-  if (origin.type === 'chat') return `chat_${origin.sender_chat.id}`;
-  return undefined; // hidden_user — no stable ID, don't group
-}
-
 // Handle both forwarded and non-forwarded messages
 bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:text', 'message:poll'], async (ctx: Context) => {
   try {
@@ -183,12 +205,15 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 
     if (mediaGroupId) {
       if (forwardOrigin && userId) {
-        // Forwarded album: route through the same source-keyed reply chain buffer so
-        // it merges with any other forwarded messages from the same channel/thread.
-        const sourceKey = getForwardSourceKey(message);
-        const batchKey = sourceKey
-          ? `fwd_${userId}_${sourceKey}`
-          : `fwd_${userId}_mg_${mediaGroupId}`;
+        // Forwarded album: only merge into an existing thread buffer if this album is
+        // itself a reply (in the source chat) to an already-buffered message. Albums
+        // forwarded together without such a relationship get their own buffer.
+        const replyTargetKey = getExternalReplyKey(message);
+        const linkedOriginBufferKey = replyTargetKey ? originKeyToBufferKey.get(replyTargetKey) : undefined;
+        const batchKey = linkedOriginBufferKey ?? `fwd_${userId}_mg_${mediaGroupId}`;
+
+        const originKey = getForwardOriginKey(message);
+        if (originKey) originKeyToBufferKey.set(originKey, batchKey);
 
         forwardedMsgToBufferKey.set(message.message_id, batchKey);
 
@@ -254,8 +279,8 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
       return; // Don't process yet
     }
 
-    // Single message (not part of media group): group forwarded messages from the
-    // same source into one buffer so a batch-forwarded thread is handled together.
+    // Single message (not part of media group): only group with another buffered
+    // message if this one is a genuine reply chain (see getExternalReplyKey below).
     if (forwardOrigin && userId) {
       // If this message is a reply to one we already buffered, reuse that buffer.
       const replyToId = message.reply_to_message?.message_id;
@@ -297,16 +322,24 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 
       // Use the linked key only when it's an actual reply-chain key; an mg: key
       // at this point means the media group was already flushed, so start fresh.
-      // For un-linked messages, group by forward origin so that multiple messages
-      // forwarded from the same channel/user are buffered together as one thread.
-      const sourceKey = getForwardSourceKey(message);
+      // Otherwise, only merge into an existing buffer if this message is itself a
+      // reply (in the source chat) to an already-buffered message — a real reply
+      // chain. Messages merely forwarded together get their own buffer.
+      const replyTargetKey = getExternalReplyKey(message);
+      const linkedOriginBufferKey = replyTargetKey ? originKeyToBufferKey.get(replyTargetKey) : undefined;
+
       const batchKey = linkedKey && !linkedKey.startsWith('mg:')
         ? linkedKey
-        : sourceKey
-        ? `fwd_${userId}_${sourceKey}`
+        : linkedOriginBufferKey
+        ? linkedOriginBufferKey
         : `fwd_${userId}_${message.message_id}`;
 
-      // Register so future replies to this message can find the same buffer.
+      // Register so a later message that replies to this one (in the source chat)
+      // can find the same buffer.
+      const originKey = getForwardOriginKey(message);
+      if (originKey) originKeyToBufferKey.set(originKey, batchKey);
+
+      // Register so future bot-chat replies to this message can find the same buffer.
       forwardedMsgToBufferKey.set(message.message_id, batchKey);
 
       const buffer = replyChainBuffers.get(batchKey);
@@ -436,8 +469,7 @@ async function processMediaGroup(mediaGroupId: string) {
 
   const messages = buffer.messages;
 
-  // Remove forwardedMsgToBufferKey entries for this media group.
-  messages.forEach((msg) => forwardedMsgToBufferKey.delete(msg.message_id));
+  cleanupBufferLinks(messages);
 
   if (messages.length === 0) {
     return;
@@ -512,7 +544,7 @@ async function processReplyChain(bufferKey: string) {
 
   clearTimeout(buffer.timeout);
   replyChainBuffers.delete(bufferKey);
-  buffer.messages.forEach((msg) => forwardedMsgToBufferKey.delete(msg.message_id));
+  cleanupBufferLinks(buffer.messages);
 
   const { messages, ctx } = buffer;
   if (messages.length === 0) return;
