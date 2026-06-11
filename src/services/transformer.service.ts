@@ -1,5 +1,5 @@
-import type { ForwardInfo, TransformAction, TextHandling } from '../types/message.types.js';
-import { transformText } from '../core/transformation/text-transformer.js';
+import type { ForwardInfo, MessageContent, TransformAction, TextHandling } from '../types/message.types.js';
+import { transformText, preventEmptyTextContent } from '../core/transformation/text-transformer.js';
 import { buildAttribution } from '../core/attribution/attribution.js';
 import { ChannelListRepository } from '../database/repositories/channel-list.repository.js';
 import { PostingChannel } from '../database/models/posting-channel.model.js';
@@ -26,6 +26,23 @@ export async function transformMessage(
   return processedText + (attributionText ?? '');
 }
 
+/**
+ * Applies transformMessage to a MessageContent's text, guarding against
+ * text-only content ending up empty (Telegram rejects empty sendMessage text).
+ */
+export async function transformContent(
+  content: MessageContent,
+  forwardInfo: ForwardInfo,
+  action: TransformAction,
+  textHandling: TextHandling = 'keep',
+  manualNickname?: string | null,
+  customText?: string
+): Promise<MessageContent> {
+  const originalText = content.text ?? '';
+  const transformedText = await transformMessage(originalText, forwardInfo, action, textHandling, manualNickname, customText);
+  return { ...content, text: preventEmptyTextContent(content.type, originalText, transformedText) };
+}
+
 export async function shouldAutoForward(forwardInfo: ForwardInfo): Promise<boolean> {
   if (!forwardInfo.fromChannelId) return false;
 
@@ -43,6 +60,7 @@ export async function isRedListed(channelId: string): Promise<boolean> {
 // Keep singleton export for backwards compat with call sites that import `transformerService`
 export const transformerService = {
   transformMessage,
+  transformContent,
   shouldAutoForward,
   isRedListed,
 };

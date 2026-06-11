@@ -42,20 +42,14 @@ export class PostSchedulerService {
 
     const nextSlot = await findNextAvailableSlot(targetChannelId);
 
-    const originalText = content.text ?? '';
-    const transformedText = await transformerService.transformMessage(
-      originalText,
+    const transformedContent = await transformerService.transformContent(
+      content,
       forwardInfo,
       'transform',
       textHandling,
       selectedNickname,
       customText
     );
-
-    const transformedContent = {
-      ...content,
-      text: transformedText,
-    };
 
     const scheduledPost = await this.repository.create({
       scheduledTime: nextSlot,
