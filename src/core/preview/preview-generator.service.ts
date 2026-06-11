@@ -55,7 +55,6 @@ export class PreviewGeneratorService {
       forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
     }
 
-    const originalText = content.text ?? '';
     const textHandling = session.textHandling ?? 'keep';
 
     const selectedNickname = session.selectedUserId ? await getUserNickname(session.selectedUserId) : null;
@@ -66,19 +65,14 @@ export class PreviewGeneratorService {
       hasCustomText: !!session.customText,
     });
 
-    const transformedText = await transformerService.transformMessage(
-      originalText,
+    return transformerService.transformContent(
+      content,
       forwardInfo,
       'transform',
       textHandling,
       selectedNickname,
       session.customText
     );
-
-    return {
-      ...content,
-      text: transformedText,
-    };
   }
 
   private async generatePreviewForEdit(session: ISession): Promise<MessageContent> {
@@ -98,15 +92,13 @@ export class PreviewGeneratorService {
 
     const selectedNickname = session.selectedUserId ? await getUserNickname(session.selectedUserId) : null;
 
-    const transformedText = await transformerService.transformMessage(
-      rawContent.text ?? '',
+    return transformerService.transformContent(
+      rawContent,
       forwardInfo,
       'transform',
       session.textHandling ?? 'keep',
       selectedNickname,
       session.customText
     );
-
-    return { ...rawContent, text: transformedText };
   }
 }

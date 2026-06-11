@@ -527,15 +527,14 @@ export function registerScheduling(): void {
             const selectedNickname = session.selectedUserId
               ? await findNicknameByUserId(session.selectedUserId)
               : null;
-            const transformedText = await transformerService.transformMessage(
-              editingRawContent.text ?? '',
+            newContent = await transformerService.transformContent(
+              editingRawContent,
               editingOriginalForward,
               'transform',
               session.textHandling ?? 'keep',
               selectedNickname,
               session.customText
             );
-            newContent = { ...editingRawContent, text: transformedText };
           }
 
           const updated = await repository.updatePost(editingPostId, {
@@ -635,19 +634,17 @@ export function registerScheduling(): void {
 
         if (session.replyMode === 'together') {
           const replyNickname = replyUserId ? await findNicknameByUserId(replyUserId) : null;
-          const replyText =
+          const transformedReplyContent =
             replyAction === 'transform'
-              ? await transformerService.transformMessage(
-                  replyContent.text ?? '',
+              ? await transformerService.transformContent(
+                  replyContent,
                   replyForwardInfo,
                   'transform',
                   replyTextHandling,
                   replyNickname,
                   replyCustomText
                 )
-              : replyContent.text ?? '';
-
-          const transformedReplyContent = { ...replyContent, text: replyText };
+              : { ...replyContent, text: replyContent.text ?? '' };
 
           const replyData: EmbeddedReplyData = {
             targetChannelId: replySelectedChannel,
