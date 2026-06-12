@@ -353,6 +353,8 @@ export function registerScheduling(): void {
       }
 
       const forwardInfo = parseForwardInfo(originalMessage);
+      const content = extractMessageContent(originalMessage, session.mediaGroupMessages);
+      const isTextOnly = content?.type === 'text' && (session.replyChainMessages?.length ?? 0) <= 1;
 
       const event: FlowEvent = {
         type: 'ACTION_SELECTED',
@@ -360,6 +362,7 @@ export function registerScheduling(): void {
         hasText: false,
         hasBlockquotes: false,
         isPlainText: false,
+        isTextOnly,
         fromUserId: forwardInfo.fromUserId,
       };
 

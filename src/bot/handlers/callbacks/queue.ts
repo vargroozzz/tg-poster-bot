@@ -453,7 +453,7 @@ export function registerQueue(): void {
       if (action === 'quick') {
         await sessionSvc.updateState(sessionId, SessionState.PREVIEW, {
           selectedAction: 'transform',
-          textHandling: 'remove',
+          textHandling: rawContent.type === 'text' ? 'keep' : 'remove',
           selectedUserId: session.editingOriginalForward?.fromUserId ?? null,
           customText: undefined,
         });

@@ -57,7 +57,7 @@ const TRANSITIONS: readonly EdgeDefinition[] = [
     when: e => e.action === 'quick',
     to: SessionState.PREVIEW,
     step: { type: 'show_preview' },
-    updates: e => ({ selectedAction: 'transform', textHandling: 'remove', selectedUserId: e.fromUserId ?? null }),
+    updates: e => ({ selectedAction: 'transform', textHandling: e.isTextOnly ? 'keep' : 'remove', selectedUserId: e.fromUserId ?? null }),
   }),
   // transform + (no text | blockquotes): three edges keyed on (knownNicknameUserId, isPlainText)
   edge({

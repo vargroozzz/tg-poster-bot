@@ -59,6 +59,13 @@ describe('transition — ACTION_SELECT', () => {
     expect(result.sessionUpdates).toMatchObject({ selectedUserId: null });
   });
 
+  it('quick action on text-only message keeps text handling', () => {
+    const result = transition(SessionState.ACTION_SELECT, {
+      type: 'ACTION_SELECTED', action: 'quick', ...base, isTextOnly: true, fromUserId: 99,
+    });
+    expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'keep', selectedUserId: 99 });
+  });
+
   it('transform with no text goes to NICKNAME_SELECT', () => {
     const result = transition(SessionState.ACTION_SELECT, {
       type: 'ACTION_SELECTED', action: 'transform', ...base,
