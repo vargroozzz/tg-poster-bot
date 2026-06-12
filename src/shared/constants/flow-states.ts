@@ -18,6 +18,7 @@ export type FlowEvent =
       hasText: boolean;
       hasBlockquotes: boolean;
       isPlainText: boolean;
+      isTextOnly?: boolean;
       fromUserId?: number;
       knownNicknameUserId?: number;
     }>
