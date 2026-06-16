@@ -1,5 +1,6 @@
 // src/bot/handlers/callbacks/scheduling.ts
 import { Context } from 'grammy';
+import type { Message } from 'grammy/types';
 import { bot } from '../../bot.js';
 import { parseForwardInfo } from '../../../utils/message-parser.js';
 import { transformerService } from '../../../services/transformer.service.js';
@@ -20,6 +21,8 @@ import { PostSchedulerService } from '../../../core/posting/post-scheduler.servi
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import type { FlowEvent } from '../../../shared/constants/flow-states.js';
 import { transition } from '../../../core/session/session-state-machine.js';
+import { classifyScheduleConfirm } from '../../../core/session/preview-route.js';
+import type { ScheduleRoute } from '../../../core/session/preview-route.js';
 import { PostingChannel, getActivePostingChannels } from '../../../database/models/posting-channel.model.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
 import { QueueService } from '../../../core/queue/queue.service.js';
@@ -49,93 +52,28 @@ async function getPendingForward(userId: number, messageId: number): Promise<ISe
   }
 }
 
-export function registerScheduling(): void {
+// Every event-dispatching callback shares the same shell: ack, find the original
+// message and its session, build a FlowEvent, then run the transition + render.
+// `match` is grammy's regex capture for this callback (undefined for plain-string
+// filters). The builder returns null when it already handled the response
+// (self-loops, validation errors).
+type Dispatch = {
+  ctx: Context;
+  session: ISession;
+  originalMessage: Message;
+  match: RegExpMatchArray | undefined;
+};
 
-  // Handle channel selection
-  bot.callbackQuery(/^select_channel:(.+)$/, async (ctx: Context) => {
+function transitionCallback(
+  fallbackMessage: string,
+  errorLog: string,
+  buildEvent: (d: Dispatch) => Promise<FlowEvent | null> | FlowEvent | null
+): (ctx: Context) => Promise<void> {
+  return async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
 
-      const match = ctx.callbackQuery?.data?.match(/^select_channel:(.+)$/);
-      const selectedChannelId = match?.[1];
-
-      if (!selectedChannelId) {
-        await ctx.editMessageText('❌ Invalid channel selection.');
-        return;
-      }
-
-      // Find the original message
       const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
-
-      if (!originalMessage) {
-        await ErrorMessages.originalMessageNotFound(ctx);
-        return;
-      }
-
-      // Parse forward info to check green list
-      const forwardInfo = parseForwardInfo(originalMessage);
-      const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
-
-      // Check if message has text
-      const content = extractMessageContent(originalMessage);
-
-      const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      const sessionSvc = getSessionService();
-
-      // Reply sessions: advance to REPLY_SLOT_CHOICE and show slot keyboard
-      if (session && sessionSvc && session.isReply) {
-        await sessionSvc.updateState(session._id.toString(), SessionState.REPLY_SLOT_CHOICE, {
-          selectedChannel: selectedChannelId,
-        });
-        const slotKeyboard = createReplySlotKeyboard(session._id.toString());
-        await ctx.editMessageText('When should this reply be sent?', { reply_markup: slotKeyboard });
-        return;
-      }
-
-      const isPoll = content?.type === 'poll';
-
-      if (!session || !sessionSvc) {
-        await ErrorMessages.sessionExpired(ctx);
-        return;
-      }
-
-      const event: FlowEvent = {
-        type: 'CHANNEL_SELECTED',
-        channelId: selectedChannelId,
-        isGreenListed: shouldAutoForward,
-        isPoll,
-      };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await sessionSvc.updateState(session._id.toString(), newState, sessionUpdates);
-      await renderStep(ctx, step, session._id.toString());
-
-      logger.debug(`Channel ${selectedChannelId} selected for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error processing channel selection. Please try again.',
-        'Error in channel selection callback'
-      );
-    }
-  });
-
-  // Handle custom text selection
-  bot.callbackQuery(/^custom_text:(add|skip)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const match = ctx.callbackQuery?.data?.match(/^custom_text:(add|skip)$/);
-      const action = match?.[1];
-
-      if (!action) {
-        await ErrorMessages.invalidSelection(ctx, 'action');
-        return;
-      }
-
-      const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
-
       if (!originalMessage) {
         await ErrorMessages.originalMessageNotFound(ctx);
         return;
@@ -146,217 +84,454 @@ export function registerScheduling(): void {
         await ErrorMessages.sessionExpired(ctx);
         return;
       }
-      const foundKey = session._id.toString();
+
+      const match = Array.isArray(ctx.match) ? ctx.match : undefined;
+      const event = await buildEvent({ ctx, session, originalMessage, match });
+      if (!event) return;
+
+      const key = session._id.toString();
+      const { newState, step, sessionUpdates } = transition(session.state, event);
+      await getSessionService().updateState(key, newState, sessionUpdates);
+      await renderStep(ctx, step, key);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, fallbackMessage, errorLog);
+    }
+  };
+}
+
+// Resolved context shared by every preview:* handler.
+type Confirm = {
+  ctx: Context;
+  session: ISession;
+  sessionKey: string;
+  sessionSvc: ReturnType<typeof getSessionService>;
+  fromId: number | undefined;
+};
+
+// The preview:* callbacks (schedule/cancel/back) key off a sessionId in the
+// callback data rather than the original message, so they share a different
+// shell: ack, pull sessionKey from the regex, load the session by id.
+function previewCallback(
+  fallbackMessage: string,
+  errorLog: string,
+  handler: (d: Confirm) => Promise<void>
+): (ctx: Context) => Promise<void> {
+  return async (ctx: Context) => {
+    try {
+      await ctx.answerCallbackQuery().catch(() => {});
+
+      const sessionKey = Array.isArray(ctx.match) ? ctx.match[1] : undefined;
+      if (!sessionKey) {
+        await ctx.reply('Invalid session.');
+        return;
+      }
+
+      const sessionSvc = getSessionService();
+      const session = await sessionSvc.findById(sessionKey);
+      if (!session) {
+        await ctx.reply('Session expired. Please forward the message again.');
+        return;
+      }
+
+      await handler({ ctx, session, sessionKey, sessionSvc, fromId: ctx.from?.id });
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, fallbackMessage, errorLog);
+    }
+  };
+}
+
+// Tear down the preview + control messages and close out the session.
+async function finalizePreview({ ctx, session, sessionKey, sessionSvc, fromId }: Confirm): Promise<void> {
+  if (fromId) await deletePreviewMessages(ctx, fromId, session);
+  await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+  await sessionSvc.complete(sessionKey);
+}
+
+async function channelLabel(channelId: string): Promise<string> {
+  const doc = await PostingChannel.findOne({ channelId }).lean();
+  return doc?.channelTitle ?? doc?.channelUsername ?? channelId;
+}
+
+// ── preview:schedule, one function per route (see classifyScheduleConfirm) ──
+
+async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
+  const { ctx, session, sessionKey } = c;
+  const {
+    editingPostId,
+    editingOriginalChannelId,
+    editingOriginalScheduledTime,
+    editingRawContent,
+    editingOriginalForward,
+  } = session;
+
+  // Inline guard also narrows the optional editing* fields for the rest of the body.
+  if (!editingPostId || !editingRawContent || !editingOriginalForward || !editingOriginalScheduledTime || !editingOriginalChannelId) {
+    await ctx.reply('❌ Edit session is corrupted. Please start over.');
+    return;
+  }
+
+  const repository = new ScheduledPostRepository();
+
+  if (route === 'edit-same-channel') {
+    let newContent = editingRawContent;
+    if (session.selectedAction === 'transform') {
+      const selectedNickname = session.selectedUserId
+        ? await findNicknameByUserId(session.selectedUserId)
+        : null;
+      newContent = await transformerService.transformContent(
+        editingRawContent,
+        editingOriginalForward,
+        'transform',
+        session.textHandling ?? 'keep',
+        selectedNickname,
+        session.customText
+      );
+    }
+
+    const updated = await repository.updatePost(editingPostId, {
+      content: newContent,
+      action: session.selectedAction ?? 'transform',
+      rawContent: editingRawContent,
+      textHandling: session.textHandling,
+      selectedUserId: session.selectedUserId,
+      customText: session.customText,
+    });
+
+    await finalizePreview(c);
+
+    if (!updated) {
+      await ctx.reply('⚠️ Post was already published — your changes were not applied.');
+      return;
+    }
+
+    await ctx.reply(
+      `✅ Post updated!\nTarget: ${await channelLabel(editingOriginalChannelId)}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`
+    );
+  } else {
+    await queueService.deleteAndCascade(editingPostId);
+
+    const newChannelId = session.selectedChannel ?? editingOriginalChannelId;
+    const { scheduledTime } =
+      session.selectedAction === 'forward'
+        ? await postScheduler.scheduleForwardPost({
+            targetChannelId: newChannelId,
+            forwardInfo: editingOriginalForward,
+            content: editingRawContent,
+          })
+        : await postScheduler.scheduleTransformPost({
+            targetChannelId: newChannelId,
+            forwardInfo: editingOriginalForward,
+            content: editingRawContent,
+            textHandling: session.textHandling ?? 'keep',
+            selectedUserId: session.selectedUserId,
+            customText: session.customText,
+          });
+
+    await finalizePreview(c);
+
+    await ctx.reply(
+      `✅ Moved to ${await channelLabel(newChannelId)}\nScheduled for: ${formatSlotTime(scheduledTime)}`
+    );
+  }
+
+  logger.info(`Edit confirmed for session ${sessionKey}`);
+}
+
+async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
+  const { ctx, session } = c;
+
+  const replyOriginalMessage = session.originalMessage;
+  if (!replyOriginalMessage) {
+    await ctx.reply('Reply session is corrupted. Please start over.');
+    return;
+  }
+
+  const replySelectedChannel = session.selectedChannel;
+  if (!replySelectedChannel) {
+    await ctx.reply('No channel selected for reply.');
+    return;
+  }
+
+  // Routing guarantees this; the guard just narrows it for TypeScript.
+  const parentPostId = session.replyParentPostId;
+  if (!parentPostId) {
+    await ctx.reply('Reply session is corrupted. Please start over.');
+    return;
+  }
+
+  const repository = new ScheduledPostRepository();
+  const parentPost = await repository.findById(parentPostId);
+
+  const replyForwardInfo = parseForwardInfo(replyOriginalMessage);
+  const replyMediaGroupMessages = session.mediaGroupMessages;
+  if (replyMediaGroupMessages && replyMediaGroupMessages.length > 1) {
+    replyForwardInfo.mediaGroupMessageIds = replyMediaGroupMessages.map((m) => m.message_id);
+  }
+
+  const replyContent = extractMessageContent(replyOriginalMessage, replyMediaGroupMessages);
+  if (!replyContent) {
+    await ctx.reply('Unsupported reply content type.');
+    return;
+  }
+
+  const {
+    textHandling: replyTextHandling = 'keep',
+    selectedUserId: replyUserId,
+    customText: replyCustomText,
+    selectedAction: replyAction = 'transform',
+  } = session;
+
+  if (route === 'reply-together') {
+    const replyNickname = replyUserId ? await findNicknameByUserId(replyUserId) : null;
+    const transformedReplyContent =
+      replyAction === 'transform'
+        ? await transformerService.transformContent(
+            replyContent,
+            replyForwardInfo,
+            'transform',
+            replyTextHandling,
+            replyNickname,
+            replyCustomText
+          )
+        : { ...replyContent, text: replyContent.text ?? '' };
+
+    const replyData: EmbeddedReplyData = {
+      targetChannelId: replySelectedChannel,
+      content: transformedReplyContent,
+      rawContent: replyContent,
+      action: replyAction,
+      textHandling: replyTextHandling,
+      selectedUserId: replyUserId ?? null,
+      customText: replyCustomText,
+      originalForward: replyForwardInfo,
+    };
+
+    const attached = await repository.attachEmbeddedReply(parentPostId, replyData);
+
+    await finalizePreview(c);
+
+    if (!attached) {
+      await ctx.reply('⚠️ Parent post was already published — reply could not be attached.');
+      return;
+    }
+
+    const parentSlotTime = parentPost?.scheduledTime;
+    await ctx.reply(
+      `↩️ Reply scheduled with the parent post${parentSlotTime ? ` at ${formatSlotTime(parentSlotTime)}` : ''}`
+    );
+    logger.info(`Together reply attached to parent post ${parentPostId}`);
+    return;
+  }
+
+  // Separated reply: schedule normally, then convert to separated reply
+  const baseReplyParams = {
+    targetChannelId: replySelectedChannel,
+    originalMessage: replyOriginalMessage,
+    forwardInfo: replyForwardInfo,
+    content: replyContent,
+  };
+
+  const { scheduledTime: replySlotTime, postId: replyPostId } =
+    replyAction === 'forward'
+      ? await postScheduler.scheduleForwardPost(baseReplyParams)
+      : await postScheduler.scheduleTransformPost({
+          ...baseReplyParams,
+          textHandling: replyTextHandling,
+          selectedUserId: replyUserId,
+          customText: replyCustomText,
+        });
+
+  await repository.convertToSeparatedReply(replyPostId, parentPostId, parentPost ?? null);
+
+  await finalizePreview(c);
+
+  await ctx.reply(`↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`);
+  logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
+}
+
+async function confirmNew(c: Confirm): Promise<void> {
+  const { ctx, session, sessionKey } = c;
+
+  const originalMessage = session.originalMessage;
+  if (!originalMessage) {
+    await ctx.reply('Session is corrupted. Please forward the message again.');
+    return;
+  }
+
+  const selectedChannel = session.selectedChannel;
+  if (!selectedChannel) {
+    await ctx.reply('No channel selected.');
+    return;
+  }
+
+  const mediaGroupMessages = session.mediaGroupMessages;
+  const forwardInfo = parseForwardInfo(originalMessage);
+  if (mediaGroupMessages && mediaGroupMessages.length > 1) {
+    forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
+  }
+  // For reply chains, store all message IDs so the post worker forwards the full thread
+  const replyChainMessages = session.replyChainMessages;
+  if (replyChainMessages && replyChainMessages.length > 1) {
+    forwardInfo.replyChainMessageIds = replyChainMessages.map((msg) => msg.message_id);
+  }
+
+  const content = extractMessageContent(originalMessage, mediaGroupMessages);
+  if (!content) {
+    await ctx.reply('Unsupported message type.');
+    return;
+  }
+
+  const { textHandling = 'keep', selectedUserId, customText } = session;
+  const baseParams = { targetChannelId: selectedChannel, originalMessage, forwardInfo, content };
+
+  const { scheduledTime, postId } =
+    session.selectedAction === 'forward'
+      ? await postScheduler.scheduleForwardPost(baseParams)
+      : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedUserId, customText });
+
+  await finalizePreview(c);
+
+  await ctx.reply(
+    `Post scheduled!\nTarget: ${await channelLabel(selectedChannel)}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
+    { reply_markup: createAddReplyKeyboard(postId) }
+  );
+
+  logger.info(`Post scheduled from preview for session ${sessionKey}`);
+}
+
+// Route → confirm handler. Typed as Record<ScheduleRoute, …> so adding a route
+// to the union without a handler here is a compile error.
+const SCHEDULE_CONFIRM: Record<ScheduleRoute, (c: Confirm, route: ScheduleRoute) => Promise<void>> = {
+  'edit-same-channel': confirmEdit,
+  'edit-move-channel': confirmEdit,
+  'reply-together': confirmReply,
+  'reply-separated': confirmReply,
+  normal: (c) => confirmNew(c),
+};
+
+export function registerScheduling(): void {
+
+  // Handle channel selection
+  bot.callbackQuery(/^select_channel:(.+)$/, transitionCallback(
+    'Error processing channel selection. Please try again.',
+    'Error in channel selection callback',
+    async ({ ctx, session, originalMessage, match }) => {
+      const selectedChannelId = match?.[1];
+      if (!selectedChannelId) {
+        await ctx.editMessageText('❌ Invalid channel selection.');
+        return null;
+      }
+
+      // Reply sessions: advance to REPLY_SLOT_CHOICE and show slot keyboard
+      if (session.isReply) {
+        await getSessionService().updateState(session._id.toString(), SessionState.REPLY_SLOT_CHOICE, {
+          selectedChannel: selectedChannelId,
+        });
+        await ctx.editMessageText('When should this reply be sent?', {
+          reply_markup: createReplySlotKeyboard(session._id.toString()),
+        });
+        return null;
+      }
+
+      const shouldAutoForward = await transformerService.shouldAutoForward(parseForwardInfo(originalMessage));
+      const isPoll = extractMessageContent(originalMessage)?.type === 'poll';
+
+      return { type: 'CHANNEL_SELECTED', channelId: selectedChannelId, isGreenListed: shouldAutoForward, isPoll };
+    }
+  ));
+
+  // Handle custom text selection
+  bot.callbackQuery(/^custom_text:(add|skip)$/, transitionCallback(
+    'Error processing custom text. Please try again.',
+    'Error in custom text callback',
+    async ({ ctx, session, match }) => {
+      const action = match?.[1];
+      if (!action) {
+        await ErrorMessages.invalidSelection(ctx, 'action');
+        return null;
+      }
 
       if (action === 'add') {
         // Self-loop: stays in CUSTOM_TEXT, waiting for the user's reply with the text
-        await getSessionService().updateState(foundKey, SessionState.CUSTOM_TEXT, { waitingForCustomText: true });
+        await getSessionService().updateState(session._id.toString(), SessionState.CUSTOM_TEXT, { waitingForCustomText: true });
         await ctx.editMessageText(
           '✍️ Reply to this message with your custom text.\n\n' +
             'This text will be added at the beginning of your post.'
         );
-        logger.debug(`Custom text reply prompt shown for message ${originalMessage.message_id}`);
-        return;
+        return null;
       }
 
-      const event: FlowEvent = {
-        type: 'CUSTOM_TEXT_SELECTED',
-        text: undefined,
-      };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await getSessionService().updateState(foundKey, newState, sessionUpdates);
-      await renderStep(ctx, step, foundKey);
-
-      logger.debug(`Custom text skipped for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error processing custom text. Please try again.',
-        'Error in custom text callback'
-      );
+      return { type: 'CUSTOM_TEXT_SELECTED', text: undefined };
     }
-  });
+  ));
 
   // Handle preset custom text selection
-  bot.callbackQuery(/^custom_text:preset:(.+)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const presetId = ctx.callbackQuery?.data?.match(/^custom_text:preset:(.+)$/)?.[1];
+  bot.callbackQuery(/^custom_text:preset:(.+)$/, transitionCallback(
+    'Error selecting preset text. Please try again.',
+    'Error in custom text preset callback',
+    async ({ ctx, match }) => {
+      const presetId = match?.[1];
       if (!presetId) {
         await ErrorMessages.invalidSelection(ctx, 'preset');
-        return;
+        return null;
       }
 
       const preset = await CustomTextPreset.findById(presetId).lean();
       if (!preset) {
         await ctx.editMessageText('❌ Preset not found. It may have been deleted.');
-        return;
+        return null;
       }
 
-      const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
-      if (!originalMessage) {
-        await ErrorMessages.originalMessageNotFound(ctx);
-        return;
-      }
-
-      const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      if (!session) {
-        await ErrorMessages.sessionExpired(ctx);
-        return;
-      }
-      const foundKey = session._id.toString();
-
-      const event: FlowEvent = {
-        type: 'CUSTOM_TEXT_SELECTED',
-        text: preset.text,
-      };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await getSessionService().updateState(foundKey, newState, sessionUpdates);
-      await renderStep(ctx, step, foundKey);
-
-      logger.debug(`Preset custom text "${preset.label}" selected for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error selecting preset text. Please try again.',
-        'Error in custom text preset callback'
-      );
+      return { type: 'CUSTOM_TEXT_SELECTED', text: preset.text };
     }
-  });
+  ));
 
   // Handle nickname selection
-  bot.callbackQuery(/^select_nickname:(.+)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const match = ctx.callbackQuery?.data?.match(/^select_nickname:(.+)$/);
+  bot.callbackQuery(/^select_nickname:(.+)$/, transitionCallback(
+    'Error processing nickname selection. Please try again.',
+    'Error in nickname selection callback',
+    async ({ ctx, session, originalMessage, match }) => {
       const nicknameSelection = match?.[1];
-
       if (!nicknameSelection) {
         await ErrorMessages.invalidSelection(ctx, 'nickname');
-        return;
+        return null;
       }
 
-      // Find the original message
-      const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
+      const userId = nicknameSelection === NICKNAME_NONE_KEY ? null : parseInt(nicknameSelection, 10);
+      const isPlainText = computeIsPlainText(session.originalMessage ?? originalMessage);
 
-      if (!originalMessage) {
-        await ErrorMessages.originalMessageNotFound(ctx);
-        return;
-      }
-
-      const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      if (!session) {
-        await ErrorMessages.sessionExpired(ctx);
-        return;
-      }
-      const foundKey = session._id.toString();
-
-      const selectedUserId = nicknameSelection === NICKNAME_NONE_KEY ? null : parseInt(nicknameSelection, 10);
-      const fullMessage = session.originalMessage ?? originalMessage;
-      const isPlainText = computeIsPlainText(fullMessage);
-
-      const event: FlowEvent = {
-        type: 'NICKNAME_SELECTED',
-        userId: selectedUserId,
-        isPlainText,
-      };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await getSessionService().updateState(foundKey, newState, sessionUpdates);
-      await renderStep(ctx, step, foundKey);
-
-      logger.debug(`Nickname "${nicknameSelection}" selected for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error processing nickname selection. Please try again.',
-        'Error in nickname selection callback'
-      );
+      return { type: 'NICKNAME_SELECTED', userId, isPlainText };
     }
-  });
+  ));
 
   // Handle text handling selection
-  bot.callbackQuery(/^text:(keep|remove|quote)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const match = ctx.callbackQuery?.data?.match(/^text:(keep|remove|quote)$/);
-      const textHandling = match?.[1] as 'keep' | 'remove' | 'quote';
-
-      if (!textHandling) {
+  bot.callbackQuery(/^text:(keep|remove|quote)$/, transitionCallback(
+    'Error processing text handling. Please try again.',
+    'Error in text handling callback',
+    async ({ ctx, session, originalMessage, match }) => {
+      const handling = match?.[1] as 'keep' | 'remove' | 'quote' | undefined;
+      if (!handling) {
         await ErrorMessages.invalidSelection(ctx, 'text handling option');
-        return;
+        return null;
       }
-
-      // Find the original message
-      const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
-
-      if (!originalMessage) {
-        await ErrorMessages.originalMessageNotFound(ctx);
-        return;
-      }
-
-      const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      if (!session) {
-        await ErrorMessages.sessionExpired(ctx);
-        return;
-      }
-      const foundKey = session._id.toString();
 
       const fullMessage = session.originalMessage ?? originalMessage;
       const isPlainText = computeIsPlainText(fullMessage);
       const knownNicknameUserId = await resolveKnownNicknameUserId(parseForwardInfo(fullMessage));
 
-      const event: FlowEvent = {
-        type: 'TEXT_HANDLING_SELECTED',
-        handling: textHandling,
-        isPlainText,
-        knownNicknameUserId,
-      };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await getSessionService().updateState(foundKey, newState, sessionUpdates);
-      await renderStep(ctx, step, foundKey);
-
-      logger.debug(`Text handling "${textHandling}" selected for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error processing text handling. Please try again.',
-        'Error in text handling callback'
-      );
+      return { type: 'TEXT_HANDLING_SELECTED', handling, isPlainText, knownNicknameUserId };
     }
-  });
+  ));
 
-  bot.callbackQuery('action:quick', async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
-      if (!originalMessage) {
-        await ErrorMessages.originalMessageNotFound(ctx);
-        return;
-      }
-
-      const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      if (!session) {
-        await ErrorMessages.sessionExpired(ctx);
-        return;
-      }
-
+  bot.callbackQuery('action:quick', transitionCallback(
+    'Error processing quick post. Please try again.',
+    'Error in quick post callback',
+    ({ session, originalMessage }) => {
       const forwardInfo = parseForwardInfo(originalMessage);
       const content = extractMessageContent(originalMessage, session.mediaGroupMessages);
       const isTextOnly = content?.type === 'text' && (session.replyChainMessages?.length ?? 0) <= 1;
 
-      const event: FlowEvent = {
+      return {
         type: 'ACTION_SELECTED',
         action: 'quick',
         hasText: false,
@@ -365,443 +540,60 @@ export function registerScheduling(): void {
         isTextOnly,
         fromUserId: forwardInfo.fromUserId,
       };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await getSessionService().updateState(session._id.toString(), newState, sessionUpdates);
-      await renderStep(ctx, step, session._id.toString());
-
-      logger.debug(`Quick post selected for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error processing quick post. Please try again.',
-        'Error in quick post callback'
-      );
     }
-  });
+  ));
 
-  bot.callbackQuery('action:transform', async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      // Find the original message from pending forwards
-      const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
-
-      if (!originalMessage) {
-        await ErrorMessages.originalMessageNotFound(ctx);
-        return;
-      }
-
-      const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      if (!session) {
-        await ErrorMessages.sessionExpired(ctx);
-        return;
-      }
-
+  bot.callbackQuery('action:transform', transitionCallback(
+    'Error processing transform. Please try again.',
+    'Error in transform callback',
+    async ({ session, originalMessage }) => {
       const content = extractMessageContent(originalMessage);
       const hasText = !!(content?.text?.trim());
       const hasBlockquotes = hasText && (content?.text?.includes('<blockquote>') ?? false);
       const fullMessage = session.originalMessage ?? originalMessage;
-      const isPlainText = computeIsPlainText(fullMessage);
       const forwardInfo = parseForwardInfo(fullMessage);
-      const knownNicknameUserId = await resolveKnownNicknameUserId(forwardInfo);
 
-      const event: FlowEvent = {
+      return {
         type: 'ACTION_SELECTED',
         action: 'transform',
         hasText,
         hasBlockquotes,
-        isPlainText,
+        isPlainText: computeIsPlainText(fullMessage),
         fromUserId: forwardInfo.fromUserId,
-        knownNicknameUserId,
+        knownNicknameUserId: await resolveKnownNicknameUserId(forwardInfo),
       };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await getSessionService().updateState(session._id.toString(), newState, sessionUpdates);
-      await renderStep(ctx, step, session._id.toString());
-
-      logger.debug(`Transform action selected for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error processing transform. Please try again.',
-        'Error in transform callback'
-      );
     }
-  });
+  ));
 
-  bot.callbackQuery('action:forward', async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      // Find the original message
-      const originalMessage = ctx.callbackQuery?.message?.reply_to_message;
-
-      if (!originalMessage) {
-        await ErrorMessages.originalMessageNotFound(ctx);
-        return;
-      }
-
-      const session = await getPendingForward(ctx.from?.id ?? 0, originalMessage.message_id);
-      if (!session) {
-        await ErrorMessages.sessionExpired(ctx);
-        return;
-      }
-
+  bot.callbackQuery('action:forward', transitionCallback(
+    'Error scheduling post. Please try again.',
+    'Error in forward callback',
+    async ({ ctx, session }) => {
       if (!session.selectedChannel) {
         await ErrorMessages.channelSelectionRequired(ctx);
-        return;
+        return null;
       }
 
-      const event: FlowEvent = {
-        type: 'ACTION_SELECTED',
-        action: 'forward',
-        // The forward edge fires unconditionally on action='forward'; these fields are unused by its guard
-        hasText: false,
-        hasBlockquotes: false,
-        isPlainText: false,
-      };
-
-      const { newState, step, sessionUpdates } = transition(session.state, event);
-      await getSessionService().updateState(session._id.toString(), newState, sessionUpdates);
-      await renderStep(ctx, step, session._id.toString());
-
-      logger.debug(`Forward action selected for message ${originalMessage.message_id}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error scheduling post. Please try again.',
-        'Error in forward callback'
-      );
+      // The forward edge fires unconditionally on action='forward'; these fields are unused by its guard
+      return { type: 'ACTION_SELECTED', action: 'forward', hasText: false, hasBlockquotes: false, isPlainText: false };
     }
-  });
+  ));
 
   // Handle preview schedule button
-  bot.callbackQuery(/^preview:schedule:(.+)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const match = ctx.callbackQuery?.data?.match(/^preview:schedule:(.+)$/);
-      const sessionKey = match?.[1];
-
-      if (!sessionKey) {
-        await ctx.reply('Invalid session. Please try again.');
-        return;
-      }
-
-      const sessionSvc = getSessionService();
-      if (!sessionSvc) {
-        await ctx.reply('Service unavailable. Please try again.');
-        return;
-      }
-
-      const session = await sessionSvc.findById(sessionKey);
-      if (!session) {
-        await ctx.reply('Session expired. Please forward the message again.');
-        return;
-      }
-
-      const fromId = ctx.from?.id;
-
-      // ── Edit-session confirm ──────────────────────────────────────────────
-      if (session.editingPostId) {
-        const {
-          editingPostId,
-          editingOriginalChannelId,
-          editingOriginalScheduledTime,
-          editingRawContent,
-          editingOriginalForward,
-        } = session;
-
-        if (!editingPostId || !editingRawContent || !editingOriginalForward || !editingOriginalScheduledTime || !editingOriginalChannelId) {
-          await ctx.reply('❌ Edit session is corrupted. Please start over.');
-          return;
-        }
-
-        const sameChannel = session.selectedChannel === editingOriginalChannelId;
-        const repository = new ScheduledPostRepository();
-
-        if (sameChannel) {
-          let newContent = editingRawContent;
-          if (session.selectedAction === 'transform') {
-            const selectedNickname = session.selectedUserId
-              ? await findNicknameByUserId(session.selectedUserId)
-              : null;
-            newContent = await transformerService.transformContent(
-              editingRawContent,
-              editingOriginalForward,
-              'transform',
-              session.textHandling ?? 'keep',
-              selectedNickname,
-              session.customText
-            );
-          }
-
-          const updated = await repository.updatePost(editingPostId, {
-            content: newContent,
-            action: session.selectedAction ?? 'transform',
-            rawContent: editingRawContent,
-            textHandling: session.textHandling,
-            selectedUserId: session.selectedUserId,
-            customText: session.customText,
-          });
-
-          if (fromId) await deletePreviewMessages(ctx, fromId, session);
-          await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
-          await sessionSvc.complete(sessionKey);
-
-          if (!updated) {
-            await ctx.reply('⚠️ Post was already published — your changes were not applied.');
-            return;
-          }
-
-          const channelDoc = await PostingChannel.findOne({ channelId: editingOriginalChannelId }).lean();
-          const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? editingOriginalChannelId;
-          await ctx.reply(
-            `✅ Post updated!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`
-          );
-        } else {
-          await queueService.deleteAndCascade(editingPostId);
-
-          const newChannelId = session.selectedChannel ?? editingOriginalChannelId;
-          const { scheduledTime } =
-            session.selectedAction === 'forward'
-              ? await postScheduler.scheduleForwardPost({
-                  targetChannelId: newChannelId,
-                  forwardInfo: editingOriginalForward,
-                  content: editingRawContent,
-                })
-              : await postScheduler.scheduleTransformPost({
-                  targetChannelId: newChannelId,
-                  forwardInfo: editingOriginalForward,
-                  content: editingRawContent,
-                  textHandling: session.textHandling ?? 'keep',
-                  selectedUserId: session.selectedUserId,
-                  customText: session.customText,
-                });
-
-          if (fromId) await deletePreviewMessages(ctx, fromId, session);
-          await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
-          await sessionSvc.complete(sessionKey);
-
-          const channelDoc = await PostingChannel.findOne({ channelId: newChannelId }).lean();
-          const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? newChannelId;
-          await ctx.reply(
-            `✅ Moved to ${channelLabel}\nScheduled for: ${formatSlotTime(scheduledTime)}`
-          );
-        }
-
-        logger.info(`Edit confirmed for session ${sessionKey}`);
-        return;
-      }
-      // ── End edit-session confirm ──────────────────────────────────────────
-
-      // ── Reply-session confirm ──────────────────────────────────────────────
-      if (session.isReply && session.replyParentPostId) {
-        const replyOriginalMessage = session.originalMessage;
-        if (!replyOriginalMessage) {
-          await ctx.reply('Reply session is corrupted. Please start over.');
-          return;
-        }
-
-        const replySelectedChannel = session.selectedChannel;
-        if (!replySelectedChannel) {
-          await ctx.reply('No channel selected for reply.');
-          return;
-        }
-
-        const repository = new ScheduledPostRepository();
-        const parentPost = await repository.findById(session.replyParentPostId);
-
-        const replyForwardInfo = parseForwardInfo(replyOriginalMessage);
-        const replyMediaGroupMessages = session.mediaGroupMessages;
-        if (replyMediaGroupMessages && replyMediaGroupMessages.length > 1) {
-          replyForwardInfo.mediaGroupMessageIds = replyMediaGroupMessages.map((m) => m.message_id);
-        }
-
-        const replyContent = extractMessageContent(replyOriginalMessage, replyMediaGroupMessages);
-        if (!replyContent) {
-          await ctx.reply('Unsupported reply content type.');
-          return;
-        }
-
-        const {
-          textHandling: replyTextHandling = 'keep',
-          selectedUserId: replyUserId,
-          customText: replyCustomText,
-          selectedAction: replyAction = 'transform',
-        } = session;
-
-        if (session.replyMode === 'together') {
-          const replyNickname = replyUserId ? await findNicknameByUserId(replyUserId) : null;
-          const transformedReplyContent =
-            replyAction === 'transform'
-              ? await transformerService.transformContent(
-                  replyContent,
-                  replyForwardInfo,
-                  'transform',
-                  replyTextHandling,
-                  replyNickname,
-                  replyCustomText
-                )
-              : { ...replyContent, text: replyContent.text ?? '' };
-
-          const replyData: EmbeddedReplyData = {
-            targetChannelId: replySelectedChannel,
-            content: transformedReplyContent,
-            rawContent: replyContent,
-            action: replyAction,
-            textHandling: replyTextHandling,
-            selectedUserId: replyUserId ?? null,
-            customText: replyCustomText,
-            originalForward: replyForwardInfo,
-          };
-
-          const attached = await repository.attachEmbeddedReply(session.replyParentPostId, replyData);
-
-          if (fromId) await deletePreviewMessages(ctx, fromId, session);
-          await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
-          await sessionSvc.complete(sessionKey);
-
-          if (!attached) {
-            await ctx.reply('⚠️ Parent post was already published — reply could not be attached.');
-            return;
-          }
-
-          const parentSlotTime = parentPost?.scheduledTime;
-          await ctx.reply(
-            `↩️ Reply scheduled with the parent post${parentSlotTime ? ` at ${formatSlotTime(parentSlotTime)}` : ''}`
-          );
-          logger.info(`Together reply attached to parent post ${session.replyParentPostId}`);
-          return;
-        }
-
-        // Separated reply: schedule normally, then convert to separated reply
-        const baseReplyParams = {
-          targetChannelId: replySelectedChannel,
-          originalMessage: replyOriginalMessage,
-          forwardInfo: replyForwardInfo,
-          content: replyContent,
-        };
-
-        const { scheduledTime: replySlotTime, postId: replyPostId } =
-          replyAction === 'forward'
-            ? await postScheduler.scheduleForwardPost(baseReplyParams)
-            : await postScheduler.scheduleTransformPost({
-                ...baseReplyParams,
-                textHandling: replyTextHandling,
-                selectedUserId: replyUserId,
-                customText: replyCustomText,
-              });
-
-        await repository.convertToSeparatedReply(replyPostId, session.replyParentPostId, parentPost ?? null);
-
-        if (fromId) await deletePreviewMessages(ctx, fromId, session);
-        await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
-        await sessionSvc.complete(sessionKey);
-
-        await ctx.reply(`↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`);
-        logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
-        return;
-      }
-      // ── End reply-session confirm ──────────────────────────────────────────
-
-      const originalMessage = session.originalMessage;
-      if (!originalMessage) {
-        await ctx.reply('Session is corrupted. Please forward the message again.');
-        return;
-      }
-      const mediaGroupMessages = session.mediaGroupMessages;
-      const selectedChannel = session.selectedChannel;
-
-      if (!selectedChannel) {
-        await ctx.reply('No channel selected.');
-        return;
-      }
-
-      // Parse forward info
-      const forwardInfo = parseForwardInfo(originalMessage);
-      if (mediaGroupMessages && mediaGroupMessages.length > 1) {
-        forwardInfo.mediaGroupMessageIds = mediaGroupMessages.map((msg) => msg.message_id);
-      }
-      // For reply chains, store all message IDs so the post worker forwards the full thread
-      const replyChainMessagesForSchedule = session.replyChainMessages;
-      if (replyChainMessagesForSchedule && replyChainMessagesForSchedule.length > 1) {
-        forwardInfo.replyChainMessageIds = replyChainMessagesForSchedule.map((msg) => msg.message_id);
-      }
-
-      // Extract message content
-      const content = extractMessageContent(originalMessage, mediaGroupMessages);
-      if (!content) {
-        await ctx.reply('Unsupported message type.');
-        return;
-      }
-
-      const { textHandling = 'keep', selectedUserId, customText } = session;
-
-      const baseParams = { targetChannelId: selectedChannel, originalMessage, forwardInfo, content };
-
-      const { scheduledTime, postId } = session.selectedAction === 'forward'
-        ? await postScheduler.scheduleForwardPost(baseParams)
-        : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedUserId, customText });
-
-      if (fromId) {
-        await deletePreviewMessages(ctx, fromId, session);
-      }
-
-      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
-
-      // Clean up session
-      await sessionSvc.complete(sessionKey);
-
-      const channelDoc = await PostingChannel.findOne({ channelId: selectedChannel }).lean();
-      const channelLabel = channelDoc?.channelTitle ?? channelDoc?.channelUsername ?? selectedChannel;
-
-      await ctx.reply(
-        `Post scheduled!\nTarget: ${channelLabel}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
-        { reply_markup: createAddReplyKeyboard(postId) }
-      );
-
-      logger.info(`Post scheduled from preview for session ${sessionKey}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Failed to schedule post. Please try again.',
-        'Error in preview:schedule callback'
-      );
+  bot.callbackQuery(/^preview:schedule:(.+)$/, previewCallback(
+    'Failed to schedule post. Please try again.',
+    'Error in preview:schedule callback',
+    async (c) => {
+      const route = classifyScheduleConfirm(c.session);
+      await SCHEDULE_CONFIRM[route](c, route);
     }
-  });
+  ));
 
   // Handle preview cancel button
-  bot.callbackQuery(/^preview:cancel:(.+)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const match = ctx.callbackQuery?.data?.match(/^preview:cancel:(.+)$/);
-      const sessionKey = match?.[1];
-
-      if (!sessionKey) {
-        await ctx.reply('Invalid session.');
-        return;
-      }
-
-      const sessionSvc = getSessionService();
-      if (!sessionSvc) {
-        await ctx.reply('Service unavailable.');
-        return;
-      }
-
-      const session = await sessionSvc.findById(sessionKey);
-      if (!session) {
-        await ctx.reply('Session already expired or cancelled.');
-        return;
-      }
-
-      const fromId = ctx.from?.id;
+  bot.callbackQuery(/^preview:cancel:(.+)$/, previewCallback(
+    'Error cancelling preview.',
+    'Error in preview:cancel callback',
+    async ({ ctx, session, sessionKey, sessionSvc, fromId }) => {
       if (fromId) {
         await deletePreviewMessages(ctx, fromId, session);
       }
@@ -821,42 +613,14 @@ export function registerScheduling(): void {
       await ctx.reply('Cancelled. Forward a new message to start over.');
 
       logger.info(`Preview cancelled for session ${sessionKey}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error cancelling preview.',
-        'Error in preview:cancel callback'
-      );
     }
-  });
+  ));
 
   // Handle preview back button — returns to channel selection
-  bot.callbackQuery(/^preview:back:(.+)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const match = ctx.callbackQuery?.data?.match(/^preview:back:(.+)$/);
-      const sessionKey = match?.[1];
-
-      if (!sessionKey) {
-        await ctx.reply('Invalid session.');
-        return;
-      }
-
-      const sessionSvc = getSessionService();
-      if (!sessionSvc) {
-        await ctx.reply('Service unavailable.');
-        return;
-      }
-
-      const session = await sessionSvc.findById(sessionKey);
-      if (!session) {
-        await ctx.reply('Session already expired or cancelled.');
-        return;
-      }
-
-      const fromId = ctx.from?.id;
+  bot.callbackQuery(/^preview:back:(.+)$/, previewCallback(
+    'Error going back.',
+    'Error in preview:back callback',
+    async ({ ctx, session, sessionKey, sessionSvc, fromId }) => {
       if (fromId) {
         await deletePreviewMessages(ctx, fromId, session);
       }
@@ -928,15 +692,8 @@ export function registerScheduling(): void {
       );
 
       logger.info(`Preview back for session ${sessionKey}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Error going back.',
-        'Error in preview:back callback'
-      );
     }
-  });
+  ));
 
   // Handle reply slot choice: together (same cycle as parent) or separated (own slot)
   bot.callbackQuery(/^reply_slot:(together|separated):(.+)$/, async (ctx: Context) => {
