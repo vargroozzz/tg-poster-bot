@@ -1,18 +1,11 @@
 import { InlineKeyboard } from 'grammy';
 import { VALID_INTERVALS, type PostInterval } from '../../utils/post-interval.js';
+import { channelLabel, type ChannelLike } from '../../shared/helpers/channel.helper.js';
 
-interface Channel {
-  channelId: string;
-  channelTitle?: string | null;
-}
-
-export function createChannelIntervalListKeyboard(channels: Channel[]): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const channel of channels) {
-    const label = channel.channelTitle ?? channel.channelId;
-    keyboard.text(label, `interval:ch:${channel.channelId}`).row();
-  }
-  return keyboard;
+export function createChannelIntervalListKeyboard(channels: ChannelLike[]): InlineKeyboard {
+  return new InlineKeyboard(
+    channels.map((channel) => [InlineKeyboard.text(channelLabel(channel), `interval:ch:${channel.channelId}`)])
+  );
 }
 
 export function createChannelIntervalPickerKeyboard(

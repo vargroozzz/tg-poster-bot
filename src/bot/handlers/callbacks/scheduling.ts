@@ -17,6 +17,7 @@ import { logger } from '../../../utils/logger.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
 import { NICKNAME_NONE_KEY } from '../../keyboards/nickname-select.keyboard.js';
 import { findNicknameByUserId } from '../../../shared/helpers/nickname.helper.js';
+import { channelLabel, toChannelInfo } from '../../../shared/helpers/channel.helper.js';
 import { PostSchedulerService } from '../../../core/posting/post-scheduler.service.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import type { FlowEvent } from '../../../shared/constants/flow-states.js';
@@ -140,16 +141,23 @@ function previewCallback(
   };
 }
 
-// Tear down the preview + control messages and close out the session.
-async function finalizePreview({ ctx, session, sessionKey, sessionSvc, fromId }: Confirm): Promise<void> {
+// Delete the preview message(s) and the control message. Shared by the confirm
+// flow (finalizePreview) and the cancel/back flows, which close the session out
+// at different points.
+async function teardownPreviewMessages({ ctx, session, fromId }: Confirm): Promise<void> {
   if (fromId) await deletePreviewMessages(ctx, fromId, session);
   await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
-  await sessionSvc.complete(sessionKey);
 }
 
-async function channelLabel(channelId: string): Promise<string> {
+// Tear down the preview + control messages and close out the session.
+async function finalizePreview(c: Confirm): Promise<void> {
+  await teardownPreviewMessages(c);
+  await c.sessionSvc.complete(c.sessionKey);
+}
+
+async function channelLabelById(channelId: string): Promise<string> {
   const doc = await PostingChannel.findOne({ channelId }).lean();
-  return doc?.channelTitle ?? doc?.channelUsername ?? channelId;
+  return channelLabel(doc ?? { channelId });
 }
 
 // ── preview:schedule, one function per route (see classifyScheduleConfirm) ──
@@ -205,7 +213,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     }
 
     await ctx.reply(
-      `✅ Post updated!\nTarget: ${await channelLabel(editingOriginalChannelId)}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`
+      `✅ Post updated!\nTarget: ${await channelLabelById(editingOriginalChannelId)}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`
     );
   } else {
     await queueService.deleteAndCascade(editingPostId);
@@ -230,7 +238,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     await finalizePreview(c);
 
     await ctx.reply(
-      `✅ Moved to ${await channelLabel(newChannelId)}\nScheduled for: ${formatSlotTime(scheduledTime)}`
+      `✅ Moved to ${await channelLabelById(newChannelId)}\nScheduled for: ${formatSlotTime(scheduledTime)}`
     );
   }
 
@@ -392,7 +400,7 @@ async function confirmNew(c: Confirm): Promise<void> {
   await finalizePreview(c);
 
   await ctx.reply(
-    `Post scheduled!\nTarget: ${await channelLabel(selectedChannel)}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
+    `Post scheduled!\nTarget: ${await channelLabelById(selectedChannel)}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
     { reply_markup: createAddReplyKeyboard(postId) }
   );
 
@@ -593,12 +601,9 @@ export function registerScheduling(): void {
   bot.callbackQuery(/^preview:cancel:(.+)$/, previewCallback(
     'Error cancelling preview.',
     'Error in preview:cancel callback',
-    async ({ ctx, session, sessionKey, sessionSvc, fromId }) => {
-      if (fromId) {
-        await deletePreviewMessages(ctx, fromId, session);
-      }
-
-      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+    async (c) => {
+      const { ctx, session, sessionKey, sessionSvc } = c;
+      await teardownPreviewMessages(c);
 
       // Edit sessions: original post stays untouched
       if (session.editingPostId) {
@@ -620,13 +625,9 @@ export function registerScheduling(): void {
   bot.callbackQuery(/^preview:back:(.+)$/, previewCallback(
     'Error going back.',
     'Error in preview:back callback',
-    async ({ ctx, session, sessionKey, sessionSvc, fromId }) => {
-      if (fromId) {
-        await deletePreviewMessages(ctx, fromId, session);
-      }
-
-      // Delete the control message (this message with the keyboard)
-      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+    async (c) => {
+      const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+      await teardownPreviewMessages(c);
 
       // Edit sessions: re-send channel selection
       if (session.editingPostId) {
@@ -673,11 +674,7 @@ export function registerScheduling(): void {
         return;
       }
 
-      const channels = postingChannels.map((ch) => ({
-        id: ch.channelId,
-        title: ch.channelTitle ?? ch.channelId,
-        username: ch.channelUsername,
-      }));
+      const channels = postingChannels.map(toChannelInfo);
 
       const origMsg = session.originalMessage;
       if (!origMsg) return;

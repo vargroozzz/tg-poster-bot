@@ -9,6 +9,7 @@ import {
   createChannelIntervalPickerKeyboard,
 } from '../../keyboards/interval.keyboard.js';
 import { QueueRepackService } from '../../../core/queue/queue-repack.service.js';
+import { channelLabel } from '../../../shared/helpers/channel.helper.js';
 
 export function registerInterval(): void {
 
@@ -21,7 +22,7 @@ export function registerInterval(): void {
         PostingChannel.findOne({ channelId }),
         getPostInterval(channelId),
       ]);
-      const title = channel?.channelTitle ?? channelId;
+      const title = channel ? channelLabel(channel) : channelId;
       await ctx.editMessageText(
         `Post interval for ${title}: ${currentInterval} min\n\nSelect a new interval:`,
         { reply_markup: createChannelIntervalPickerKeyboard(channelId, currentInterval) }
@@ -47,7 +48,7 @@ export function registerInterval(): void {
       await setChannelInterval(channelId, minutes as PostInterval);
 
       const channel = await PostingChannel.findOne({ channelId });
-      const title = channel?.channelTitle ?? channelId;
+      const title = channel ? channelLabel(channel) : channelId;
       await ctx.editMessageText(
         `Post interval for ${title}: ${minutes} min ✅`,
         { reply_markup: createChannelIntervalPickerKeyboard(channelId, minutes as PostInterval) }
@@ -68,7 +69,7 @@ export function registerInterval(): void {
         getPostInterval(channelId),
         PostingChannel.findOne({ channelId }),
       ]);
-      const title = channel?.channelTitle ?? channelId;
+      const title = channel ? channelLabel(channel) : channelId;
       const text =
         count === 0
           ? `No pending posts to reschedule for ${title}.`
@@ -91,7 +92,7 @@ export function registerInterval(): void {
         channels.map(async (ch) => ({ ch, interval: await getPostInterval(ch.channelId) }))
       );
       const lines = rows
-        .map(({ ch, interval }) => `• ${ch.channelTitle ?? ch.channelId} — ${interval} min`)
+        .map(({ ch, interval }) => `• ${channelLabel(ch)} — ${interval} min`)
         .join('\n');
 
       const text = channels.length === 0 ? 'No posting channels configured.' : `Post intervals:\n${lines}`;
