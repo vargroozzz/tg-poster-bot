@@ -7,6 +7,7 @@ import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
 import type { MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
+import { toChannelInfo } from '../../shared/helpers/channel.helper.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
 import type { ISession } from '../../database/models/session.model.js';
@@ -44,11 +45,7 @@ async function handleReplyContent(
     return;
   }
 
-  const channels = postingChannels.map((ch) => ({
-    id: ch.channelId,
-    title: ch.channelTitle ?? ch.channelId,
-    username: ch.channelUsername,
-  }));
+  const channels = postingChannels.map(toChannelInfo);
 
   const keyboard = createChannelSelectKeyboard(channels);
   await ctx.reply('Choose the target channel for this reply:', {
@@ -429,11 +426,7 @@ async function processSingleMessage(ctx: Context, message: Message) {
   const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
   // Create channel selection keyboard
-  const channels = postingChannels.map((ch) => ({
-    id: ch.channelId,
-    title: ch.channelTitle ?? ch.channelId,
-    username: ch.channelUsername,
-  }));
+  const channels = postingChannels.map(toChannelInfo);
 
   const keyboard = createChannelSelectKeyboard(channels);
 
@@ -503,11 +496,7 @@ async function processMediaGroup(mediaGroupId: string) {
   const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
   // Create channel selection keyboard
-  const channels = postingChannels.map((ch) => ({
-    id: ch.channelId,
-    title: ch.channelTitle ?? ch.channelId,
-    username: ch.channelUsername,
-  }));
+  const channels = postingChannels.map(toChannelInfo);
 
   const keyboard = createChannelSelectKeyboard(channels);
 
@@ -614,11 +603,7 @@ async function processReplyChain(bufferKey: string) {
   }
 
   // Build channel selection keyboard
-  const channels = postingChannels.map((ch) => ({
-    id: ch.channelId,
-    title: ch.channelTitle ?? ch.channelId,
-    username: ch.channelUsername,
-  }));
+  const channels = postingChannels.map(toChannelInfo);
   const keyboard = createChannelSelectKeyboard(channels);
 
   const promptText = isPureAlbum

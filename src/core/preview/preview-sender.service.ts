@@ -8,6 +8,7 @@ import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../session/session.service.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { PostingChannel } from '../../database/models/posting-channel.model.js';
+import { channelLabel } from '../../shared/helpers/channel.helper.js';
 import { findNextAvailableSlot, formatSlotTime } from '../../utils/time-slots.js';
 
 export class PreviewSenderService {
@@ -153,26 +154,22 @@ export class PreviewSenderService {
   }
 
   private async buildControlMessage(channelId?: string): Promise<string> {
-    const lines: string[] = [];
-
-    if (channelId) {
-      const channel = await PostingChannel.findOne({ channelId }).lean();
-      const channelLabel = channel?.channelTitle ?? channel?.channelUsername ?? channelId;
-      lines.push(`📢 <b>${channelLabel}</b>`);
+    if (!channelId) {
+      return ['', 'Schedule or cancel?'].join('\n');
     }
 
-    if (channelId) {
-      try {
-        const slot = await findNextAvailableSlot(channelId);
-        lines.push(`🕐 ${formatSlotTime(slot)}`);
-      } catch {
-        // Skip if slot lookup fails
-      }
-    }
+    const [channel, slot] = await Promise.all([
+      PostingChannel.findOne({ channelId }).lean(),
+      findNextAvailableSlot(channelId).catch(() => undefined), // skip slot line if lookup fails
+    ]);
 
-    lines.push('');
-    lines.push('Schedule or cancel?');
-
-    return lines.join('\n');
+    return [
+      `📢 <b>${channel ? channelLabel(channel) : channelId}</b>`,
+      slot ? `🕐 ${formatSlotTime(slot)}` : undefined,
+      '',
+      'Schedule or cancel?',
+    ]
+      .filter((line) => line !== undefined)
+      .join('\n');
   }
 }

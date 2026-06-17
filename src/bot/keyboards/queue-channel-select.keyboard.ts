@@ -1,15 +1,8 @@
 import { InlineKeyboard } from 'grammy';
+import { channelLabel, type ChannelLike } from '../../shared/helpers/channel.helper.js';
 
-interface Channel {
-  channelId: string;
-  channelTitle?: string | null;
-}
-
-export function createQueueChannelSelectKeyboard(channels: Channel[]): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const channel of channels) {
-    const label = channel.channelTitle ?? channel.channelId;
-    keyboard.text(label, `queue:ch:${channel.channelId}:1`).row();
-  }
-  return keyboard;
+export function createQueueChannelSelectKeyboard(channels: ChannelLike[]): InlineKeyboard {
+  return new InlineKeyboard(
+    channels.map((channel) => [InlineKeyboard.text(channelLabel(channel), `queue:ch:${channel.channelId}:1`)])
+  );
 }

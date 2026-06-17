@@ -17,6 +17,7 @@ import { findNicknameByUserId, getNicknameOptions } from '../../../shared/helper
 import { NICKNAME_NONE_KEY } from '../../keyboards/nickname-select.keyboard.js';
 import { createQueueChannelSelectKeyboard } from '../../keyboards/queue-channel-select.keyboard.js';
 import { createQueueListKeyboard } from '../../keyboards/queue-list.keyboard.js';
+import { channelLabel } from '../../../shared/helpers/channel.helper.js';
 import {
   createEditChannelSelectKeyboard,
   createEditForwardActionKeyboard,
@@ -52,7 +53,7 @@ async function renderQueuePage(
 
   const channels = await getActivePostingChannels();
   const channel = channels.find((ch) => ch.channelId === channelId);
-  const channelTitle = channel?.channelTitle ?? channelId;
+  const channelTitle = channel ? channelLabel(channel) : channelId;
 
   const { posts, labels, totalCount, totalPages } = await queueService.getChannelQueuePage(
     channelId,

@@ -1,20 +1,16 @@
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { listCustomTextPresets } from '../../database/models/custom-text-preset.model.js';
 import { NICKNAME_NONE_KEY } from './nickname-select.keyboard.js';
-
-interface Channel {
-  channelId: string;
-  channelTitle?: string | null;
-}
+import { channelLabel, type ChannelLike } from '../../shared/helpers/channel.helper.js';
 
 export function createEditChannelSelectKeyboard(
-  channels: Channel[],
+  channels: ChannelLike[],
   sessionId: string
 ): InlineKeyboardMarkup {
   return {
     inline_keyboard: channels.map((ch) => [
       {
-        text: ch.channelTitle ?? ch.channelId,
+        text: channelLabel(ch),
         callback_data: `queue:edit:ch:${sessionId}:${ch.channelId}`,
       },
     ]),
