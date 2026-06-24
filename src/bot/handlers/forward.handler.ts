@@ -279,6 +279,21 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
     // Single message (not part of media group): only group with another buffered
     // message if this one is a genuine reply chain (see getExternalReplyKey below).
     if (forwardOrigin && userId) {
+      // ponytail: temporary diagnostic — confirm whether channel post→post replies
+      // carry any reply signal on forward. Remove once the grouping question is settled.
+      logger.info('[fwd-diag] ' + JSON.stringify({
+        message_id: message.message_id,
+        text: 'text' in message ? message.text?.slice(0, 40) : undefined,
+        forward_origin: forwardOrigin.type === 'channel'
+          ? { type: 'channel', chat: forwardOrigin.chat.id, msg: forwardOrigin.message_id }
+          : { type: forwardOrigin.type },
+        external_reply: message.external_reply
+          ? { chat: message.external_reply.chat?.id, msg: message.external_reply.message_id }
+          : null,
+        reply_to_message_id: message.reply_to_message?.message_id ?? null,
+        has_quote: !!message.quote,
+      }));
+
       // If this message is a reply to one we already buffered, reuse that buffer.
       const replyToId = message.reply_to_message?.message_id;
       const linkedKey = replyToId !== undefined ? forwardedMsgToBufferKey.get(replyToId) : undefined;
