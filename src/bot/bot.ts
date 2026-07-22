@@ -13,7 +13,10 @@ bot.use(async (ctx, next) => {
   }
 
   if (ctx.from.id !== config.authorizedUserId) {
-    const command = parseCommandName(ctx.message?.text);
+    // grammy's bot.command() matches a leading /command in text OR caption, so the gate
+    // must inspect both — otherwise a non-owner could smuggle an admin command in a
+    // media caption (e.g. a photo captioned "/addchannel ...") past this check.
+    const command = parseCommandName(ctx.message?.text ?? ctx.message?.caption);
     if (command && !NON_OWNER_COMMANDS.includes(command)) {
       logger.warn(`Unauthorized command "/${command}" from user ${ctx.from.id} (@${ctx.from.username})`);
       await ctx.reply('⛔️ You are not authorized to use this command.');
