@@ -9,7 +9,10 @@ import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyb
 import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyboard.js';
 import { createEditChannelSelectKeyboard } from '../../keyboards/edit-keyboards.js';
 import { createReplySlotKeyboard } from '../../keyboards/reply-slot.keyboard.js';
-import { createAddReplyKeyboard } from '../../keyboards/preview-action.keyboard.js';
+import {
+  createAddReplyKeyboard,
+  createProposalPreviewKeyboard,
+} from '../../keyboards/preview-action.keyboard.js';
 import type { EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
 import { CustomTextPreset } from '../../../database/models/custom-text-preset.model.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
@@ -19,6 +22,19 @@ import { NICKNAME_NONE_KEY } from '../../keyboards/nickname-select.keyboard.js';
 import { findNicknameByUserId } from '../../../shared/helpers/nickname.helper.js';
 import { channelLabel, toChannelInfo } from '../../../shared/helpers/channel.helper.js';
 import { PostSchedulerService } from '../../../core/posting/post-scheduler.service.js';
+import { config } from '../../../config/index.js';
+import {
+  resolveProposerCredit,
+  canAcceptProposal,
+  MAX_PENDING_PROPOSALS,
+} from '../../../core/proposals/proposal.js';
+import {
+  getUserNickname,
+  getUserNicknameStatus,
+  confirmUserNickname,
+} from '../../../database/models/user-nickname.model.js';
+import { PreviewGeneratorService } from '../../../core/preview/preview-generator.service.js';
+import { PreviewSenderService } from '../../../core/preview/preview-sender.service.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import type { FlowEvent } from '../../../shared/constants/flow-states.js';
 import { transition } from '../../../core/session/session-state-machine.js';
@@ -357,8 +373,65 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
   logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
 }
 
+// A non-owner confirming their preview does not schedule — it hands the assembled post to
+// the owner, who gets the same preview with a Schedule/Cancel keyboard.
+async function handoffToOwner(c: Confirm): Promise<void> {
+  const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+  // A double-tap can race the teardown below; if this session was already handed off,
+  // do nothing rather than sending the owner a second preview and orphaning the first.
+  if (session.proposalPending) {
+    await ctx.deleteMessage().catch(() => {});
+    return;
+  }
+
+  const proposerId = session.userId;
+
+  const status = (await getUserNicknameStatus(proposerId)) ?? 'unconfirmed';
+  const pending = await sessionSvc.countPendingProposals(proposerId);
+  if (!canAcceptProposal(status, pending, MAX_PENDING_PROPOSALS)) {
+    if (fromId) await deletePreviewMessages(ctx, fromId, session);
+    await ctx.deleteMessage().catch(() => {});
+    await sessionSvc.complete(sessionKey);
+    await ctx.reply(
+      `⏳ You already have ${MAX_PENDING_PROPOSALS} proposals awaiting review. ` +
+        `Please wait until they're handled.`
+    );
+    return;
+  }
+
+  // Tear down the proposer's own preview + control message.
+  if (fromId) await deletePreviewMessages(ctx, fromId, session);
+  await ctx.deleteMessage().catch(() => {});
+
+  // Mark as a pending proposal (stays in PREVIEW so it counts toward the cap).
+  await sessionSvc.update(sessionKey, { proposalPending: true });
+  const updated = await sessionSvc.findById(sessionKey);
+  if (!updated) return;
+
+  const nickname = (await getUserNickname(proposerId)) ?? 'someone';
+  const prefix = `📨 <b>Proposed by ${nickname}</b>${status === 'unconfirmed' ? ' (unconfirmed)' : ''}`;
+
+  const previewContent = await new PreviewGeneratorService().generatePreview(updated);
+  await new PreviewSenderService(ctx.api).sendPreview(
+    config.authorizedUserId,
+    previewContent,
+    sessionKey,
+    { keyboard: createProposalPreviewKeyboard(sessionKey), controlPrefix: prefix }
+  );
+
+  await ctx.reply('✅ Sent for review. You will be notified once it is scheduled.');
+  logger.info(`Proposal ${sessionKey} from user ${proposerId} handed off to owner`);
+}
+
 async function confirmNew(c: Confirm): Promise<void> {
-  const { ctx, session, sessionKey } = c;
+  const { ctx, session, sessionKey, fromId } = c;
+
+  // Non-owner confirming = propose, not schedule.
+  if (fromId !== undefined && fromId !== config.authorizedUserId) {
+    await handoffToOwner(c);
+    return;
+  }
 
   const originalMessage = session.originalMessage;
   if (!originalMessage) {
@@ -398,6 +471,15 @@ async function confirmNew(c: Confirm): Promise<void> {
       : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedUserId, customText });
 
   await finalizePreview(c);
+
+  // Owner just scheduled a proposal → promote the proposer and notify them.
+  if (session.proposalPending && session.userId && session.userId !== config.authorizedUserId) {
+    await confirmUserNickname(session.userId);
+    await ctx.api
+      .sendMessage(session.userId, '✅ Your proposed post was scheduled.')
+      .catch(() => {});
+    logger.info(`Proposer ${session.userId} promoted to confirmed via scheduled proposal`);
+  }
 
   await ctx.reply(
     `Post scheduled!\nTarget: ${await channelLabelById(selectedChannel)}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
@@ -525,7 +607,9 @@ export function registerScheduling(): void {
 
       const fullMessage = session.originalMessage ?? originalMessage;
       const isPlainText = computeIsPlainText(fullMessage);
-      const knownNicknameUserId = await resolveKnownNicknameUserId(parseForwardInfo(fullMessage));
+      const isOwner = ctx.from?.id === config.authorizedUserId;
+      const sourceKnownId = await resolveKnownNicknameUserId(parseForwardInfo(fullMessage));
+      const knownNicknameUserId = resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId);
 
       return { type: 'TEXT_HANDLING_SELECTED', handling, isPlainText, knownNicknameUserId };
     }
@@ -534,10 +618,14 @@ export function registerScheduling(): void {
   bot.callbackQuery('action:quick', transitionCallback(
     'Error processing quick post. Please try again.',
     'Error in quick post callback',
-    ({ session, originalMessage }) => {
+    ({ ctx, session, originalMessage }) => {
       const forwardInfo = parseForwardInfo(originalMessage);
       const content = extractMessageContent(originalMessage, session.mediaGroupMessages);
       const isTextOnly = content?.type === 'text' && (session.replyChainMessages?.length ?? 0) <= 1;
+
+      // A proposer is always credited with their own nickname, even on quick post; the owner
+      // keeps quick post's default (credit the forwarded source, if any).
+      const isOwner = ctx.from?.id === config.authorizedUserId;
 
       return {
         type: 'ACTION_SELECTED',
@@ -546,7 +634,7 @@ export function registerScheduling(): void {
         hasBlockquotes: false,
         isPlainText: false,
         isTextOnly,
-        fromUserId: forwardInfo.fromUserId,
+        fromUserId: resolveProposerCredit(isOwner, ctx.from?.id ?? 0, forwardInfo.fromUserId),
       };
     }
   ));
@@ -554,13 +642,15 @@ export function registerScheduling(): void {
   bot.callbackQuery('action:transform', transitionCallback(
     'Error processing transform. Please try again.',
     'Error in transform callback',
-    async ({ session, originalMessage }) => {
+    async ({ ctx, session, originalMessage }) => {
       const content = extractMessageContent(originalMessage);
       const hasText = !!(content?.text?.trim());
       const hasBlockquotes = hasText && (content?.text?.includes('<blockquote>') ?? false);
       const fullMessage = session.originalMessage ?? originalMessage;
       const forwardInfo = parseForwardInfo(fullMessage);
 
+      const isOwner = ctx.from?.id === config.authorizedUserId;
+      const sourceKnownId = await resolveKnownNicknameUserId(forwardInfo);
       return {
         type: 'ACTION_SELECTED',
         action: 'transform',
@@ -568,7 +658,7 @@ export function registerScheduling(): void {
         hasBlockquotes,
         isPlainText: computeIsPlainText(fullMessage),
         fromUserId: forwardInfo.fromUserId,
-        knownNicknameUserId: await resolveKnownNicknameUserId(forwardInfo),
+        knownNicknameUserId: resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId),
       };
     }
   ));
@@ -602,7 +692,16 @@ export function registerScheduling(): void {
     'Error cancelling preview.',
     'Error in preview:cancel callback',
     async (c) => {
-      const { ctx, session, sessionKey, sessionSvc } = c;
+      const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+      // A handed-off proposal is the owner's to cancel; a Cancel here from anyone else is a
+      // stale proposer button on the same session. Ignore it instead of orphaning the
+      // owner's preview and losing the proposal.
+      if (session.proposalPending && fromId !== config.authorizedUserId) {
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
       await teardownPreviewMessages(c);
 
       // Edit sessions: original post stays untouched
@@ -615,7 +714,15 @@ export function registerScheduling(): void {
 
       await sessionSvc.complete(sessionKey);
 
-      await ctx.reply('Cancelled. Forward a new message to start over.');
+      // Declining a proposal: tell the proposer.
+      if (session.proposalPending && session.userId && session.userId !== config.authorizedUserId) {
+        await ctx.api
+          .sendMessage(session.userId, '❌ Your proposed post was declined.')
+          .catch(() => {});
+        await ctx.reply('Proposal declined.');
+      } else {
+        await ctx.reply('Cancelled. Forward a new message to start over.');
+      }
 
       logger.info(`Preview cancelled for session ${sessionKey}`);
     }
@@ -627,6 +734,15 @@ export function registerScheduling(): void {
     'Error in preview:back callback',
     async (c) => {
       const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+      // A proposal preview has no Back for the owner, so a Back here is a stale proposer
+      // button on an already-handed-off session. Ignore it instead of corrupting the
+      // owner's session state.
+      if (session.proposalPending && fromId !== config.authorizedUserId) {
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
       await teardownPreviewMessages(c);
 
       // Edit sessions: re-send channel selection
