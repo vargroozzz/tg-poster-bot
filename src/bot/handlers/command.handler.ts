@@ -13,7 +13,10 @@ import {
   setUserNickname,
   removeUserNickname,
   listUserNicknames,
+  isNicknameTaken,
+  getUserNicknameStatus,
 } from '../../database/models/user-nickname.model.js';
+import type { NicknameStatus } from '../../core/proposals/proposal.js';
 import {
   addCustomTextPreset,
   listCustomTextPresets,
@@ -376,6 +379,39 @@ bot.command('addnickname', async (ctx: Context) => {
   }
 });
 
+bot.command('setnickname', async (ctx: Context) => {
+  try {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const name = typeof ctx.match === 'string' ? ctx.match.trim() : '';
+    if (!name) {
+      await ctx.reply('Usage: /setnickname <name>\nExample: /setnickname Alex');
+      return;
+    }
+    if (name.length > 64) {
+      await ctx.reply('❌ That nickname is too long (max 64 characters).');
+      return;
+    }
+
+    if (await isNicknameTaken(name, userId)) {
+      await ctx.reply('❌ That nickname is already taken. Please choose another.');
+      return;
+    }
+
+    // Never demote an already-confirmed user when they rename themselves.
+    const existingStatus = await getUserNicknameStatus(userId);
+    const status: NicknameStatus = existingStatus === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    await setUserNickname(userId, name, undefined, status);
+
+    await ctx.reply(`✅ Nickname set to "${name}". You can now send posts to propose.`);
+    logger.info(`Self-set nickname for user ${userId}: ${name} (${status})`);
+  } catch (error) {
+    logger.error('Error in setnickname command:', error);
+    await ctx.reply('❌ Failed to set nickname. Please try again.');
+  }
+});
+
 bot.command('removenickname', async (ctx: Context) => {
   const userIdStr = typeof ctx.match === 'string' ? ctx.match.trim() : undefined;
   let userId: number | undefined;
@@ -431,7 +467,12 @@ bot.command('listnicknames', async (ctx: Context) => {
     }
 
     const nicknameList = nicknames
-      .map((nick) => `• ${nick.userId}: "${nick.nickname}"${nick.notes ? ` (${nick.notes})` : ''}`)
+      .map(
+        (nick) =>
+          `• ${nick.userId}: "${nick.nickname}"` +
+          `${nick.status === 'unconfirmed' ? ' (unconfirmed)' : ''}` +
+          `${nick.notes ? ` (${nick.notes})` : ''}`
+      )
       .join('\n');
 
     await ctx.reply(`📝 User Nicknames:\n\n${nicknameList}`);

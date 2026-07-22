@@ -15,6 +15,8 @@ import { SessionState } from '../../shared/constants/flow-states.js';
 import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 import { entitiesToHtml } from '../../utils/entities-to-html.js';
+import { config } from '../../config/index.js';
+import { getUserNickname } from '../../database/models/user-nickname.model.js';
 
 let _sessionService: SessionService | undefined;
 const getSessionService = (): SessionService => {
@@ -196,6 +198,15 @@ bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:doc
 
     const forwardOrigin = message.forward_origin;
     const userId = ctx.from?.id;
+
+    // Non-owner proposers must set a nickname before proposing anything.
+    if (userId && userId !== config.authorizedUserId) {
+      const proposerNickname = await getUserNickname(userId);
+      if (!proposerNickname) {
+        await ctx.reply('👋 To propose a post, first set your nickname:\n/setnickname <name>');
+        return;
+      }
+    }
 
     // Check if this is part of a media group
     const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
