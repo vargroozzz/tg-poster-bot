@@ -618,10 +618,14 @@ export function registerScheduling(): void {
   bot.callbackQuery('action:quick', transitionCallback(
     'Error processing quick post. Please try again.',
     'Error in quick post callback',
-    ({ session, originalMessage }) => {
+    ({ ctx, session, originalMessage }) => {
       const forwardInfo = parseForwardInfo(originalMessage);
       const content = extractMessageContent(originalMessage, session.mediaGroupMessages);
       const isTextOnly = content?.type === 'text' && (session.replyChainMessages?.length ?? 0) <= 1;
+
+      // A proposer is always credited with their own nickname, even on quick post; the owner
+      // keeps quick post's default (credit the forwarded source, if any).
+      const isOwner = ctx.from?.id === config.authorizedUserId;
 
       return {
         type: 'ACTION_SELECTED',
@@ -630,7 +634,7 @@ export function registerScheduling(): void {
         hasBlockquotes: false,
         isPlainText: false,
         isTextOnly,
-        fromUserId: forwardInfo.fromUserId,
+        fromUserId: resolveProposerCredit(isOwner, ctx.from?.id ?? 0, forwardInfo.fromUserId),
       };
     }
   ));
