@@ -688,7 +688,16 @@ export function registerScheduling(): void {
     'Error cancelling preview.',
     'Error in preview:cancel callback',
     async (c) => {
-      const { ctx, session, sessionKey, sessionSvc } = c;
+      const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+      // A handed-off proposal is the owner's to cancel; a Cancel here from anyone else is a
+      // stale proposer button on the same session. Ignore it instead of orphaning the
+      // owner's preview and losing the proposal.
+      if (session.proposalPending && fromId !== config.authorizedUserId) {
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
       await teardownPreviewMessages(c);
 
       // Edit sessions: original post stays untouched
