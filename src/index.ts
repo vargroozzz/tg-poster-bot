@@ -31,6 +31,7 @@ async function main() {
     await bot.api.setMyCommands([
       { command: 'start', description: 'Show welcome message' },
       { command: 'help', description: 'Show help and available commands' },
+      { command: 'setnickname', description: 'Set your nickname (required to propose posts)' },
       { command: 'addchannel', description: 'Add a new posting channel' },
       { command: 'removechannel', description: 'Remove a posting channel' },
       { command: 'listchannels', description: 'List all configured channels' },
