@@ -154,4 +154,8 @@ export class SessionService {
   async getActiveUserSessions(userId: number): Promise<ISession[]> {
     return await this.repository.findByUser(userId);
   }
+
+  async countPendingProposals(userId: number): Promise<number> {
+    return await this.repository.countPendingProposals(userId);
+  }
 }
