@@ -377,6 +377,14 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
 // the owner, who gets the same preview with a Schedule/Cancel keyboard.
 async function handoffToOwner(c: Confirm): Promise<void> {
   const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+  // A double-tap can race the teardown below; if this session was already handed off,
+  // do nothing rather than sending the owner a second preview and orphaning the first.
+  if (session.proposalPending) {
+    await ctx.deleteMessage().catch(() => {});
+    return;
+  }
+
   const proposerId = session.userId;
 
   const status = (await getUserNicknameStatus(proposerId)) ?? 'unconfirmed';
@@ -713,6 +721,15 @@ export function registerScheduling(): void {
     'Error in preview:back callback',
     async (c) => {
       const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+      // A proposal preview has no Back for the owner, so a Back here is a stale proposer
+      // button on an already-handed-off session. Ignore it instead of corrupting the
+      // owner's session state.
+      if (session.proposalPending && fromId !== config.authorizedUserId) {
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
       await teardownPreviewMessages(c);
 
       // Edit sessions: re-send channel selection

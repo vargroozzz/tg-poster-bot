@@ -394,6 +394,11 @@ bot.command('setnickname', async (ctx: Context) => {
       return;
     }
 
+    if (/[<>&]/.test(name)) {
+      await ctx.reply('❌ Nickname cannot contain the characters <, >, or &.');
+      return;
+    }
+
     if (await isNicknameTaken(name, userId)) {
       await ctx.reply('❌ That nickname is already taken. Please choose another.');
       return;
