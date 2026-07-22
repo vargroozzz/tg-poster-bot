@@ -76,4 +76,16 @@ export class SessionRepository extends BaseRepository<ISession> {
       expiresAt: { $gt: new Date() },
     });
   }
+
+  /**
+   * Count a user's proposals awaiting owner action (handed off, still in PREVIEW).
+   */
+  async countPendingProposals(userId: number): Promise<number> {
+    return await this.model.countDocuments({
+      userId,
+      proposalPending: true,
+      state: SessionState.PREVIEW,
+      expiresAt: { $gt: new Date() },
+    });
+  }
 }

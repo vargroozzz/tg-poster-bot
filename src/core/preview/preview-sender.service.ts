@@ -1,5 +1,5 @@
 import { Api } from 'grammy';
-import type { MessageOriginChannel } from 'grammy/types';
+import type { InlineKeyboardMarkup, MessageOriginChannel } from 'grammy/types';
 import type { MessageContent } from '../../types/message.types.js';
 import { MediaSenderService } from '../sending/media-sender.service.js';
 import { createPreviewActionKeyboard } from '../../bot/keyboards/preview-action.keyboard.js';
@@ -22,7 +22,12 @@ export class PreviewSenderService {
     return DIContainer.resolve('SessionService');
   }
 
-  async sendPreview(userId: number, content: MessageContent, sessionId: string): Promise<number> {
+  async sendPreview(
+    userId: number,
+    content: MessageContent,
+    sessionId: string,
+    options?: { keyboard?: InlineKeyboardMarkup; controlPrefix?: string }
+  ): Promise<number> {
     const sessionSvc = this.getSessionService();
     const session = await sessionSvc.findById(sessionId);
 
@@ -142,8 +147,11 @@ export class PreviewSenderService {
     // editMessageReplyMarkup cannot be used on media group messages, and is
     // unreliable for other media types in some clients, so a dedicated text
     // message with the keyboard is the most reliable approach.
-    const keyboard = createPreviewActionKeyboard(sessionId);
-    const controlText = await this.buildControlMessage(session.selectedChannel);
+    const keyboard = options?.keyboard ?? createPreviewActionKeyboard(sessionId);
+    const baseControl = await this.buildControlMessage(session.selectedChannel);
+    const controlText = options?.controlPrefix
+      ? `${options.controlPrefix}\n\n${baseControl}`
+      : baseControl;
     const controlMessage = await this.api.sendMessage(userId, controlText, {
       reply_markup: keyboard,
       parse_mode: 'HTML',
