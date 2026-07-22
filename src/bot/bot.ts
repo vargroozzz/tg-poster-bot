@@ -1,19 +1,25 @@
 import { Bot } from 'grammy';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
+import { parseCommandName, NON_OWNER_COMMANDS } from '../core/proposals/proposal.js';
 
 export const bot = new Bot(config.botToken);
 
-// Auth middleware - only allow authorized user
+// Auth middleware. The owner may do anything. Non-owners (proposers) may send content
+// to propose and use only the allowlisted commands; every other command is owner-only.
 bot.use(async (ctx, next) => {
   if (!ctx.from) {
     return;
   }
 
   if (ctx.from.id !== config.authorizedUserId) {
-    logger.warn(`Unauthorized access attempt from user ${ctx.from.id} (@${ctx.from.username})`);
-    await ctx.reply('⛔️ You are not authorized to use this bot.');
-    return;
+    const command = parseCommandName(ctx.message?.text);
+    if (command && !NON_OWNER_COMMANDS.includes(command)) {
+      logger.warn(`Unauthorized command "/${command}" from user ${ctx.from.id} (@${ctx.from.username})`);
+      await ctx.reply('⛔️ You are not authorized to use this command.');
+      return;
+    }
+    // Otherwise: fall through — content messages and propose-flow callbacks are allowed.
   }
 
   await next();
