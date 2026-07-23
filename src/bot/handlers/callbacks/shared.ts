@@ -1,6 +1,9 @@
 // src/bot/handlers/callbacks/shared.ts
 import { Context } from 'grammy';
-import type { InlineKeyboardMarkup } from 'grammy/types';
+import type { InlineKeyboardMarkup, Message } from 'grammy/types';
+import { config } from '../../../config/index.js';
+import { resolveProposerCredit } from '../../../core/proposals/proposal.js';
+import { parseForwardInfo } from '../../../utils/message-parser.js';
 import type { ISession } from '../../../database/models/session.model.js';
 import { DIContainer } from '../../../shared/di/container.js';
 import type { SessionService } from '../../../core/session/session.service.js';
@@ -26,6 +29,22 @@ export async function resolveKnownNicknameUserId(forwardInfo: ForwardInfo): Prom
   return nickname ? fromUserId : undefined;
 }
 
+// Who to credit for this post. A handed-off proposal always credits the original proposer
+// (session.proposedByUserId) — even while the owner adjusts it via Back — otherwise fall
+// back to the normal owner-vs-proposer rule.
+export function creditUserId(session: ISession, ctx: Context, sourceKnownId: number | undefined): number | undefined {
+  if (session.proposedByUserId != null) return session.proposedByUserId;
+  const isOwner = ctx.from?.id === config.authorizedUserId;
+  return resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId);
+}
+
+// Credit that can be resolved without asking: a known nickname for the source (or the
+// proposer). Undefined means the nickname step still has to run.
+export async function knownCredit(ctx: Context, session: ISession, originalMessage: Message): Promise<number | undefined> {
+  const fullMessage = session.originalMessage ?? originalMessage;
+  return creditUserId(session, ctx, await resolveKnownNicknameUserId(parseForwardInfo(fullMessage)));
+}
+
 export const TEXT_CHOICE_PROMPT = 'What text should the post have?';
 export const NICKNAME_PROMPT = 'Who should be credited for this post?';
 
@@ -44,7 +63,8 @@ function originalTextHtml(session?: ISession): string {
 
 export async function textChoiceKeyboardFor(sessionId: string): Promise<InlineKeyboardMarkup> {
   const html = originalTextHtml(await getSessionService().findById(sessionId) ?? undefined);
-  return createTextChoiceKeyboard(!!html, html.includes('<blockquote>'));
+  // '<blockquote' (not '<blockquote>') so expandable quotes count too.
+  return createTextChoiceKeyboard(!!html, html.includes('<blockquote'));
 }
 
 type StepRenderer = (ctx: Context, sessionId: string) => Promise<void>;

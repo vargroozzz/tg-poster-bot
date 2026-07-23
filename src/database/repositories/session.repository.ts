@@ -47,12 +47,22 @@ export class SessionRepository extends BaseRepository<ISession> {
     state: SessionState,
     updates: Partial<ISession>
   ): Promise<ISession | null> {
+    // Mongoose drops undefined values from an update, so an explicit `field: undefined`
+    // (how the flow resets a selection) has to be turned into a $unset to take effect.
+    const entries = Object.entries(updates);
+    const unset = Object.fromEntries(
+      entries.filter(([, value]) => value === undefined).map(([key]) => [key, ''])
+    );
+
     return await this.model.findByIdAndUpdate(
       sessionId,
       {
-        state,
-        ...updates,
-        updatedAt: new Date(),
+        $set: {
+          ...Object.fromEntries(entries.filter(([, value]) => value !== undefined)),
+          state,
+          updatedAt: new Date(),
+        },
+        ...(Object.keys(unset).length > 0 && { $unset: unset }),
       },
       { new: true }
     );

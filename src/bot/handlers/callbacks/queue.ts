@@ -387,7 +387,7 @@ export function registerQueue(): void {
         return;
       }
       const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
-      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote>') ?? false);
+      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote') ?? false);
       const effectiveHasText = hasText && !hasBlockquotes;
       const isPoll = rawContent.type === 'poll';
 
@@ -448,7 +448,7 @@ export function registerQueue(): void {
         return;
       }
       const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
-      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote>') ?? false);
+      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote') ?? false);
       const effectiveHasText = hasText && !hasBlockquotes;
 
       if (action === 'quick') {

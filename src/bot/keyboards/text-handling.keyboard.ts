@@ -1,8 +1,6 @@
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { listCustomTextPresets } from '../../database/models/custom-text-preset.model.js';
 
-export type TextHandling = 'remove' | 'keep' | 'quote';
-
 // One step, one tap: the post's text is either the original (keep / quote), a custom
 // one (preset / typed), or none at all. Picking a custom text drops the original.
 export async function createTextChoiceKeyboard(

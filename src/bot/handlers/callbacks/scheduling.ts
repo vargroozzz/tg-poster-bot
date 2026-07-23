@@ -24,7 +24,6 @@ import { channelLabel, toChannelInfo } from '../../../shared/helpers/channel.hel
 import { PostSchedulerService } from '../../../core/posting/post-scheduler.service.js';
 import { config } from '../../../config/index.js';
 import {
-  resolveProposerCredit,
   canAcceptProposal,
   MAX_PENDING_PROPOSALS,
 } from '../../../core/proposals/proposal.js';
@@ -49,7 +48,8 @@ import {
   deletePreviewMessages,
   showPreview,
   renderStep,
-  resolveKnownNicknameUserId,
+  creditUserId,
+  knownCredit,
 } from './shared.js';
 
 const postScheduler = new PostSchedulerService();
@@ -372,22 +372,6 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
   logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
 }
 
-// Who to credit for this post. A handed-off proposal always credits the original proposer
-// (session.proposedByUserId) — even while the owner adjusts it via Back — otherwise fall
-// back to the normal owner-vs-proposer rule.
-function creditUserId(session: ISession, ctx: Context, sourceKnownId: number | undefined): number | undefined {
-  if (session.proposedByUserId != null) return session.proposedByUserId;
-  const isOwner = ctx.from?.id === config.authorizedUserId;
-  return resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId);
-}
-
-// Credit that can be resolved without asking: a known nickname for the source (or the
-// proposer). Undefined means the nickname step still has to run.
-async function knownCredit(ctx: Context, session: ISession, originalMessage: Message): Promise<number | undefined> {
-  const fullMessage = session.originalMessage ?? originalMessage;
-  return creditUserId(session, ctx, await resolveKnownNicknameUserId(parseForwardInfo(fullMessage)));
-}
-
 // A non-owner confirming their preview does not schedule — it hands the assembled post to
 // the owner, who gets the same preview with a Schedule/Cancel keyboard.
 async function handoffToOwner(c: Confirm): Promise<void> {
@@ -638,8 +622,6 @@ export function registerScheduling(): void {
       return {
         type: 'ACTION_SELECTED',
         action: 'quick',
-        hasText: false,
-        hasBlockquotes: false,
         isTextOnly,
         fromUserId: creditUserId(session, ctx, forwardInfo.fromUserId),
       };
@@ -650,20 +632,13 @@ export function registerScheduling(): void {
     'Error processing transform. Please try again.',
     'Error in transform callback',
     async ({ ctx, session, originalMessage }) => {
-      const content = extractMessageContent(originalMessage);
-      const hasText = !!(content?.text?.trim());
-      const hasBlockquotes = hasText && (content?.text?.includes('<blockquote>') ?? false);
-      const fullMessage = session.originalMessage ?? originalMessage;
-      const forwardInfo = parseForwardInfo(fullMessage);
+      const forwardInfo = parseForwardInfo(session.originalMessage ?? originalMessage);
 
-      const sourceKnownId = await resolveKnownNicknameUserId(forwardInfo);
       return {
         type: 'ACTION_SELECTED',
         action: 'transform',
-        hasText,
-        hasBlockquotes,
         fromUserId: forwardInfo.fromUserId,
-        knownNicknameUserId: creditUserId(session, ctx, sourceKnownId),
+        knownNicknameUserId: await knownCredit(ctx, session, originalMessage),
       };
     }
   ));
@@ -677,8 +652,7 @@ export function registerScheduling(): void {
         return null;
       }
 
-      // The forward edge fires unconditionally on action='forward'; these fields are unused by its guard
-      return { type: 'ACTION_SELECTED', action: 'forward', hasText: false, hasBlockquotes: false };
+      return { type: 'ACTION_SELECTED', action: 'forward' };
     }
   ));
 
@@ -768,10 +742,7 @@ export function registerScheduling(): void {
         }
 
         // forwardMessage (not copyMessage) so a proposal that was itself forwarded from a
-        // channel keeps its origin, and forward-action re-forwards it correctly. Trade-off:
-        // for original (non-forwarded) content this stamps a forward_origin on the copy, so
-        // computeIsPlainText treats it as non-plain and the owner sees an extra "add custom
-        // text?" step — harmless (they can Skip).
+        // channel keeps its origin, and forward-action re-forwards it correctly.
         let ownerCopy: Message;
         try {
           ownerCopy = await ctx.api.forwardMessage(

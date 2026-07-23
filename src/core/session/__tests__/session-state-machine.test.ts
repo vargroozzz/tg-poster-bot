@@ -32,11 +32,9 @@ describe('transition — CHANNEL_SELECT', () => {
 });
 
 describe('transition — ACTION_SELECT', () => {
-  const base = { hasText: false, hasBlockquotes: false } as const;
-
   it('forward action goes to PREVIEW', () => {
     const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'forward', ...base,
+      type: 'ACTION_SELECTED', action: 'forward',
     });
     expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
@@ -45,7 +43,7 @@ describe('transition — ACTION_SELECT', () => {
 
   it('quick action goes to PREVIEW with remove text handling', () => {
     const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'quick', ...base, fromUserId: 99,
+      type: 'ACTION_SELECTED', action: 'quick', fromUserId: 99,
     });
     expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
@@ -54,21 +52,21 @@ describe('transition — ACTION_SELECT', () => {
 
   it('quick action with no fromUserId stores null for selectedUserId', () => {
     const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'quick', ...base,
+      type: 'ACTION_SELECTED', action: 'quick',
     });
     expect(result.sessionUpdates).toMatchObject({ selectedUserId: null });
   });
 
   it('quick action on text-only message keeps text handling', () => {
     const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'quick', ...base, isTextOnly: true, fromUserId: 99,
+      type: 'ACTION_SELECTED', action: 'quick', isTextOnly: true, fromUserId: 99,
     });
     expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'keep', selectedUserId: 99 });
   });
 
   it('transform goes to the text choice step', () => {
     const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: false,
+      type: 'ACTION_SELECTED', action: 'transform',
     });
     expect(result.newState).toBe(SessionState.TEXT_HANDLING);
     expect(result.step).toEqual({ type: 'show_text_handling' });
@@ -77,7 +75,7 @@ describe('transition — ACTION_SELECT', () => {
 
   it('transform with a known nickname records it upfront', () => {
     const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', ...base, knownNicknameUserId: 42,
+      type: 'ACTION_SELECTED', action: 'transform', knownNicknameUserId: 42,
     });
     expect(result.newState).toBe(SessionState.TEXT_HANDLING);
     expect(result.sessionUpdates).toMatchObject({ selectedUserId: 42 });
@@ -130,7 +128,7 @@ describe('transition — NICKNAME_SELECT', () => {
 describe('transition — full transform path', () => {
   it('action → text choice → nickname → preview', () => {
     const first = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: false,
+      type: 'ACTION_SELECTED', action: 'transform',
     });
     expect(first.newState).toBe(SessionState.TEXT_HANDLING);
 

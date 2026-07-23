@@ -15,8 +15,6 @@ export type FlowEvent =
   | Readonly<{
       type: 'ACTION_SELECTED';
       action: 'transform' | 'forward' | 'quick';
-      hasText: boolean;
-      hasBlockquotes: boolean;
       isTextOnly?: boolean;
       fromUserId?: number;
       knownNicknameUserId?: number;
