@@ -373,6 +373,15 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
   logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
 }
 
+// Who to credit for this post. A handed-off proposal always credits the original proposer
+// (session.proposedByUserId) — even while the owner adjusts it via Back — otherwise fall
+// back to the normal owner-vs-proposer rule.
+function creditUserId(session: ISession, ctx: Context, sourceKnownId: number | undefined): number | undefined {
+  if (session.proposedByUserId != null) return session.proposedByUserId;
+  const isOwner = ctx.from?.id === config.authorizedUserId;
+  return resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId);
+}
+
 // A non-owner confirming their preview does not schedule — it hands the assembled post to
 // the owner, who gets the same preview with a Schedule/Cancel keyboard.
 async function handoffToOwner(c: Confirm): Promise<void> {
@@ -404,20 +413,26 @@ async function handoffToOwner(c: Confirm): Promise<void> {
   if (fromId) await deletePreviewMessages(ctx, fromId, session);
   await ctx.deleteMessage().catch(() => {});
 
-  // Mark as a pending proposal (stays in PREVIEW so it counts toward the cap).
-  await sessionSvc.update(sessionKey, { proposalPending: true });
+  // Mark as a pending proposal (stays in PREVIEW so it counts toward the cap) and record
+  // the proposer so attribution/promotion survive an owner "Back to adjust" takeover.
+  await sessionSvc.update(sessionKey, { proposalPending: true, proposedByUserId: proposerId });
   const updated = await sessionSvc.findById(sessionKey);
   if (!updated) return;
 
   const nickname = (await getUserNickname(proposerId)) ?? 'someone';
   const prefix = `📨 <b>Proposed by ${nickname}</b>${status === 'unconfirmed' ? ' (unconfirmed)' : ''}`;
 
+  // Back-to-adjust re-forwards the single original message into the owner's chat; albums
+  // and threads can't be re-anchored without losing their grouping, so they omit Back.
+  const isSingleMessage =
+    (updated.mediaGroupMessages?.length ?? 0) <= 1 && (updated.replyChainMessages?.length ?? 0) <= 1;
+
   const previewContent = await new PreviewGeneratorService().generatePreview(updated);
   await new PreviewSenderService(ctx.api).sendPreview(
     config.authorizedUserId,
     previewContent,
     sessionKey,
-    { keyboard: createProposalPreviewKeyboard(sessionKey), controlPrefix: prefix }
+    { keyboard: createProposalPreviewKeyboard(sessionKey, isSingleMessage), controlPrefix: prefix }
   );
 
   await ctx.reply('✅ Sent for review. You will be notified once it is scheduled.');
@@ -473,12 +488,13 @@ async function confirmNew(c: Confirm): Promise<void> {
   await finalizePreview(c);
 
   // Owner just scheduled a proposal → promote the proposer and notify them.
-  if (session.proposalPending && session.userId && session.userId !== config.authorizedUserId) {
-    await confirmUserNickname(session.userId);
+  const scheduledProposer = session.proposedByUserId;
+  if (scheduledProposer != null && scheduledProposer !== config.authorizedUserId) {
+    await confirmUserNickname(scheduledProposer);
     await ctx.api
-      .sendMessage(session.userId, '✅ Your proposed post was scheduled.')
+      .sendMessage(scheduledProposer, '✅ Your proposed post was scheduled.')
       .catch(() => {});
-    logger.info(`Proposer ${session.userId} promoted to confirmed via scheduled proposal`);
+    logger.info(`Proposer ${scheduledProposer} promoted to confirmed via scheduled proposal`);
   }
 
   await ctx.reply(
@@ -607,9 +623,8 @@ export function registerScheduling(): void {
 
       const fullMessage = session.originalMessage ?? originalMessage;
       const isPlainText = computeIsPlainText(fullMessage);
-      const isOwner = ctx.from?.id === config.authorizedUserId;
       const sourceKnownId = await resolveKnownNicknameUserId(parseForwardInfo(fullMessage));
-      const knownNicknameUserId = resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId);
+      const knownNicknameUserId = creditUserId(session, ctx, sourceKnownId);
 
       return { type: 'TEXT_HANDLING_SELECTED', handling, isPlainText, knownNicknameUserId };
     }
@@ -625,8 +640,6 @@ export function registerScheduling(): void {
 
       // A proposer is always credited with their own nickname, even on quick post; the owner
       // keeps quick post's default (credit the forwarded source, if any).
-      const isOwner = ctx.from?.id === config.authorizedUserId;
-
       return {
         type: 'ACTION_SELECTED',
         action: 'quick',
@@ -634,7 +647,7 @@ export function registerScheduling(): void {
         hasBlockquotes: false,
         isPlainText: false,
         isTextOnly,
-        fromUserId: resolveProposerCredit(isOwner, ctx.from?.id ?? 0, forwardInfo.fromUserId),
+        fromUserId: creditUserId(session, ctx, forwardInfo.fromUserId),
       };
     }
   ));
@@ -649,7 +662,6 @@ export function registerScheduling(): void {
       const fullMessage = session.originalMessage ?? originalMessage;
       const forwardInfo = parseForwardInfo(fullMessage);
 
-      const isOwner = ctx.from?.id === config.authorizedUserId;
       const sourceKnownId = await resolveKnownNicknameUserId(forwardInfo);
       return {
         type: 'ACTION_SELECTED',
@@ -658,7 +670,7 @@ export function registerScheduling(): void {
         hasBlockquotes,
         isPlainText: computeIsPlainText(fullMessage),
         fromUserId: forwardInfo.fromUserId,
-        knownNicknameUserId: resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId),
+        knownNicknameUserId: creditUserId(session, ctx, sourceKnownId),
       };
     }
   ));
@@ -714,10 +726,11 @@ export function registerScheduling(): void {
 
       await sessionSvc.complete(sessionKey);
 
-      // Declining a proposal: tell the proposer.
-      if (session.proposalPending && session.userId && session.userId !== config.authorizedUserId) {
+      // Declining a proposal: tell the proposer (even if the owner had taken it over via Back).
+      const declinedProposer = session.proposedByUserId;
+      if (declinedProposer != null && declinedProposer !== config.authorizedUserId) {
         await ctx.api
-          .sendMessage(session.userId, '❌ Your proposed post was declined.')
+          .sendMessage(declinedProposer, '❌ Your proposed post was declined.')
           .catch(() => {});
         await ctx.reply('Proposal declined.');
       } else {
@@ -735,11 +748,84 @@ export function registerScheduling(): void {
     async (c) => {
       const { ctx, session, sessionKey, sessionSvc, fromId } = c;
 
-      // A proposal preview has no Back for the owner, so a Back here is a stale proposer
-      // button on an already-handed-off session. Ignore it instead of corrupting the
-      // owner's session state.
+      // A Back is only valid from a live preview. If the session already moved on — e.g. a
+      // double-tapped "Back to adjust" that already re-homed it to CHANNEL_SELECT — ignore
+      // the stale click instead of falling through and sending a duplicate prompt.
+      if (session.state !== SessionState.PREVIEW) {
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
+      // A Back from anyone but the owner on a handed-off proposal is a stale proposer button.
+      // Ignore it instead of corrupting the owner's session state.
       if (session.proposalPending && fromId !== config.authorizedUserId) {
         await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
+      // Owner clicked "Back to adjust" on a handed-off proposal: re-home it into the owner's
+      // chat so the normal edit flow works. Re-forward the (single) original message to the
+      // owner, hand the session over to the owner, and drop into channel selection. Back is
+      // only offered for single-message proposals, so a plain forwardMessage suffices here.
+      if (session.proposalPending && fromId === config.authorizedUserId) {
+        const proposalMsg = session.originalMessage;
+        if (!proposalMsg) {
+          await ctx.reply('Cannot adjust: the original message is missing.');
+          return;
+        }
+
+        // forwardMessage (not copyMessage) so a proposal that was itself forwarded from a
+        // channel keeps its origin, and forward-action re-forwards it correctly. Trade-off:
+        // for original (non-forwarded) content this stamps a forward_origin on the copy, so
+        // computeIsPlainText treats it as non-plain and the owner sees an extra "add custom
+        // text?" step — harmless (they can Skip).
+        let ownerCopy: Message;
+        try {
+          ownerCopy = await ctx.api.forwardMessage(
+            config.authorizedUserId,
+            proposalMsg.chat.id,
+            proposalMsg.message_id
+          );
+        } catch (err) {
+          logger.warn('Could not re-forward proposal for adjust:', err);
+          await ctx.reply(
+            '⚠️ Could not open this proposal for editing (the original message may be unavailable). ' +
+              'You can still Schedule or Cancel it.'
+          );
+          return;
+        }
+
+        await teardownPreviewMessages(c);
+
+        // Re-home onto the owner-chat copy and hand ownership to the owner, keeping
+        // proposedByUserId so attribution/promotion still target the proposer.
+        await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
+          originalMessage: ownerCopy,
+          messageId: ownerCopy.message_id,
+          chatId: config.authorizedUserId,
+          userId: config.authorizedUserId,
+          proposalPending: false,
+          selectedChannel: undefined,
+          selectedAction: undefined,
+          selectedUserId: undefined,
+          textHandling: undefined,
+          customText: undefined,
+          previewMessageId: undefined,
+          previewMessageIds: undefined,
+        });
+
+        const adjustChannels = await getActivePostingChannels();
+        if (adjustChannels.length === 0) {
+          await ctx.reply('⚠️ No posting channels configured.');
+          return;
+        }
+
+        await ctx.api.sendMessage(config.authorizedUserId, '📍 Select target channel:', {
+          reply_markup: createChannelSelectKeyboard(adjustChannels.map(toChannelInfo)),
+          reply_to_message_id: ownerCopy.message_id,
+        });
+
+        logger.info(`Proposal ${sessionKey} re-homed to owner for adjustment`);
         return;
       }
 
