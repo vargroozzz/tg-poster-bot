@@ -22,6 +22,10 @@ export interface ISession extends Document, PostSelections {
   editingOriginalForward?: ForwardInfo;
   isReply?: boolean;
   proposalPending?: boolean;
+  // The user who proposed this post. Set at handoff and preserved even after the owner
+  // takes the session over via "Back to adjust" (which re-homes userId to the owner), so
+  // attribution, promotion, and decline-notify still target the original proposer.
+  proposedByUserId?: number;
   replyParentPostId?: string;
   replyMode?: 'together' | 'separated';
   createdAt: Date;
@@ -80,6 +84,7 @@ const sessionSchema = new Schema<ISession>({
   editingOriginalForward: { type: Schema.Types.Mixed },
   isReply: { type: Boolean },
   proposalPending: { type: Boolean },
+  proposedByUserId: { type: Number },
   replyParentPostId: { type: String },
   replyMode: { type: String, enum: ['together', 'separated'] },
   createdAt: {
