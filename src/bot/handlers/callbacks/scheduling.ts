@@ -49,7 +49,6 @@ import {
   deletePreviewMessages,
   showPreview,
   renderStep,
-  textCustomKeyboardFor,
   resolveKnownNicknameUserId,
 } from './shared.js';
 
@@ -553,28 +552,18 @@ export function registerScheduling(): void {
     }
   ));
 
-  // Handle custom text selection
-  bot.callbackQuery(/^custom_text:(add|skip)$/, transitionCallback(
+  // Custom text: typing one replaces the original text, so the session is parked in
+  // TEXT_HANDLING until the reply arrives (see the custom text handler in forward.handler).
+  bot.callbackQuery('custom_text:add', transitionCallback(
     'Error processing custom text. Please try again.',
     'Error in custom text callback',
-    async ({ ctx, session, originalMessage, match }) => {
-      const action = match?.[1];
-      if (!action) {
-        await ErrorMessages.invalidSelection(ctx, 'action');
-        return null;
-      }
-
-      if (action === 'add') {
-        // Self-loop: stays in TEXT_HANDLING, waiting for the user's reply with the text
-        await getSessionService().update(session._id.toString(), { waitingForCustomText: true });
-        await ctx.editMessageText(
-          '✍️ Reply to this message with your custom text.\n\n' +
-            'This text will be added at the beginning of your post.'
-        );
-        return null;
-      }
-
-      return { type: 'CUSTOM_TEXT_SELECTED', text: undefined, knownNicknameUserId: await knownCredit(ctx, session, originalMessage) };
+    async ({ ctx, session }) => {
+      await getSessionService().update(session._id.toString(), { waitingForCustomText: true });
+      await ctx.editMessageText(
+        '✍️ Reply to this message with your custom text.\n\n' +
+          "It replaces the message's own text."
+      );
+      return null;
     }
   ));
 
@@ -596,7 +585,8 @@ export function registerScheduling(): void {
       }
 
       return {
-        type: 'CUSTOM_TEXT_SELECTED',
+        type: 'TEXT_CHOSEN',
+        handling: 'remove',
         text: preset.text,
         knownNicknameUserId: await knownCredit(ctx, session, originalMessage),
       };
@@ -620,21 +610,18 @@ export function registerScheduling(): void {
     }
   ));
 
-  // Text handling is a toggle inside the merged step: store the pick and re-render.
+  // Keep the original text (as-is or quoted), or drop it entirely.
   bot.callbackQuery(/^text:(keep|remove|quote)$/, transitionCallback(
     'Error processing text handling. Please try again.',
     'Error in text handling callback',
-    async ({ ctx, session, match }) => {
+    async ({ ctx, session, originalMessage, match }) => {
       const handling = match?.[1] as 'keep' | 'remove' | 'quote' | undefined;
       if (!handling) {
         await ErrorMessages.invalidSelection(ctx, 'text handling option');
         return null;
       }
 
-      const sessionId = session._id.toString();
-      await getSessionService().update(sessionId, { textHandling: handling });
-      await ctx.editMessageReplyMarkup({ reply_markup: await textCustomKeyboardFor(sessionId) });
-      return null;
+      return { type: 'TEXT_CHOSEN', handling, knownNicknameUserId: await knownCredit(ctx, session, originalMessage) };
     }
   ));
 

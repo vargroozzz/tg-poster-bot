@@ -165,11 +165,12 @@ bot.on('message:text').filter(
     const customText = entitiesToHtml(message.text ?? '', message.entities);
     const foundKey = session._id.toString();
 
-    // Typed custom text in the merged step: the nickname still has to be picked unless
-    // it was already resolved (known nickname, proposer, or the queue edit flow).
+    // Typed custom text replaces the message's own text, and the nickname still has to be
+    // picked unless it was already resolved (known nickname, proposer, or the edit flow).
     if (session.state === SessionState.TEXT_HANDLING && session.selectedUserId === undefined) {
       await sessionSvc.updateState(foundKey, SessionState.NICKNAME_SELECT, {
         customText,
+        textHandling: 'remove',
         waitingForCustomText: false,
       });
       await ctx.reply(NICKNAME_PROMPT, {
@@ -181,6 +182,7 @@ bot.on('message:text').filter(
 
     await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
       customText,
+      ...(session.state === SessionState.TEXT_HANDLING && { textHandling: 'remove' as const }),
       waitingForCustomText: false,
     });
 

@@ -16,7 +16,7 @@ import {
   getNicknameKeyboard,
 } from '../../../shared/helpers/nickname.helper.js';
 import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
-import { createTextCustomKeyboard } from '../../keyboards/text-handling.keyboard.js';
+import { createTextChoiceKeyboard } from '../../keyboards/text-handling.keyboard.js';
 import { entitiesToHtml } from '../../../utils/entities-to-html.js';
 
 export async function resolveKnownNicknameUserId(forwardInfo: ForwardInfo): Promise<number | undefined> {
@@ -26,27 +26,25 @@ export async function resolveKnownNicknameUserId(forwardInfo: ForwardInfo): Prom
   return nickname ? fromUserId : undefined;
 }
 
-export const TEXT_CUSTOM_PROMPT = 'How should the text be handled? Add custom text?';
+export const TEXT_CHOICE_PROMPT = 'What text should the post have?';
 export const NICKNAME_PROMPT = 'Who should be credited for this post?';
 
-// The handling toggle only makes sense when there is text to handle, and blockquotes
-// must be kept as-is, so it is hidden in both of those cases.
-export function showsTextHandling(session?: ISession): boolean {
+// The original text of the post, as HTML — the caption may live on any message of an album.
+function originalTextHtml(session?: ISession): string {
   const messages = session?.mediaGroupMessages?.length
     ? session.mediaGroupMessages
     : session?.originalMessage
       ? [session.originalMessage]
       : [];
   const source = messages.find((m) => m.text ?? m.caption);
-  if (!source) return false;
+  if (!source) return '';
 
-  const html = entitiesToHtml(source.text ?? source.caption ?? '', source.entities ?? source.caption_entities);
-  return !!html.trim() && !html.includes('<blockquote>');
+  return entitiesToHtml(source.text ?? source.caption ?? '', source.entities ?? source.caption_entities).trim();
 }
 
-export async function textCustomKeyboardFor(sessionId: string): Promise<InlineKeyboardMarkup> {
-  const session = await getSessionService().findById(sessionId);
-  return createTextCustomKeyboard(session?.textHandling ?? 'remove', showsTextHandling(session ?? undefined));
+export async function textChoiceKeyboardFor(sessionId: string): Promise<InlineKeyboardMarkup> {
+  const html = originalTextHtml(await getSessionService().findById(sessionId) ?? undefined);
+  return createTextChoiceKeyboard(!!html, html.includes('<blockquote>'));
 }
 
 type StepRenderer = (ctx: Context, sessionId: string) => Promise<void>;
@@ -59,8 +57,8 @@ const STEP_RENDERERS: Record<FlowStep['type'], StepRenderer> = {
     );
   },
   show_text_handling: async (ctx, sessionId) => {
-    await ctx.editMessageText(TEXT_CUSTOM_PROMPT, {
-      reply_markup: await textCustomKeyboardFor(sessionId),
+    await ctx.editMessageText(TEXT_CHOICE_PROMPT, {
+      reply_markup: await textChoiceKeyboardFor(sessionId),
     });
   },
   show_nickname_select: async ctx => {

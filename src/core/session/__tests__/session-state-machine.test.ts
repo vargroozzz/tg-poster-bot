@@ -66,28 +66,13 @@ describe('transition — ACTION_SELECT', () => {
     expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'keep', selectedUserId: 99 });
   });
 
-  it('transform goes to the merged text/custom-text step', () => {
+  it('transform goes to the text choice step', () => {
     const result = transition(SessionState.ACTION_SELECT, {
       type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: false,
     });
     expect(result.newState).toBe(SessionState.TEXT_HANDLING);
     expect(result.step).toEqual({ type: 'show_text_handling' });
-    expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'remove' });
-  });
-
-  it('transform with blockquoted text preselects keep', () => {
-    const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: true,
-    });
-    expect(result.newState).toBe(SessionState.TEXT_HANDLING);
-    expect(result.sessionUpdates).toMatchObject({ textHandling: 'keep' });
-  });
-
-  it('transform with no text preselects keep', () => {
-    const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', ...base,
-    });
-    expect(result.sessionUpdates).toMatchObject({ textHandling: 'keep' });
+    expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform' });
   });
 
   it('transform with a known nickname records it upfront', () => {
@@ -99,28 +84,28 @@ describe('transition — ACTION_SELECT', () => {
   });
 });
 
-describe('transition — TEXT_HANDLING (merged step)', () => {
-  it('stores custom text and goes to nickname select', () => {
-    const result = transition(SessionState.TEXT_HANDLING, {
-      type: 'CUSTOM_TEXT_SELECTED', text: 'hello',
-    });
+describe('transition — TEXT_HANDLING (text choice)', () => {
+  it('keeping the original text goes to nickname select', () => {
+    const result = transition(SessionState.TEXT_HANDLING, { type: 'TEXT_CHOSEN', handling: 'keep' });
     expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
     expect(result.step).toEqual({ type: 'show_nickname_select' });
-    expect(result.sessionUpdates).toMatchObject({ customText: 'hello' });
+    expect(result.sessionUpdates).toMatchObject({ textHandling: 'keep' });
   });
 
-  it('skipping custom text still asks for a nickname', () => {
-    const result = transition(SessionState.TEXT_HANDLING, { type: 'CUSTOM_TEXT_SELECTED' });
-    expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
+  it('a custom text replaces the original (handling remove)', () => {
+    const result = transition(SessionState.TEXT_HANDLING, {
+      type: 'TEXT_CHOSEN', handling: 'remove', text: 'hello',
+    });
+    expect(result.sessionUpdates).toMatchObject({ textHandling: 'remove', customText: 'hello' });
   });
 
   it('auto-skips to PREVIEW when the nickname is already known', () => {
     const result = transition(SessionState.TEXT_HANDLING, {
-      type: 'CUSTOM_TEXT_SELECTED', text: 'hi', knownNicknameUserId: 7,
+      type: 'TEXT_CHOSEN', handling: 'quote', knownNicknameUserId: 7,
     });
     expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
-    expect(result.sessionUpdates).toMatchObject({ customText: 'hi', selectedUserId: 7 });
+    expect(result.sessionUpdates).toMatchObject({ textHandling: 'quote', selectedUserId: 7 });
   });
 });
 
@@ -143,13 +128,13 @@ describe('transition — NICKNAME_SELECT', () => {
 });
 
 describe('transition — full transform path', () => {
-  it('action → merged step → nickname → preview', () => {
+  it('action → text choice → nickname → preview', () => {
     const first = transition(SessionState.ACTION_SELECT, {
       type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: false,
     });
     expect(first.newState).toBe(SessionState.TEXT_HANDLING);
 
-    const second = transition(first.newState, { type: 'CUSTOM_TEXT_SELECTED', text: 'hi' });
+    const second = transition(first.newState, { type: 'TEXT_CHOSEN', handling: 'keep' });
     expect(second.newState).toBe(SessionState.NICKNAME_SELECT);
 
     const third = transition(second.newState, { type: 'NICKNAME_SELECTED', userId: null });

@@ -22,7 +22,12 @@ export type FlowEvent =
       knownNicknameUserId?: number;
     }>
   | Readonly<{ type: 'NICKNAME_SELECTED'; userId: number | null }>
-  | Readonly<{ type: 'CUSTOM_TEXT_SELECTED'; text?: string; knownNicknameUserId?: number }>
+  | Readonly<{
+      type: 'TEXT_CHOSEN';
+      handling: 'keep' | 'remove' | 'quote';
+      text?: string;
+      knownNicknameUserId?: number;
+    }>
 
 export type FlowStep =
   | Readonly<{ type: 'show_action_select' }>

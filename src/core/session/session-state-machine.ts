@@ -35,8 +35,8 @@ const STEP_BY_STATE: Partial<Record<SessionState, FlowStep>> = {
   [SessionState.PREVIEW]: { type: 'show_preview' },
 };
 
-// TEXT_HANDLING is a merged step: it asks for text handling and custom text at once,
-// so a known nickname is the only thing that can still skip the nickname step.
+// The text-choice step is the last one before attribution, so a known nickname is
+// the only thing that can still skip the nickname step.
 const afterTextCustom = (knownNicknameUserId?: number): SessionState =>
   knownNicknameUserId != null ? SessionState.PREVIEW : SessionState.NICKNAME_SELECT;
 
@@ -75,18 +75,18 @@ const TRANSITIONS: readonly EdgeDefinition[] = [
     to: () => SessionState.TEXT_HANDLING,
     updates: e => ({
       selectedAction: 'transform',
-      textHandling: e.hasText && !e.hasBlockquotes ? 'remove' : 'keep',
       ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
     }),
   }),
 
-  // ── TEXT_HANDLING (merged step) ──────────────────────────────────────────────
-  // Text handling itself is a toggle handled outside the machine; committing the
-  // custom-text choice is what advances the flow.
+  // ── TEXT_HANDLING (text choice) ──────────────────────────────────────────────
+  // One step picks the post's text: the original (keep/quote) or a custom one,
+  // which replaces it (handling 'remove').
   edge({
-    from: SessionState.TEXT_HANDLING, on: 'CUSTOM_TEXT_SELECTED',
+    from: SessionState.TEXT_HANDLING, on: 'TEXT_CHOSEN',
     to: e => afterTextCustom(e.knownNicknameUserId),
     updates: e => ({
+      textHandling: e.handling,
       customText: e.text,
       ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
     }),
