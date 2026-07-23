@@ -17,6 +17,8 @@ import { PreviewSenderService } from '../../core/preview/preview-sender.service.
 import { entitiesToHtml } from '../../utils/entities-to-html.js';
 import { config } from '../../config/index.js';
 import { getUserNickname } from '../../database/models/user-nickname.model.js';
+import { getNicknameKeyboard } from '../../shared/helpers/nickname.helper.js';
+import { NICKNAME_PROMPT } from './callbacks/shared.js';
 
 let _sessionService: SessionService | undefined;
 const getSessionService = (): SessionService => {
@@ -162,6 +164,20 @@ bot.on('message:text').filter(
 
     const customText = entitiesToHtml(message.text ?? '', message.entities);
     const foundKey = session._id.toString();
+
+    // Typed custom text in the merged step: the nickname still has to be picked unless
+    // it was already resolved (known nickname, proposer, or the queue edit flow).
+    if (session.state === SessionState.TEXT_HANDLING && session.selectedUserId === undefined) {
+      await sessionSvc.updateState(foundKey, SessionState.NICKNAME_SELECT, {
+        customText,
+        waitingForCustomText: false,
+      });
+      await ctx.reply(NICKNAME_PROMPT, {
+        reply_parameters: { message_id: session.messageId },
+        reply_markup: await getNicknameKeyboard(),
+      });
+      return;
+    }
 
     await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
       customText,

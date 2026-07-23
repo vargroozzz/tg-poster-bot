@@ -1,6 +1,7 @@
 // src/bot/handlers/callbacks/shared.ts
 import { Context } from 'grammy';
-import { Message } from 'grammy/types';
+import type { InlineKeyboardMarkup } from 'grammy/types';
+import type { ISession } from '../../../database/models/session.model.js';
 import { DIContainer } from '../../../shared/di/container.js';
 import type { SessionService } from '../../../core/session/session.service.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
@@ -14,27 +15,38 @@ import {
   findNicknameByUserId,
   getNicknameKeyboard,
 } from '../../../shared/helpers/nickname.helper.js';
-import { createCustomTextKeyboard } from '../../keyboards/custom-text.keyboard.js';
 import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
-import { createTextHandlingKeyboard } from '../../keyboards/text-handling.keyboard.js';
-
-export function computeIsPlainText(message: Message): boolean {
-  return (
-    message.text !== undefined &&
-    !('photo' in message && message.photo) &&
-    !('video' in message && message.video) &&
-    !('document' in message && message.document) &&
-    !('animation' in message && message.animation) &&
-    !('external_reply' in message && (message as unknown as Record<string, unknown>).external_reply) &&
-    !message.forward_origin
-  );
-}
+import { createTextCustomKeyboard } from '../../keyboards/text-handling.keyboard.js';
+import { entitiesToHtml } from '../../../utils/entities-to-html.js';
 
 export async function resolveKnownNicknameUserId(forwardInfo: ForwardInfo): Promise<number | undefined> {
   const { fromUserId } = forwardInfo;
   if (!fromUserId) return undefined;
   const nickname = await findNicknameByUserId(fromUserId);
   return nickname ? fromUserId : undefined;
+}
+
+export const TEXT_CUSTOM_PROMPT = 'How should the text be handled? Add custom text?';
+export const NICKNAME_PROMPT = 'Who should be credited for this post?';
+
+// The handling toggle only makes sense when there is text to handle, and blockquotes
+// must be kept as-is, so it is hidden in both of those cases.
+export function showsTextHandling(session?: ISession): boolean {
+  const messages = session?.mediaGroupMessages?.length
+    ? session.mediaGroupMessages
+    : session?.originalMessage
+      ? [session.originalMessage]
+      : [];
+  const source = messages.find((m) => m.text ?? m.caption);
+  if (!source) return false;
+
+  const html = entitiesToHtml(source.text ?? source.caption ?? '', source.entities ?? source.caption_entities);
+  return !!html.trim() && !html.includes('<blockquote>');
+}
+
+export async function textCustomKeyboardFor(sessionId: string): Promise<InlineKeyboardMarkup> {
+  const session = await getSessionService().findById(sessionId);
+  return createTextCustomKeyboard(session?.textHandling ?? 'remove', showsTextHandling(session ?? undefined));
 }
 
 type StepRenderer = (ctx: Context, sessionId: string) => Promise<void>;
@@ -46,16 +58,13 @@ const STEP_RENDERERS: Record<FlowStep['type'], StepRenderer> = {
       { reply_markup: createForwardActionKeyboard(), parse_mode: 'HTML' }
     );
   },
-  show_text_handling: async ctx => {
-    await ctx.editMessageText('How should the text be handled?', { reply_markup: createTextHandlingKeyboard() });
+  show_text_handling: async (ctx, sessionId) => {
+    await ctx.editMessageText(TEXT_CUSTOM_PROMPT, {
+      reply_markup: await textCustomKeyboardFor(sessionId),
+    });
   },
   show_nickname_select: async ctx => {
-    await ctx.editMessageText('Who should be credited for this post?', { reply_markup: await getNicknameKeyboard() });
-  },
-  show_custom_text: async ctx => {
-    await ctx.editMessageText('Do you want to add custom text to this post?', {
-      reply_markup: await createCustomTextKeyboard(),
-    });
+    await ctx.editMessageText(NICKNAME_PROMPT, { reply_markup: await getNicknameKeyboard() });
   },
   show_preview: (ctx, sessionId) => showPreview(ctx, sessionId),
 };
