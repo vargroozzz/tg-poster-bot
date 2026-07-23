@@ -18,7 +18,8 @@ import { entitiesToHtml } from '../../utils/entities-to-html.js';
 import { config } from '../../config/index.js';
 import { getUserNickname } from '../../database/models/user-nickname.model.js';
 import { getNicknameKeyboard } from '../../shared/helpers/nickname.helper.js';
-import { NICKNAME_PROMPT } from './callbacks/shared.js';
+import { NICKNAME_PROMPT, knownCredit } from './callbacks/shared.js';
+import { transition } from '../../core/session/session-state-machine.js';
 
 let _sessionService: SessionService | undefined;
 const getSessionService = (): SessionService => {
@@ -165,26 +166,32 @@ bot.on('message:text').filter(
     const customText = entitiesToHtml(message.text ?? '', message.entities);
     const foundKey = session._id.toString();
 
-    // Typed custom text replaces the message's own text, and the nickname still has to be
-    // picked unless it was already resolved (known nickname, proposer, or the edit flow).
-    if (session.state === SessionState.TEXT_HANDLING && session.selectedUserId === undefined) {
-      await sessionSvc.updateState(foundKey, SessionState.NICKNAME_SELECT, {
+    // Typed custom text replaces the message's own text. Route it through the state machine
+    // so it lands on the same step as the keyboard choices would; only the rendering differs
+    // (a new message, since the user replied instead of tapping). The edit flow (/queue) does
+    // not use the state machine and goes straight to its preview.
+    if (session.state === SessionState.TEXT_HANDLING && session.originalMessage) {
+      const { newState, step, sessionUpdates } = transition(session.state, {
+        type: 'TEXT_CHOSEN',
+        handling: 'remove',
+        text: customText,
+        knownNicknameUserId: await knownCredit(ctx, session, session.originalMessage),
+      });
+      await sessionSvc.updateState(foundKey, newState, { ...sessionUpdates, waitingForCustomText: false });
+
+      if (step.type === 'show_nickname_select') {
+        await ctx.reply(NICKNAME_PROMPT, {
+          reply_parameters: { message_id: session.messageId },
+          reply_markup: await getNicknameKeyboard(),
+        });
+        return;
+      }
+    } else {
+      await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
         customText,
-        textHandling: 'remove',
         waitingForCustomText: false,
       });
-      await ctx.reply(NICKNAME_PROMPT, {
-        reply_parameters: { message_id: session.messageId },
-        reply_markup: await getNicknameKeyboard(),
-      });
-      return;
     }
-
-    await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
-      customText,
-      ...(session.state === SessionState.TEXT_HANDLING && { textHandling: 'remove' as const }),
-      waitingForCustomText: false,
-    });
 
     const updatedSession = await sessionSvc.findById(foundKey);
     if (!updatedSession) {
