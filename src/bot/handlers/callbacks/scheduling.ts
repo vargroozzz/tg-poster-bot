@@ -49,7 +49,7 @@ import {
   deletePreviewMessages,
   showPreview,
   renderStep,
-  computeIsPlainText,
+  textCustomKeyboardFor,
   resolveKnownNicknameUserId,
 } from './shared.js';
 
@@ -382,6 +382,13 @@ function creditUserId(session: ISession, ctx: Context, sourceKnownId: number | u
   return resolveProposerCredit(isOwner, ctx.from?.id ?? 0, sourceKnownId);
 }
 
+// Credit that can be resolved without asking: a known nickname for the source (or the
+// proposer). Undefined means the nickname step still has to run.
+async function knownCredit(ctx: Context, session: ISession, originalMessage: Message): Promise<number | undefined> {
+  const fullMessage = session.originalMessage ?? originalMessage;
+  return creditUserId(session, ctx, await resolveKnownNicknameUserId(parseForwardInfo(fullMessage)));
+}
+
 // A non-owner confirming their preview does not schedule — it hands the assembled post to
 // the owner, who gets the same preview with a Schedule/Cancel keyboard.
 async function handoffToOwner(c: Confirm): Promise<void> {
@@ -550,7 +557,7 @@ export function registerScheduling(): void {
   bot.callbackQuery(/^custom_text:(add|skip)$/, transitionCallback(
     'Error processing custom text. Please try again.',
     'Error in custom text callback',
-    async ({ ctx, session, match }) => {
+    async ({ ctx, session, originalMessage, match }) => {
       const action = match?.[1];
       if (!action) {
         await ErrorMessages.invalidSelection(ctx, 'action');
@@ -558,8 +565,8 @@ export function registerScheduling(): void {
       }
 
       if (action === 'add') {
-        // Self-loop: stays in CUSTOM_TEXT, waiting for the user's reply with the text
-        await getSessionService().updateState(session._id.toString(), SessionState.CUSTOM_TEXT, { waitingForCustomText: true });
+        // Self-loop: stays in TEXT_HANDLING, waiting for the user's reply with the text
+        await getSessionService().update(session._id.toString(), { waitingForCustomText: true });
         await ctx.editMessageText(
           '✍️ Reply to this message with your custom text.\n\n' +
             'This text will be added at the beginning of your post.'
@@ -567,7 +574,7 @@ export function registerScheduling(): void {
         return null;
       }
 
-      return { type: 'CUSTOM_TEXT_SELECTED', text: undefined };
+      return { type: 'CUSTOM_TEXT_SELECTED', text: undefined, knownNicknameUserId: await knownCredit(ctx, session, originalMessage) };
     }
   ));
 
@@ -575,7 +582,7 @@ export function registerScheduling(): void {
   bot.callbackQuery(/^custom_text:preset:(.+)$/, transitionCallback(
     'Error selecting preset text. Please try again.',
     'Error in custom text preset callback',
-    async ({ ctx, match }) => {
+    async ({ ctx, session, originalMessage, match }) => {
       const presetId = match?.[1];
       if (!presetId) {
         await ErrorMessages.invalidSelection(ctx, 'preset');
@@ -588,7 +595,11 @@ export function registerScheduling(): void {
         return null;
       }
 
-      return { type: 'CUSTOM_TEXT_SELECTED', text: preset.text };
+      return {
+        type: 'CUSTOM_TEXT_SELECTED',
+        text: preset.text,
+        knownNicknameUserId: await knownCredit(ctx, session, originalMessage),
+      };
     }
   ));
 
@@ -596,7 +607,7 @@ export function registerScheduling(): void {
   bot.callbackQuery(/^select_nickname:(.+)$/, transitionCallback(
     'Error processing nickname selection. Please try again.',
     'Error in nickname selection callback',
-    async ({ ctx, session, originalMessage, match }) => {
+    async ({ ctx, match }) => {
       const nicknameSelection = match?.[1];
       if (!nicknameSelection) {
         await ErrorMessages.invalidSelection(ctx, 'nickname');
@@ -604,29 +615,26 @@ export function registerScheduling(): void {
       }
 
       const userId = nicknameSelection === NICKNAME_NONE_KEY ? null : parseInt(nicknameSelection, 10);
-      const isPlainText = computeIsPlainText(session.originalMessage ?? originalMessage);
 
-      return { type: 'NICKNAME_SELECTED', userId, isPlainText };
+      return { type: 'NICKNAME_SELECTED', userId };
     }
   ));
 
-  // Handle text handling selection
+  // Text handling is a toggle inside the merged step: store the pick and re-render.
   bot.callbackQuery(/^text:(keep|remove|quote)$/, transitionCallback(
     'Error processing text handling. Please try again.',
     'Error in text handling callback',
-    async ({ ctx, session, originalMessage, match }) => {
+    async ({ ctx, session, match }) => {
       const handling = match?.[1] as 'keep' | 'remove' | 'quote' | undefined;
       if (!handling) {
         await ErrorMessages.invalidSelection(ctx, 'text handling option');
         return null;
       }
 
-      const fullMessage = session.originalMessage ?? originalMessage;
-      const isPlainText = computeIsPlainText(fullMessage);
-      const sourceKnownId = await resolveKnownNicknameUserId(parseForwardInfo(fullMessage));
-      const knownNicknameUserId = creditUserId(session, ctx, sourceKnownId);
-
-      return { type: 'TEXT_HANDLING_SELECTED', handling, isPlainText, knownNicknameUserId };
+      const sessionId = session._id.toString();
+      await getSessionService().update(sessionId, { textHandling: handling });
+      await ctx.editMessageReplyMarkup({ reply_markup: await textCustomKeyboardFor(sessionId) });
+      return null;
     }
   ));
 
@@ -645,7 +653,6 @@ export function registerScheduling(): void {
         action: 'quick',
         hasText: false,
         hasBlockquotes: false,
-        isPlainText: false,
         isTextOnly,
         fromUserId: creditUserId(session, ctx, forwardInfo.fromUserId),
       };
@@ -668,7 +675,6 @@ export function registerScheduling(): void {
         action: 'transform',
         hasText,
         hasBlockquotes,
-        isPlainText: computeIsPlainText(fullMessage),
         fromUserId: forwardInfo.fromUserId,
         knownNicknameUserId: creditUserId(session, ctx, sourceKnownId),
       };
@@ -685,7 +691,7 @@ export function registerScheduling(): void {
       }
 
       // The forward edge fires unconditionally on action='forward'; these fields are unused by its guard
-      return { type: 'ACTION_SELECTED', action: 'forward', hasText: false, hasBlockquotes: false, isPlainText: false };
+      return { type: 'ACTION_SELECTED', action: 'forward', hasText: false, hasBlockquotes: false };
     }
   ));
 

@@ -17,23 +17,15 @@ export type FlowEvent =
       action: 'transform' | 'forward' | 'quick';
       hasText: boolean;
       hasBlockquotes: boolean;
-      isPlainText: boolean;
       isTextOnly?: boolean;
       fromUserId?: number;
       knownNicknameUserId?: number;
     }>
-  | Readonly<{
-      type: 'TEXT_HANDLING_SELECTED';
-      handling: 'keep' | 'remove' | 'quote';
-      knownNicknameUserId?: number;
-      isPlainText: boolean;
-    }>
-  | Readonly<{ type: 'NICKNAME_SELECTED'; userId: number | null; isPlainText: boolean }>
-  | Readonly<{ type: 'CUSTOM_TEXT_SELECTED'; text?: string }>
+  | Readonly<{ type: 'NICKNAME_SELECTED'; userId: number | null }>
+  | Readonly<{ type: 'CUSTOM_TEXT_SELECTED'; text?: string; knownNicknameUserId?: number }>
 
 export type FlowStep =
   | Readonly<{ type: 'show_action_select' }>
   | Readonly<{ type: 'show_text_handling' }>
   | Readonly<{ type: 'show_nickname_select' }>
-  | Readonly<{ type: 'show_custom_text' }>
   | Readonly<{ type: 'show_preview' }>

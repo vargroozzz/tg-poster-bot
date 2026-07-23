@@ -32,7 +32,7 @@ describe('transition — CHANNEL_SELECT', () => {
 });
 
 describe('transition — ACTION_SELECT', () => {
-  const base = { hasText: false, hasBlockquotes: false, isPlainText: false } as const;
+  const base = { hasText: false, hasBlockquotes: false } as const;
 
   it('forward action goes to PREVIEW', () => {
     const result = transition(SessionState.ACTION_SELECT, {
@@ -66,130 +66,94 @@ describe('transition — ACTION_SELECT', () => {
     expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'keep', selectedUserId: 99 });
   });
 
-  it('transform with no text goes to NICKNAME_SELECT', () => {
+  it('transform goes to the merged text/custom-text step', () => {
     const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', ...base,
-    });
-    expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
-    expect(result.step).toEqual({ type: 'show_nickname_select' });
-    expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform' });
-  });
-
-  it('transform with blockquoted text skips text handling and keeps text', () => {
-    const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: true, isPlainText: false,
-    });
-    expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
-    expect(result.step).toEqual({ type: 'show_nickname_select' });
-    expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'keep' });
-  });
-
-  it('transform with known nickname (not plain text) auto-skips to CUSTOM_TEXT', () => {
-    const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', ...base, knownNicknameUserId: 42,
-    });
-    expect(result.newState).toBe(SessionState.CUSTOM_TEXT);
-    expect(result.step).toEqual({ type: 'show_custom_text' });
-    expect(result.sessionUpdates).toMatchObject({ selectedUserId: 42 });
-  });
-
-  it('transform with known nickname + plain text auto-skips to PREVIEW', () => {
-    const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', hasText: false, hasBlockquotes: false, isPlainText: true, knownNicknameUserId: 42,
-    });
-    expect(result.newState).toBe(SessionState.PREVIEW);
-    expect(result.step).toEqual({ type: 'show_preview' });
-    expect(result.sessionUpdates).toMatchObject({ selectedUserId: 42 });
-  });
-
-  it('transform with text and no blockquotes goes to TEXT_HANDLING', () => {
-    const result = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: false, isPlainText: false,
+      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: false,
     });
     expect(result.newState).toBe(SessionState.TEXT_HANDLING);
     expect(result.step).toEqual({ type: 'show_text_handling' });
-    expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform' });
+    expect(result.sessionUpdates).toMatchObject({ selectedAction: 'transform', textHandling: 'remove' });
+  });
+
+  it('transform with blockquoted text preselects keep', () => {
+    const result = transition(SessionState.ACTION_SELECT, {
+      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: true,
+    });
+    expect(result.newState).toBe(SessionState.TEXT_HANDLING);
+    expect(result.sessionUpdates).toMatchObject({ textHandling: 'keep' });
+  });
+
+  it('transform with no text preselects keep', () => {
+    const result = transition(SessionState.ACTION_SELECT, {
+      type: 'ACTION_SELECTED', action: 'transform', ...base,
+    });
+    expect(result.sessionUpdates).toMatchObject({ textHandling: 'keep' });
+  });
+
+  it('transform with a known nickname records it upfront', () => {
+    const result = transition(SessionState.ACTION_SELECT, {
+      type: 'ACTION_SELECTED', action: 'transform', ...base, knownNicknameUserId: 42,
+    });
+    expect(result.newState).toBe(SessionState.TEXT_HANDLING);
+    expect(result.sessionUpdates).toMatchObject({ selectedUserId: 42 });
   });
 });
 
-describe('transition — TEXT_HANDLING', () => {
-  it('stores handling choice and shows nickname select', () => {
+describe('transition — TEXT_HANDLING (merged step)', () => {
+  it('stores custom text and goes to nickname select', () => {
     const result = transition(SessionState.TEXT_HANDLING, {
-      type: 'TEXT_HANDLING_SELECTED', handling: 'quote', isPlainText: false,
+      type: 'CUSTOM_TEXT_SELECTED', text: 'hello',
     });
     expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
     expect(result.step).toEqual({ type: 'show_nickname_select' });
-    expect(result.sessionUpdates).toMatchObject({ textHandling: 'quote' });
+    expect(result.sessionUpdates).toMatchObject({ customText: 'hello' });
   });
 
-  it('auto-skips to CUSTOM_TEXT when nickname is known and not plain text', () => {
-    const result = transition(SessionState.TEXT_HANDLING, {
-      type: 'TEXT_HANDLING_SELECTED', handling: 'keep', isPlainText: false, knownNicknameUserId: 7,
-    });
-    expect(result.newState).toBe(SessionState.CUSTOM_TEXT);
-    expect(result.step).toEqual({ type: 'show_custom_text' });
-    expect(result.sessionUpdates).toMatchObject({ textHandling: 'keep', selectedUserId: 7 });
+  it('skipping custom text still asks for a nickname', () => {
+    const result = transition(SessionState.TEXT_HANDLING, { type: 'CUSTOM_TEXT_SELECTED' });
+    expect(result.newState).toBe(SessionState.NICKNAME_SELECT);
   });
 
-  it('auto-skips to PREVIEW when nickname is known and plain text', () => {
+  it('auto-skips to PREVIEW when the nickname is already known', () => {
     const result = transition(SessionState.TEXT_HANDLING, {
-      type: 'TEXT_HANDLING_SELECTED', handling: 'remove', isPlainText: true, knownNicknameUserId: 7,
+      type: 'CUSTOM_TEXT_SELECTED', text: 'hi', knownNicknameUserId: 7,
     });
     expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
+    expect(result.sessionUpdates).toMatchObject({ customText: 'hi', selectedUserId: 7 });
   });
 });
 
 describe('transition — NICKNAME_SELECT', () => {
-  it('goes to CUSTOM_TEXT for a regular message', () => {
+  it('goes to PREVIEW', () => {
     const result = transition(SessionState.NICKNAME_SELECT, {
-      type: 'NICKNAME_SELECTED', userId: 5, isPlainText: false,
-    });
-    expect(result.newState).toBe(SessionState.CUSTOM_TEXT);
-    expect(result.step).toEqual({ type: 'show_custom_text' });
-    expect(result.sessionUpdates).toMatchObject({ selectedUserId: 5 });
-  });
-
-  it('goes to PREVIEW for a plain-text message', () => {
-    const result = transition(SessionState.NICKNAME_SELECT, {
-      type: 'NICKNAME_SELECTED', userId: null, isPlainText: true,
+      type: 'NICKNAME_SELECTED', userId: 5,
     });
     expect(result.newState).toBe(SessionState.PREVIEW);
     expect(result.step).toEqual({ type: 'show_preview' });
+    expect(result.sessionUpdates).toMatchObject({ selectedUserId: 5 });
+  });
+
+  it('stores null for "no attribution"', () => {
+    const result = transition(SessionState.NICKNAME_SELECT, {
+      type: 'NICKNAME_SELECTED', userId: null,
+    });
     expect(result.sessionUpdates).toMatchObject({ selectedUserId: null });
   });
 });
 
-describe('transition — CUSTOM_TEXT', () => {
-  it('stores text and goes to PREVIEW', () => {
-    const result = transition(SessionState.CUSTOM_TEXT, {
-      type: 'CUSTOM_TEXT_SELECTED', text: 'hello',
-    });
-    expect(result.newState).toBe(SessionState.PREVIEW);
-    expect(result.step).toEqual({ type: 'show_preview' });
-    expect(result.sessionUpdates).toMatchObject({ customText: 'hello' });
-  });
-
-  it('goes to PREVIEW with no text when skipped', () => {
-    const result = transition(SessionState.CUSTOM_TEXT, {
-      type: 'CUSTOM_TEXT_SELECTED',
-    });
-    expect(result.newState).toBe(SessionState.PREVIEW);
-    expect(result.step).toEqual({ type: 'show_preview' });
-  });
-});
-
-describe('transition — auto-skip regression', () => {
-  it('known nickname auto-skip: CUSTOM_TEXT_SELECTED works after ACTION_SELECTED lands in CUSTOM_TEXT', () => {
+describe('transition — full transform path', () => {
+  it('action → merged step → nickname → preview', () => {
     const first = transition(SessionState.ACTION_SELECT, {
-      type: 'ACTION_SELECTED', action: 'transform',
-      hasText: false, hasBlockquotes: false, isPlainText: false, knownNicknameUserId: 42,
+      type: 'ACTION_SELECTED', action: 'transform', hasText: true, hasBlockquotes: false,
     });
-    expect(first.newState).toBe(SessionState.CUSTOM_TEXT);
+    expect(first.newState).toBe(SessionState.TEXT_HANDLING);
 
     const second = transition(first.newState, { type: 'CUSTOM_TEXT_SELECTED', text: 'hi' });
-    expect(second.newState).toBe(SessionState.PREVIEW);
-    expect(second.step).toEqual({ type: 'show_preview' });
+    expect(second.newState).toBe(SessionState.NICKNAME_SELECT);
+
+    const third = transition(second.newState, { type: 'NICKNAME_SELECTED', userId: null });
+    expect(third.newState).toBe(SessionState.PREVIEW);
   });
 });
 
