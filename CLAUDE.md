@@ -221,9 +221,9 @@ For messages with text/caption, users can choose:
 5. User selects Transform or Forward:
    - FORWARD → Skip to step 9 (uses forwardMessage, no modifications)
    - TRANSFORM → Continue to step 6
-6. Show the merged text step: text handling toggle (Keep/Remove/Quote, hidden when there
-   is no text or the text is blockquoted) plus custom text (preset / Skip / Add text).
-   Tapping a handling option only re-renders; a custom-text button commits the step.
+6. Show the text choice step — one tap picks the post's text: the original (Keep / Wrap in
+   quote, offered only when the message has text), a custom one (preset / ✍️ Add text, which
+   replaces the original), or none (Remove text). Custom text implies textHandling='remove'.
 7. Show nickname selection (or "No attribution") - skipped when the source has a known nickname
 9. Bot calculates next available slot (hh:00:01 or hh:30:01)
 10. Saves to MongoDB with status='pending'
