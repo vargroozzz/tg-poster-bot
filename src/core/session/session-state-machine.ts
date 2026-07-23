@@ -32,14 +32,13 @@ const STEP_BY_STATE: Partial<Record<SessionState, FlowStep>> = {
   [SessionState.ACTION_SELECT]: { type: 'show_action_select' },
   [SessionState.TEXT_HANDLING]: { type: 'show_text_handling' },
   [SessionState.NICKNAME_SELECT]: { type: 'show_nickname_select' },
-  [SessionState.CUSTOM_TEXT]: { type: 'show_custom_text' },
   [SessionState.PREVIEW]: { type: 'show_preview' },
 };
 
-// Single source of truth for routing once a nickname is known/chosen:
-// plain text needs no custom-text prompt, so skip straight to preview.
-const afterNickname = (isPlainText: boolean): SessionState =>
-  isPlainText ? SessionState.PREVIEW : SessionState.CUSTOM_TEXT;
+// TEXT_HANDLING is a merged step: it asks for text handling and custom text at once,
+// so a known nickname is the only thing that can still skip the nickname step.
+const afterTextCustom = (knownNicknameUserId?: number): SessionState =>
+  knownNicknameUserId != null ? SessionState.PREVIEW : SessionState.NICKNAME_SELECT;
 
 const TRANSITIONS: readonly EdgeDefinition[] = [
   // ── CHANNEL_SELECT ──────────────────────────────────────────────────────────
@@ -68,59 +67,36 @@ const TRANSITIONS: readonly EdgeDefinition[] = [
     to: () => SessionState.PREVIEW,
     updates: e => ({ selectedAction: 'transform', textHandling: e.isTextOnly ? 'keep' : 'remove', selectedUserId: e.fromUserId ?? null }),
   }),
-  // transform + (no text | blockquotes): known nickname auto-skips, otherwise ask for one.
+  // Transform always goes through the merged text-handling + custom-text step; the
+  // handling default is what that step preselects (blockquotes must stay intact).
   edge({
     from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
-    when: e => e.action === 'transform' && (!e.hasText || e.hasBlockquotes) && e.knownNicknameUserId != null,
-    to: e => afterNickname(e.isPlainText),
-    updates: e => ({
-      selectedAction: 'transform',
-      ...(e.hasBlockquotes && { textHandling: 'keep' }),
-      selectedUserId: e.knownNicknameUserId,
-    }),
-  }),
-  edge({
-    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
-    when: e => e.action === 'transform' && (!e.hasText || e.hasBlockquotes) && e.knownNicknameUserId == null,
-    to: () => SessionState.NICKNAME_SELECT,
-    updates: e => ({
-      selectedAction: 'transform',
-      ...(e.hasBlockquotes && { textHandling: 'keep' }),
-    }),
-  }),
-  edge({
-    from: SessionState.ACTION_SELECT, on: 'ACTION_SELECTED',
-    when: e => e.action === 'transform' && e.hasText && !e.hasBlockquotes,
+    when: e => e.action === 'transform',
     to: () => SessionState.TEXT_HANDLING,
-    updates: () => ({ selectedAction: 'transform' }),
+    updates: e => ({
+      selectedAction: 'transform',
+      textHandling: e.hasText && !e.hasBlockquotes ? 'remove' : 'keep',
+      ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
+    }),
   }),
 
-  // ── TEXT_HANDLING ────────────────────────────────────────────────────────────
+  // ── TEXT_HANDLING (merged step) ──────────────────────────────────────────────
+  // Text handling itself is a toggle handled outside the machine; committing the
+  // custom-text choice is what advances the flow.
   edge({
-    from: SessionState.TEXT_HANDLING, on: 'TEXT_HANDLING_SELECTED',
-    when: e => e.knownNicknameUserId != null,
-    to: e => afterNickname(e.isPlainText),
-    updates: e => ({ textHandling: e.handling, selectedUserId: e.knownNicknameUserId }),
-  }),
-  edge({
-    from: SessionState.TEXT_HANDLING, on: 'TEXT_HANDLING_SELECTED',
-    when: e => e.knownNicknameUserId == null,
-    to: () => SessionState.NICKNAME_SELECT,
-    updates: e => ({ textHandling: e.handling }),
+    from: SessionState.TEXT_HANDLING, on: 'CUSTOM_TEXT_SELECTED',
+    to: e => afterTextCustom(e.knownNicknameUserId),
+    updates: e => ({
+      customText: e.text,
+      ...(e.knownNicknameUserId != null && { selectedUserId: e.knownNicknameUserId }),
+    }),
   }),
 
   // ── NICKNAME_SELECT ──────────────────────────────────────────────────────────
   edge({
     from: SessionState.NICKNAME_SELECT, on: 'NICKNAME_SELECTED',
-    to: e => afterNickname(e.isPlainText),
-    updates: e => ({ selectedUserId: e.userId }),
-  }),
-
-  // ── CUSTOM_TEXT ──────────────────────────────────────────────────────────────
-  edge({
-    from: SessionState.CUSTOM_TEXT, on: 'CUSTOM_TEXT_SELECTED',
     to: () => SessionState.PREVIEW,
-    updates: e => ({ customText: e.text }),
+    updates: e => ({ selectedUserId: e.userId }),
   }),
 ];
 
