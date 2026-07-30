@@ -5,7 +5,7 @@ import { transformerService } from '../../services/transformer.service.js';
 import { createChannelSelectKeyboard } from '../keyboards/channel-select.keyboard.js';
 import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
-import type { MessageContent } from '../../types/message.types.js';
+import type { MediaGroupItem, MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
 import { toChannelInfo } from '../../shared/helpers/channel.helper.js';
 import { DIContainer } from '../../shared/di/container.js';
@@ -213,7 +213,11 @@ bot.on('message:text').filter(
 });
 
 // Handle both forwarded and non-forwarded messages
-bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:voice', 'message:text', 'message:poll'], async (ctx: Context) => {
+bot.on([
+  'message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation',
+  'message:voice', 'message:audio', 'message:video_note', 'message:sticker', 'message:dice',
+  'message:contact', 'message:location', 'message:venue', 'message:text', 'message:poll',
+], async (ctx: Context) => {
   try {
     const message = ctx.message;
 
@@ -667,88 +671,71 @@ async function processReplyChain(bufferKey: string) {
   });
 }
 
+const captionHtml = (message: Message): string | undefined =>
+  message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined;
+
+const mediaGroupItem = (msg: Message): MediaGroupItem | undefined => {
+  const spoiler = { hasSpoiler: msg.has_media_spoiler ?? undefined };
+  if (msg.photo?.length) {
+    return { type: 'photo', fileId: msg.photo[msg.photo.length - 1].file_id, ...spoiler };
+  }
+  if (msg.video) return { type: 'video', fileId: msg.video.file_id, ...spoiler };
+  if (msg.audio) return { type: 'audio', fileId: msg.audio.file_id };
+  if (msg.document) return { type: 'document', fileId: msg.document.file_id };
+  return undefined;
+};
+
+// Ordered: the first match wins, because Telegram messages overlap — an animation also
+// carries `document`, a venue also carries `location`, media always outranks its caption.
+const SINGLE_EXTRACTORS: ReadonlyArray<(m: Message) => MessageContent | undefined> = [
+  m => m.photo?.length
+    ? { type: 'photo', fileId: m.photo[m.photo.length - 1].file_id, hasSpoiler: m.has_media_spoiler ?? undefined, text: captionHtml(m) }
+    : undefined,
+  m => m.animation && { type: 'animation', fileId: m.animation.file_id, text: captionHtml(m) },
+  m => m.video && { type: 'video', fileId: m.video.file_id, hasSpoiler: m.has_media_spoiler ?? undefined, text: captionHtml(m) },
+  m => m.video_note && { type: 'video_note', fileId: m.video_note.file_id },
+  m => m.voice && { type: 'voice', fileId: m.voice.file_id, text: captionHtml(m) },
+  m => m.audio && { type: 'audio', fileId: m.audio.file_id, text: captionHtml(m) },
+  m => m.sticker && { type: 'sticker', fileId: m.sticker.file_id },
+  m => m.document && { type: 'document', fileId: m.document.file_id, text: captionHtml(m) },
+  m => m.dice && { type: 'dice', emoji: m.dice.emoji },
+  m => m.contact && {
+    type: 'contact',
+    phoneNumber: m.contact.phone_number,
+    firstName: m.contact.first_name,
+    lastName: m.contact.last_name,
+    vcard: m.contact.vcard,
+  },
+  m => m.venue && {
+    type: 'venue',
+    latitude: m.venue.location.latitude,
+    longitude: m.venue.location.longitude,
+    title: m.venue.title,
+    address: m.venue.address,
+  },
+  m => m.location && { type: 'location', latitude: m.location.latitude, longitude: m.location.longitude },
+  m => m.poll && { type: 'poll' },
+  m => m.text
+    ? { type: 'text', text: entitiesToHtml(m.text, m.entities), linkPreviewOptions: m.link_preview_options ?? { is_disabled: true } }
+    : undefined,
+];
+
 export function extractMessageContent(
   message: Message,
   mediaGroupMessages?: Message[]
 ): MessageContent | null {
   // If media group messages provided, create media group content
   if (mediaGroupMessages && mediaGroupMessages.length > 1) {
-    const mediaItems = mediaGroupMessages.flatMap((msg): Array<{ type: 'photo' | 'video'; fileId: string; hasSpoiler?: boolean }> => {
-      if ('photo' in msg && msg.photo && msg.photo.length > 0) {
-        return [{ type: 'photo', fileId: msg.photo[msg.photo.length - 1].file_id, hasSpoiler: msg.has_media_spoiler ?? undefined }];
-      }
-      if ('video' in msg && msg.video) {
-        return [{ type: 'video', fileId: msg.video.file_id, hasSpoiler: msg.has_media_spoiler ?? undefined }];
-      }
-      return [];
-    });
+    const mediaItems = mediaGroupMessages.flatMap((msg) => mediaGroupItem(msg) ?? []);
 
     const captionMsg = mediaGroupMessages.find((msg) => msg.caption);
-    const caption = captionMsg?.caption
-      ? entitiesToHtml(captionMsg.caption, captionMsg.caption_entities)
-      : undefined;
+    const caption = captionMsg ? captionHtml(captionMsg) : undefined;
 
     if (mediaItems.length > 0) {
       return { type: 'media_group', mediaGroup: mediaItems, text: caption };
     }
   }
 
-  // Single message handling
-  if ('photo' in message && message.photo && message.photo.length > 0) {
-    const photo = message.photo[message.photo.length - 1]; // Get highest quality
-    return {
-      type: 'photo',
-      fileId: photo.file_id,
-      hasSpoiler: message.has_media_spoiler ?? undefined,
-      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
-    };
-  }
-
-  if ('video' in message && message.video) {
-    return {
-      type: 'video',
-      fileId: message.video.file_id,
-      hasSpoiler: message.has_media_spoiler ?? undefined,
-      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
-    };
-  }
-
-  if ('document' in message && message.document) {
-    return {
-      type: 'document',
-      fileId: message.document.file_id,
-      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
-    };
-  }
-
-  if ('animation' in message && message.animation) {
-    return {
-      type: 'animation',
-      fileId: message.animation.file_id,
-      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
-    };
-  }
-
-  if ('voice' in message && message.voice) {
-    return {
-      type: 'voice',
-      fileId: message.voice.file_id,
-      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
-    };
-  }
-
-  if ('text' in message && message.text) {
-    return {
-      type: 'text',
-      text: entitiesToHtml(message.text, message.entities),
-      linkPreviewOptions: message.link_preview_options ?? { is_disabled: true },
-    };
-  }
-
-  if ('poll' in message && message.poll) {
-    return { type: 'poll' };
-  }
-
-  return null;
+  return SINGLE_EXTRACTORS.map((extract) => extract(message)).find((content) => content !== undefined) ?? null;
 }
 

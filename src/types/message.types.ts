@@ -15,7 +15,7 @@ export interface ForwardInfo {
 }
 
 export interface MediaGroupItem {
-  type: 'photo' | 'video';
+  type: 'photo' | 'video' | 'document' | 'audio';
   fileId: string;
   hasSpoiler?: boolean;
 }
@@ -58,6 +58,57 @@ export interface VoiceContent {
   text?: string;
 }
 
+export interface AudioContent {
+  type: 'audio';
+  fileId: string;
+  text?: string;
+}
+
+// Telegram has no caption on these, so `text` is carried (the transform pipeline sets it
+// uniformly) but dropped on send — attribution can't be attached to them.
+export interface VideoNoteContent {
+  type: 'video_note';
+  fileId: string;
+  text?: string;
+}
+
+export interface StickerContent {
+  type: 'sticker';
+  fileId: string;
+  text?: string;
+}
+
+export interface DiceContent {
+  type: 'dice';
+  emoji: string;
+  text?: string;
+}
+
+export interface ContactContent {
+  type: 'contact';
+  phoneNumber: string;
+  firstName: string;
+  lastName?: string;
+  vcard?: string;
+  text?: string;
+}
+
+export interface LocationContent {
+  type: 'location';
+  latitude: number;
+  longitude: number;
+  text?: string;
+}
+
+export interface VenueContent {
+  type: 'venue';
+  latitude: number;
+  longitude: number;
+  title: string;
+  address: string;
+  text?: string;
+}
+
 export interface MediaGroupContent {
   type: 'media_group';
   mediaGroup: MediaGroupItem[];
@@ -76,6 +127,13 @@ export type MessageContent =
   | DocumentContent
   | AnimationContent
   | VoiceContent
+  | AudioContent
+  | VideoNoteContent
+  | StickerContent
+  | DiceContent
+  | ContactContent
+  | LocationContent
+  | VenueContent
   | MediaGroupContent
   | PollContent;
 

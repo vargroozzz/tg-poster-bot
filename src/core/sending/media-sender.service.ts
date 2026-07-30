@@ -3,6 +3,11 @@ import type { MessageContent, MediaGroupItem } from '../../types/message.types.j
 
 type ReplyParams = { chatId: number; messageId: number };
 
+const replyOpts = (replyParameters?: ReplyParams) =>
+  replyParameters
+    ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+    : {};
+
 /**
  * Shared service for sending media to Telegram
  * Used by both preview and publishing to avoid code duplication
@@ -30,6 +35,40 @@ export class MediaSenderService {
         return await this.sendAnimation(chatId, content.fileId, content.text, replyParameters);
       case 'voice':
         return await this.sendVoice(chatId, content.fileId, content.text, replyParameters);
+      case 'audio':
+        return await this.sendAudio(chatId, content.fileId, content.text, replyParameters);
+      // Caption-less types: Telegram accepts no caption on these, so any transformed
+      // text/attribution is dropped rather than sent as a second message.
+      // A transformed dice is re-sent, so it rolls a new value; forward keeps the original.
+      case 'video_note':
+        return (await this.api.sendVideoNote(chatId, content.fileId, replyOpts(replyParameters))).message_id;
+      case 'sticker':
+        return (await this.api.sendSticker(chatId, content.fileId, replyOpts(replyParameters))).message_id;
+      case 'dice':
+        return (await this.api.sendDice(chatId, content.emoji, replyOpts(replyParameters))).message_id;
+      case 'contact':
+        return (
+          await this.api.sendContact(chatId, content.phoneNumber, content.firstName, {
+            last_name: content.lastName,
+            vcard: content.vcard,
+            ...replyOpts(replyParameters),
+          })
+        ).message_id;
+      case 'location':
+        return (
+          await this.api.sendLocation(chatId, content.latitude, content.longitude, replyOpts(replyParameters))
+        ).message_id;
+      case 'venue':
+        return (
+          await this.api.sendVenue(
+            chatId,
+            content.latitude,
+            content.longitude,
+            content.title,
+            content.address,
+            replyOpts(replyParameters)
+          )
+        ).message_id;
       case 'media_group':
         return await this.sendMediaGroup(chatId, content.mediaGroup, content.text, replyParameters);
       case 'text':
@@ -119,6 +158,20 @@ export class MediaSenderService {
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
         : {}),
+    });
+    return result.message_id;
+  }
+
+  async sendAudio(
+    chatId: number | string,
+    fileId: string,
+    caption?: string,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
+    const result = await this.api.sendAudio(chatId, fileId, {
+      caption,
+      parse_mode: 'HTML',
+      ...replyOpts(replyParameters),
     });
     return result.message_id;
   }
