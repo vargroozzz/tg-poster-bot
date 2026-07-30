@@ -52,6 +52,12 @@ export interface AnimationContent {
   text?: string;
 }
 
+export interface VoiceContent {
+  type: 'voice';
+  fileId: string;
+  text?: string;
+}
+
 export interface MediaGroupContent {
   type: 'media_group';
   mediaGroup: MediaGroupItem[];
@@ -69,6 +75,7 @@ export type MessageContent =
   | VideoContent
   | DocumentContent
   | AnimationContent
+  | VoiceContent
   | MediaGroupContent
   | PollContent;
 

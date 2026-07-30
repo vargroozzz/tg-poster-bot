@@ -213,7 +213,7 @@ bot.on('message:text').filter(
 });
 
 // Handle both forwarded and non-forwarded messages
-bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:text', 'message:poll'], async (ctx: Context) => {
+bot.on(['message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation', 'message:voice', 'message:text', 'message:poll'], async (ctx: Context) => {
   try {
     const message = ctx.message;
 
@@ -725,6 +725,14 @@ export function extractMessageContent(
     return {
       type: 'animation',
       fileId: message.animation.file_id,
+      text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
+    };
+  }
+
+  if ('voice' in message && message.voice) {
+    return {
+      type: 'voice',
+      fileId: message.voice.file_id,
       text: message.caption ? entitiesToHtml(message.caption, message.caption_entities) : undefined,
     };
   }

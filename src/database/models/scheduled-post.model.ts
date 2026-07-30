@@ -76,7 +76,7 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
   content: {
     type: {
       type: String,
-      enum: ['text', 'photo', 'video', 'document', 'animation', 'media_group', 'poll'],
+      enum: ['text', 'photo', 'video', 'document', 'animation', 'voice', 'media_group', 'poll'],
       required: true,
     },
     text: String,
