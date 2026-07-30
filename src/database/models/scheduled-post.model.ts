@@ -76,17 +76,29 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
   content: {
     type: {
       type: String,
-      enum: ['text', 'photo', 'video', 'document', 'animation', 'voice', 'media_group', 'poll'],
+      enum: [
+        'text', 'photo', 'video', 'document', 'animation', 'voice', 'audio', 'video_note',
+        'sticker', 'dice', 'contact', 'location', 'venue', 'media_group', 'poll',
+      ],
       required: true,
     },
     text: String,
     fileId: String,
     hasSpoiler: Boolean,
+    emoji: String,
+    phoneNumber: String,
+    firstName: String,
+    lastName: String,
+    vcard: String,
+    latitude: Number,
+    longitude: Number,
+    title: String,
+    address: String,
     mediaGroup: [
       {
         type: {
           type: String,
-          enum: ['photo', 'video'],
+          enum: ['photo', 'video', 'document', 'audio'],
           required: true,
         },
         fileId: {
