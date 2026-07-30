@@ -28,6 +28,8 @@ export class MediaSenderService {
         return await this.sendDocument(chatId, content.fileId, content.text, replyParameters);
       case 'animation':
         return await this.sendAnimation(chatId, content.fileId, content.text, replyParameters);
+      case 'voice':
+        return await this.sendVoice(chatId, content.fileId, content.text, replyParameters);
       case 'media_group':
         return await this.sendMediaGroup(chatId, content.mediaGroup, content.text, replyParameters);
       case 'text':
@@ -96,6 +98,22 @@ export class MediaSenderService {
     replyParameters?: ReplyParams
   ): Promise<number> {
     const result = await this.api.sendAnimation(chatId, fileId, {
+      caption,
+      parse_mode: 'HTML',
+      ...(replyParameters
+        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
+        : {}),
+    });
+    return result.message_id;
+  }
+
+  async sendVoice(
+    chatId: number | string,
+    fileId: string,
+    caption?: string,
+    replyParameters?: ReplyParams
+  ): Promise<number> {
+    const result = await this.api.sendVoice(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
       ...(replyParameters
