@@ -16,6 +16,7 @@ export interface EmbeddedReplyData {
   textHandling?: TextHandling;
   selectedUserId?: number | null;
   customText?: string;
+  textAbove?: boolean;
   originalForward: ForwardInfo;
 }
 
@@ -30,6 +31,8 @@ export interface IScheduledPost extends Document {
   textHandling?: TextHandling;
   selectedUserId?: number | null;
   customText?: string;
+  // Place the caption above the media rather than below it.
+  textAbove?: boolean;
   status: 'pending' | 'posted' | 'failed' | 'waiting_parent';
   postedAt?: Date;
   error?: string;
@@ -129,6 +132,7 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     default: null,
   },
   customText: String,
+  textAbove: Boolean,
   status: {
     type: String,
     enum: ['pending', 'posted', 'failed', 'waiting_parent'],

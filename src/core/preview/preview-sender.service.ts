@@ -1,7 +1,7 @@
 import { Api } from 'grammy';
 import type { InlineKeyboardMarkup, MessageOriginChannel } from 'grammy/types';
 import type { MessageContent } from '../../types/message.types.js';
-import { MediaSenderService } from '../sending/media-sender.service.js';
+import { MediaSenderService, supportsTextAbove } from '../sending/media-sender.service.js';
 import { createPreviewActionKeyboard } from '../../bot/keyboards/preview-action.keyboard.js';
 import { logger } from '../../utils/logger.js';
 import { DIContainer } from '../../shared/di/container.js';
@@ -10,6 +10,7 @@ import { parseForwardInfo } from '../../utils/message-parser.js';
 import { PostingChannel } from '../../database/models/posting-channel.model.js';
 import { channelLabel } from '../../shared/helpers/channel.helper.js';
 import { findNextAvailableSlot, formatSlotTime } from '../../utils/time-slots.js';
+import { hasPlaceableText, textAboveFor } from '../session/preview-route.js';
 
 export class PreviewSenderService {
   private mediaSender: MediaSenderService;
@@ -127,10 +128,21 @@ export class PreviewSenderService {
 
       if (content.type === 'media_group' && content.mediaGroup && content.mediaGroup.length > 0) {
         // Collect all album message IDs so every item can be deleted on cleanup
-        const ids = await this.mediaSender.sendMediaGroupAll(userId, content.mediaGroup, content.text);
+        const ids = await this.mediaSender.sendMediaGroupAll(
+          userId,
+          content.mediaGroup,
+          content.text,
+          undefined,
+          textAboveFor(session)
+        );
         previewMessageIds.push(...ids);
       } else {
-        const contentMsgId = await this.mediaSender.sendMessage(userId, content);
+        const contentMsgId = await this.mediaSender.sendMessage(
+          userId,
+          content,
+          undefined,
+          textAboveFor(session)
+        );
         previewMessageIds.push(contentMsgId);
       }
     }
@@ -147,7 +159,16 @@ export class PreviewSenderService {
     // editMessageReplyMarkup cannot be used on media group messages, and is
     // unreliable for other media types in some clients, so a dedicated text
     // message with the keyboard is the most reliable approach.
-    const keyboard = options?.keyboard ?? createPreviewActionKeyboard(sessionId);
+    // The toggle is only meaningful for a transformed post that has body text to place and
+    // media that can carry a caption above (a forward reposts the original untouched).
+    const textPlacement =
+      hasPlaceableText(session) && session.selectedAction !== 'forward' && supportsTextAbove(content)
+        ? textAboveFor(session)
+          ? 'above'
+          : 'below'
+        : undefined;
+
+    const keyboard = options?.keyboard ?? createPreviewActionKeyboard(sessionId, textPlacement);
     const baseControl = await this.buildControlMessage(session.selectedChannel);
     const controlText = options?.controlPrefix
       ? `${options.controlPrefix}\n\n${baseControl}`

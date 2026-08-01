@@ -16,6 +16,37 @@ export type ScheduleRoute =
   | 'reply-separated'
   | 'normal';
 
+/**
+ * Whether the post has text worth placing above the media: its own body text, either the
+ * original (kept or quoted) or an added custom one. A post carrying nothing but the
+ * via/from attribution row is excluded — that line reads the same in either position.
+ */
+export function hasPlaceableText(session: ISession): boolean {
+  if (session.customText) return true;
+  if (session.textHandling === 'remove') return false;
+
+  // Edit sessions carry the source content directly; live ones still have the message(s).
+  const editText =
+    session.editingRawContent && 'text' in session.editingRawContent
+      ? session.editingRawContent.text
+      : undefined;
+  const messages = session.mediaGroupMessages?.length
+    ? session.mediaGroupMessages
+    : session.originalMessage
+      ? [session.originalMessage]
+      : [];
+
+  return !!editText || messages.some((m) => !!(m.text ?? m.caption));
+}
+
+/**
+ * Whether this post's text goes above its media. Reading the flag through here keeps a
+ * toggle set earlier from leaking onto a post that has since lost its placeable text.
+ */
+export function textAboveFor(session: ISession): boolean | undefined {
+  return hasPlaceableText(session) ? session.textAbove : undefined;
+}
+
 export function classifyScheduleConfirm(session: ISession): ScheduleRoute {
   if (session.editingPostId) {
     return session.selectedChannel === session.editingOriginalChannelId

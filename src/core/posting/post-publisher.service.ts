@@ -29,7 +29,12 @@ export class PostPublisherService {
         ? { messageId: post.replyToMessageId, chatId: parseInt(post.replyToChannelId, 10) }
         : post.originalForward.replyParameters;
 
-    return await this.mediaSender.sendMessage(post.targetChannelId, post.content, replyParams);
+    return await this.mediaSender.sendMessage(
+      post.targetChannelId,
+      post.content,
+      replyParams,
+      post.textAbove
+    );
   }
 
   /**
@@ -55,7 +60,12 @@ export class PostPublisherService {
       return result.message_id;
     }
 
-    return await this.mediaSender.sendMessage(reply.targetChannelId, reply.content, replyParams);
+    return await this.mediaSender.sendMessage(
+      reply.targetChannelId,
+      reply.content,
+      replyParams,
+      reply.textAbove
+    );
   }
 
   /**

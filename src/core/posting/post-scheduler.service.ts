@@ -28,6 +28,7 @@ export class PostSchedulerService {
     textHandling: TextHandling;
     selectedUserId?: number | null;
     customText?: string;
+    textAbove?: boolean;
   }): Promise<{ scheduledTime: Date; postId: string }> {
     const {
       targetChannelId,
@@ -36,6 +37,7 @@ export class PostSchedulerService {
       textHandling,
       selectedUserId,
       customText,
+      textAbove,
     } = params;
 
     const selectedNickname = selectedUserId ? await getUserNickname(selectedUserId) : null;
@@ -62,6 +64,7 @@ export class PostSchedulerService {
       textHandling,
       selectedUserId: selectedUserId ?? null,
       customText,
+      textAbove,
       createdAt: new Date(),
     });
 

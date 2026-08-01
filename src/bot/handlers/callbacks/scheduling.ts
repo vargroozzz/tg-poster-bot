@@ -37,7 +37,7 @@ import { PreviewSenderService } from '../../../core/preview/preview-sender.servi
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import type { FlowEvent } from '../../../shared/constants/flow-states.js';
 import { transition } from '../../../core/session/session-state-machine.js';
-import { classifyScheduleConfirm } from '../../../core/session/preview-route.js';
+import { classifyScheduleConfirm, textAboveFor } from '../../../core/session/preview-route.js';
 import type { ScheduleRoute } from '../../../core/session/preview-route.js';
 import { PostingChannel, getActivePostingChannels } from '../../../database/models/posting-channel.model.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
@@ -218,6 +218,9 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
       textHandling: session.textHandling,
       selectedUserId: session.selectedUserId,
       customText: session.customText,
+      // Explicit false, not undefined: Mongoose drops undefined from $set, which would
+      // leave a stale "above" on a post whose text no longer supports it.
+      textAbove: textAboveFor(session) ?? false,
     });
 
     await finalizePreview(c);
@@ -248,6 +251,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             textHandling: session.textHandling ?? 'keep',
             selectedUserId: session.selectedUserId,
             customText: session.customText,
+            textAbove: textAboveFor(session),
           });
 
     await finalizePreview(c);
@@ -326,6 +330,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
       textHandling: replyTextHandling,
       selectedUserId: replyUserId ?? null,
       customText: replyCustomText,
+      textAbove: textAboveFor(session),
       originalForward: replyForwardInfo,
     };
 
@@ -362,6 +367,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
           textHandling: replyTextHandling,
           selectedUserId: replyUserId,
           customText: replyCustomText,
+          textAbove: textAboveFor(session),
         });
 
   await repository.convertToSeparatedReply(replyPostId, parentPostId, parentPost ?? null);
@@ -473,7 +479,13 @@ async function confirmNew(c: Confirm): Promise<void> {
   const { scheduledTime, postId } =
     session.selectedAction === 'forward'
       ? await postScheduler.scheduleForwardPost(baseParams)
-      : await postScheduler.scheduleTransformPost({ ...baseParams, textHandling, selectedUserId, customText });
+      : await postScheduler.scheduleTransformPost({
+          ...baseParams,
+          textHandling,
+          selectedUserId,
+          customText,
+          textAbove: textAboveFor(session),
+        });
 
   await finalizePreview(c);
 
@@ -663,6 +675,35 @@ export function registerScheduling(): void {
     async (c) => {
       const route = classifyScheduleConfirm(c.session);
       await SCHEDULE_CONFIRM[route](c, route);
+    }
+  ));
+
+  // Flip the caption between above and below the media. Re-renders the preview so what
+  // the user sees is what gets posted.
+  bot.callbackQuery(/^preview:textpos:(.+)$/, previewCallback(
+    'Error changing text placement.',
+    'Error in preview:textpos callback',
+    async (c) => {
+      const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+      // Stale button from an already-confirmed preview.
+      if (session.state !== SessionState.PREVIEW) {
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
+      // Same as cancel/back: once a proposal is handed off it is the owner's, and a tap
+      // from the proposer would re-home the preview message IDs into their chat.
+      if (session.proposalPending && fromId !== config.authorizedUserId) {
+        await ctx.deleteMessage().catch(() => {});
+        return;
+      }
+
+      await sessionSvc.update(sessionKey, { textAbove: !session.textAbove });
+      if (fromId) await deletePreviewMessages(ctx, fromId, session);
+      await showPreview(ctx, sessionKey);
+
+      logger.info(`Text placement toggled for session ${sessionKey}`);
     }
   ));
 

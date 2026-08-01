@@ -147,6 +147,8 @@ export interface PostSelections {
   textHandling?: TextHandling;
   selectedUserId?: number | null;
   customText?: string;
+  // Place the caption above the media rather than below it.
+  textAbove?: boolean;
   waitingForCustomText?: boolean;
   mediaGroupMessages?: Message[];
   replyChainMessages?: Message[];
