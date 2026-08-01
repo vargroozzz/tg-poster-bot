@@ -1,12 +1,23 @@
 import type { InlineKeyboardMarkup } from 'grammy/types';
 
-export function createPreviewActionKeyboard(sessionId: string): InlineKeyboardMarkup {
+// `textPlacement` is where the caption sits right now; the button offers the other one.
+// Omit it for posts whose media can't carry a caption above (see supportsTextAbove).
+export function createPreviewActionKeyboard(
+  sessionId: string,
+  textPlacement?: 'above' | 'below'
+): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
         { text: '✅ Schedule', callback_data: `preview:schedule:${sessionId}` },
         { text: '❌ Cancel', callback_data: `preview:cancel:${sessionId}` },
       ],
+      ...(textPlacement
+        ? [[{
+            text: textPlacement === 'above' ? '⬇️ Text below' : '⬆️ Text above',
+            callback_data: `preview:textpos:${sessionId}`,
+          }]]
+        : []),
       [
         { text: '⬅️ Back to start', callback_data: `preview:back:${sessionId}` },
       ],

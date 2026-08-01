@@ -52,11 +52,13 @@ export class QueuePreviewSenderService {
         const ids = await this.mediaSender.sendMediaGroupAll(
           userId,
           post.content.mediaGroup,
-          post.content.text
+          post.content.text,
+          undefined,
+          post.textAbove
         );
         previewMessageIds.push(...ids);
       } else {
-        const id = await this.mediaSender.sendMessage(userId, post.content);
+        const id = await this.mediaSender.sendMessage(userId, post.content, undefined, post.textAbove);
         previewMessageIds.push(id);
       }
     }

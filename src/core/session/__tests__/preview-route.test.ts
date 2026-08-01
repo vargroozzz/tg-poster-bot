@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyScheduleConfirm } from '../preview-route.js';
+import { classifyScheduleConfirm, hasPlaceableText, textAboveFor } from '../preview-route.js';
 import type { ISession } from '../../../database/models/session.model.js';
 
 // Only the fields the classifier reads; the rest of ISession is irrelevant here.
@@ -59,5 +59,46 @@ describe('classifyScheduleConfirm — normal', () => {
     expect(
       classifyScheduleConfirm(session({ ...completeEdit, selectedChannel: 'chA', isReply: true, replyParentPostId: 'p1' }))
     ).toBe('edit-same-channel');
+  });
+});
+
+describe('hasPlaceableText / textAboveFor', () => {
+  const withPhoto = (caption?: string): Partial<ISession> => ({
+    originalMessage: { message_id: 1, caption } as ISession['originalMessage'],
+  });
+
+  it('counts the original text, kept or quoted', () => {
+    expect(hasPlaceableText(session({ ...withPhoto('hi'), textHandling: 'keep' }))).toBe(true);
+    expect(hasPlaceableText(session({ ...withPhoto('hi'), textHandling: 'quote' }))).toBe(true);
+  });
+
+  it('counts custom text even when the original was dropped', () => {
+    expect(
+      hasPlaceableText(session({ ...withPhoto('hi'), textHandling: 'remove', customText: 'mine' }))
+    ).toBe(true);
+  });
+
+  it('counts a caption living on any album item', () => {
+    expect(
+      hasPlaceableText(
+        session({
+          textHandling: 'keep',
+          mediaGroupMessages: [
+            { message_id: 1 },
+            { message_id: 2, caption: 'hi' },
+          ] as ISession['mediaGroupMessages'],
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('rejects a post left with nothing but the attribution row', () => {
+    expect(hasPlaceableText(session({ ...withPhoto('hi'), textHandling: 'remove' }))).toBe(false);
+    expect(hasPlaceableText(session({ ...withPhoto(), textHandling: 'keep' }))).toBe(false);
+  });
+
+  it('drops a stale placement once the text it was set for is gone', () => {
+    expect(textAboveFor(session({ ...withPhoto('hi'), textHandling: 'keep', textAbove: true }))).toBe(true);
+    expect(textAboveFor(session({ ...withPhoto('hi'), textHandling: 'remove', textAbove: true }))).toBeUndefined();
   });
 });

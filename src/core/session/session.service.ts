@@ -59,6 +59,7 @@ export class SessionService {
       textHandling: post.textHandling,
       selectedUserId: post.selectedUserId,
       customText: post.customText,
+      textAbove: post.textAbove,
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt,

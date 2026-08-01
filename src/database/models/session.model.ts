@@ -66,6 +66,7 @@ const sessionSchema = new Schema<ISession>({
   },
   selectedUserId: Number,
   customText: String,
+  textAbove: Boolean,
   waitingForCustomText: Boolean,
   mediaGroupMessages: [Schema.Types.Mixed],
   replyChainMessages: [Schema.Types.Mixed],
