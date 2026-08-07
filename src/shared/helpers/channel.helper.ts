@@ -11,11 +11,10 @@ export function channelLabel(channel: ChannelLike): string {
   return channel.channelTitle ?? channel.channelUsername ?? channel.channelId;
 }
 
-/** Map a stored channel doc to the {id, title, username} shape the keyboards expect. */
+/** Map a stored channel doc to the {id, title} shape the keyboards expect. */
 export function toChannelInfo(channel: ChannelLike): ChannelInfo {
   return {
     id: channel.channelId,
     title: channelLabel(channel),
-    username: channel.channelUsername ?? undefined,
   };
 }
