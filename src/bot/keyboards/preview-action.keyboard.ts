@@ -1,10 +1,56 @@
-import type { InlineKeyboardMarkup } from 'grammy/types';
+import type { InlineKeyboardMarkup, InlineKeyboardButton } from 'grammy/types';
+import type { SpoilerSlot } from '../../core/sending/spoilers.js';
+
+const ITEMS_PER_ROW = 4;
+
+// One button per spoiler-capable medium, labelled with its real album position — a
+// document sitting among photos leaves a gap rather than shifting the numbering.
+function spoilerMenuRows(sessionId: string, slots: SpoilerSlot[]): InlineKeyboardButton[][] {
+  // Session id before the index: previewCallback reads the session from match[1].
+  const buttons = slots.map((slot) => ({
+    text: `${slot.on ? '🫥' : '⬜'} ${slot.index + 1}`,
+    callback_data: `preview:spoiler:${sessionId}:${slot.index}`,
+  }));
+
+  return [
+    ...Array.from({ length: Math.ceil(buttons.length / ITEMS_PER_ROW) }, (_, row) =>
+      buttons.slice(row * ITEMS_PER_ROW, (row + 1) * ITEMS_PER_ROW)
+    ),
+    [{ text: '⬅️ Done', callback_data: `preview:spoilermenu:${sessionId}` }],
+  ];
+}
+
+function spoilerRows(
+  sessionId: string,
+  slots: SpoilerSlot[],
+  menuOpen: boolean
+): InlineKeyboardButton[][] {
+  if (slots.length === 0) return [];
+  if (menuOpen && slots.length > 1) return spoilerMenuRows(sessionId, slots);
+
+  const allOn = slots.every((slot) => slot.on);
+  const toggleAll = {
+    text: slots.length > 1
+      ? (allOn ? '👁 Unspoiler all' : '🫥 Spoiler all')
+      : (allOn ? '👁 Unspoiler' : '🫥 Spoiler'),
+    callback_data: `preview:spoilerall:${sessionId}`,
+  };
+
+  return [
+    slots.length > 1
+      ? [toggleAll, { text: '🎚 Per item', callback_data: `preview:spoilermenu:${sessionId}` }]
+      : [toggleAll],
+  ];
+}
 
 // `textPlacement` is where the caption sits right now; the button offers the other one.
 // Omit it for posts whose media can't carry a caption above (see supportsTextAbove).
+// `spoilerSlots` is empty for posts with no spoiler-capable media, which drops the row.
 export function createPreviewActionKeyboard(
   sessionId: string,
-  textPlacement?: 'above' | 'below'
+  textPlacement?: 'above' | 'below',
+  spoilerSlots: SpoilerSlot[] = [],
+  spoilerMenuOpen = false
 ): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
@@ -18,6 +64,7 @@ export function createPreviewActionKeyboard(
             callback_data: `preview:textpos:${sessionId}`,
           }]]
         : []),
+      ...spoilerRows(sessionId, spoilerSlots, spoilerMenuOpen),
       [
         { text: '⬅️ Back to start', callback_data: `preview:back:${sessionId}` },
       ],

@@ -17,6 +17,7 @@ export interface EmbeddedReplyData {
   selectedUserId?: number | null;
   customText?: string;
   textAbove?: boolean;
+  spoilers?: boolean[];
   originalForward: ForwardInfo;
 }
 
@@ -33,6 +34,8 @@ export interface IScheduledPost extends Document {
   customText?: string;
   // Place the caption above the media rather than below it.
   textAbove?: boolean;
+  // Spoiler state per album position; see core/sending/spoilers.ts.
+  spoilers?: boolean[];
   status: 'pending' | 'posted' | 'failed' | 'waiting_parent';
   postedAt?: Date;
   error?: string;
@@ -133,6 +136,7 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
   },
   customText: String,
   textAbove: Boolean,
+  spoilers: { type: [Boolean], default: undefined },
   status: {
     type: String,
     enum: ['pending', 'posted', 'failed', 'waiting_parent'],

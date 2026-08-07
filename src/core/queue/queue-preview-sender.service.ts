@@ -1,6 +1,7 @@
 import { Api } from 'grammy';
 import type { IScheduledPost } from '../../database/models/scheduled-post.model.js';
 import { MediaSenderService } from '../sending/media-sender.service.js';
+import { withSpoilers } from '../sending/spoilers.js';
 import { createQueuePreviewActionKeyboard } from '../../bot/keyboards/queue-preview-action.keyboard.js';
 import { logger } from '../../utils/logger.js';
 
@@ -48,17 +49,18 @@ export class QueuePreviewSenderService {
       }
     } else {
       // Transform action: send the already-transformed content from DB as-is
-      if (post.content.type === 'media_group' && post.content.mediaGroup?.length) {
+      const content = withSpoilers(post.content, post.spoilers);
+      if (content.type === 'media_group' && content.mediaGroup?.length) {
         const ids = await this.mediaSender.sendMediaGroupAll(
           userId,
-          post.content.mediaGroup,
-          post.content.text,
+          content.mediaGroup,
+          content.text,
           undefined,
           post.textAbove
         );
         previewMessageIds.push(...ids);
       } else {
-        const id = await this.mediaSender.sendMessage(userId, post.content, undefined, post.textAbove);
+        const id = await this.mediaSender.sendMessage(userId, content, undefined, post.textAbove);
         previewMessageIds.push(id);
       }
     }

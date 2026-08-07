@@ -14,6 +14,8 @@ import {
   createProposalPreviewKeyboard,
 } from '../../keyboards/preview-action.keyboard.js';
 import type { EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
+import type { MessageContent } from '../../../types/message.types.js';
+import { nextSpoilers, spoilerSlots, withSpoilers } from '../../../core/sending/spoilers.js';
 import { CustomTextPreset } from '../../../database/models/custom-text-preset.model.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
 import { logger } from '../../../utils/logger.js';
@@ -33,11 +35,11 @@ import {
   confirmUserNickname,
 } from '../../../database/models/user-nickname.model.js';
 import { PreviewGeneratorService } from '../../../core/preview/preview-generator.service.js';
-import { PreviewSenderService } from '../../../core/preview/preview-sender.service.js';
+import { PreviewSenderService, previewKeyboardFor } from '../../../core/preview/preview-sender.service.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import type { FlowEvent } from '../../../shared/constants/flow-states.js';
 import { transition } from '../../../core/session/session-state-machine.js';
-import { classifyScheduleConfirm, textAboveFor } from '../../../core/session/preview-route.js';
+import { classifyScheduleConfirm, textAboveFor, spoilersFor } from '../../../core/session/preview-route.js';
 import type { ScheduleRoute } from '../../../core/session/preview-route.js';
 import { PostingChannel, getActivePostingChannels } from '../../../database/models/posting-channel.model.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
@@ -156,6 +158,48 @@ function previewCallback(
   };
 }
 
+/**
+ * Whether a tap on a live preview's adjust buttons should be ignored: the preview was
+ * already confirmed, or a handed-off proposal is now the owner's and a tap from the
+ * proposer would re-home the preview message IDs into their chat.
+ */
+async function isStalePreviewTap({ ctx, session, fromId }: Confirm): Promise<boolean> {
+  const stale =
+    session.state !== SessionState.PREVIEW ||
+    (!!session.proposalPending && fromId !== config.authorizedUserId);
+
+  if (stale) await ctx.deleteMessage().catch(() => {});
+  return stale;
+}
+
+/** What the preview currently shows, spoiler overrides included. */
+async function currentPreviewContent(session: ISession): Promise<MessageContent> {
+  return withSpoilers(await new PreviewGeneratorService().generatePreview(session), spoilersFor(session));
+}
+
+/**
+ * Shared body of the spoiler toggles: decide the session change from the content the
+ * preview is currently showing, then re-render. `update` is handed the already overridden
+ * content, so slot states read as what the user sees.
+ */
+function spoilerCallback(
+  errorLog: string,
+  update: (c: Confirm, content: MessageContent) => Partial<ISession>
+): (ctx: Context) => Promise<void> {
+  return previewCallback('Error changing spoiler.', errorLog, async (c) => {
+    const { ctx, session, sessionKey, sessionSvc, fromId } = c;
+
+    if (await isStalePreviewTap(c)) return;
+
+    await sessionSvc.update(sessionKey, update(c, await currentPreviewContent(session)));
+
+    if (fromId) await deletePreviewMessages(ctx, fromId, session);
+    await showPreview(ctx, sessionKey);
+
+    logger.info(`Spoilers changed for session ${sessionKey}`);
+  });
+}
+
 // Delete the preview message(s) and the control message. Shared by the confirm
 // flow (finalizePreview) and the cancel/back flows, which close the session out
 // at different points.
@@ -221,6 +265,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
       // Explicit false, not undefined: Mongoose drops undefined from $set, which would
       // leave a stale "above" on a post whose text no longer supports it.
       textAbove: textAboveFor(session) ?? false,
+      spoilers: spoilersFor(session),
     });
 
     await finalizePreview(c);
@@ -252,6 +297,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             selectedUserId: session.selectedUserId,
             customText: session.customText,
             textAbove: textAboveFor(session),
+            spoilers: spoilersFor(session),
           });
 
     await finalizePreview(c);
@@ -331,6 +377,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
       selectedUserId: replyUserId ?? null,
       customText: replyCustomText,
       textAbove: textAboveFor(session),
+      spoilers: spoilersFor(session),
       originalForward: replyForwardInfo,
     };
 
@@ -368,6 +415,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
           selectedUserId: replyUserId,
           customText: replyCustomText,
           textAbove: textAboveFor(session),
+          spoilers: spoilersFor(session),
         });
 
   await repository.convertToSeparatedReply(replyPostId, parentPostId, parentPost ?? null);
@@ -485,6 +533,7 @@ async function confirmNew(c: Confirm): Promise<void> {
           selectedUserId,
           customText,
           textAbove: textAboveFor(session),
+          spoilers: spoilersFor(session),
         });
 
   await finalizePreview(c);
@@ -678,32 +727,87 @@ export function registerScheduling(): void {
     }
   ));
 
-  // Flip the caption between above and below the media. Re-renders the preview so what
-  // the user sees is what gets posted.
+  // Flip the caption between above and below the media, editing the live preview so what
+  // the user sees stays what gets posted.
   bot.callbackQuery(/^preview:textpos:(.+)$/, previewCallback(
     'Error changing text placement.',
     'Error in preview:textpos callback',
     async (c) => {
       const { ctx, session, sessionKey, sessionSvc, fromId } = c;
 
-      // Stale button from an already-confirmed preview.
-      if (session.state !== SessionState.PREVIEW) {
-        await ctx.deleteMessage().catch(() => {});
+      if (await isStalePreviewTap(c)) return;
+
+      const textAbove = !session.textAbove;
+      await sessionSvc.update(sessionKey, { textAbove });
+      // Keep the in-memory session in step with what was just saved, so the keyboard we
+      // rebuild below reflects the new placement.
+      session.textAbove = textAbove;
+
+      const contentMessageId = session.previewContentMessageId;
+      if (!contentMessageId || !fromId) {
+        // Preview predates the in-place edit (or we can't address the chat): re-send it.
+        if (fromId) await deletePreviewMessages(ctx, fromId, session);
+        await showPreview(ctx, sessionKey);
         return;
       }
 
-      // Same as cancel/back: once a proposal is handed off it is the owner's, and a tap
-      // from the proposer would re-home the preview message IDs into their chat.
-      if (session.proposalPending && fromId !== config.authorizedUserId) {
-        await ctx.deleteMessage().catch(() => {});
-        return;
-      }
+      // Only the placement changes, so edit the caption in place rather than tearing the
+      // whole preview down — no flicker, and the message keeps its position in the chat.
+      // Placement is a send-time flag, so the caption text itself is unchanged.
+      const content = await currentPreviewContent(session);
 
-      await sessionSvc.update(sessionKey, { textAbove: !session.textAbove });
-      if (fromId) await deletePreviewMessages(ctx, fromId, session);
-      await showPreview(ctx, sessionKey);
+      await ctx.api.editMessageCaption(fromId, contentMessageId, {
+        caption: content.text,
+        parse_mode: 'HTML',
+        show_caption_above_media: textAbove,
+      });
+      await ctx.editMessageReplyMarkup({
+        reply_markup: previewKeyboardFor(session, sessionKey, content),
+      });
 
       logger.info(`Text placement toggled for session ${sessionKey}`);
+    }
+  ));
+
+  // Spoiler controls. Telegram cannot change has_spoiler in place — editMessageCaption
+  // does not carry it and editMessageMedia cannot address a single album item — so every
+  // one of these re-renders the preview rather than editing it.
+  bot.callbackQuery(/^preview:spoilerall:(.+)$/, spoilerCallback(
+    'Error in preview:spoilerall callback',
+    (_c, content) => {
+      // All on → turn everything off; anything off → turn everything on.
+      const on = !spoilerSlots(content).every((slot) => slot.on);
+      return { spoilers: nextSpoilers(content, () => on) };
+    }
+  ));
+
+  // Opening or closing the per-item menu changes no media, only which buttons are shown,
+  // so it edits the control message instead of re-sending the preview.
+  bot.callbackQuery(/^preview:spoilermenu:(.+)$/, previewCallback(
+    'Error changing spoiler.',
+    'Error in preview:spoilermenu callback',
+    async (c) => {
+      const { ctx, session, sessionKey, sessionSvc } = c;
+
+      if (await isStalePreviewTap(c)) return;
+
+      const spoilerMenu = !session.spoilerMenu;
+      await sessionSvc.update(sessionKey, { spoilerMenu });
+      session.spoilerMenu = spoilerMenu;
+
+      await ctx.editMessageReplyMarkup({
+        reply_markup: previewKeyboardFor(session, sessionKey, await currentPreviewContent(session)),
+      });
+
+      logger.info(`Spoiler menu ${spoilerMenu ? 'opened' : 'closed'} for session ${sessionKey}`);
+    }
+  ));
+
+  bot.callbackQuery(/^preview:spoiler:([^:]+):(\d+)$/, spoilerCallback(
+    'Error in preview:spoiler callback',
+    (c, content) => {
+      const index = Number(Array.isArray(c.ctx.match) ? c.ctx.match[2] : NaN);
+      return { spoilers: nextSpoilers(content, (slot) => (slot.index === index ? !slot.on : slot.on)) };
     }
   ));
 

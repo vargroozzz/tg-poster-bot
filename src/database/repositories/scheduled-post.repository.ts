@@ -156,6 +156,7 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
       selectedUserId?: number | null;
       customText?: string;
       textAbove?: boolean;
+      spoilers?: boolean[];
     }
   ): Promise<IScheduledPost | null> {
     return await this.model.findOneAndUpdate(

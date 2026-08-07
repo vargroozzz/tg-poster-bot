@@ -47,6 +47,14 @@ export function textAboveFor(session: ISession): boolean | undefined {
   return hasPlaceableText(session) ? session.textAbove : undefined;
 }
 
+/**
+ * This post's spoiler overrides, or undefined when they don't apply. A forward reposts the
+ * original untouched, so its media keeps whatever spoiler state the source had.
+ */
+export function spoilersFor(session: ISession): boolean[] | undefined {
+  return session.selectedAction === 'forward' ? undefined : session.spoilers;
+}
+
 export function classifyScheduleConfirm(session: ISession): ScheduleRoute {
   if (session.editingPostId) {
     return session.selectedChannel === session.editingOriginalChannelId

@@ -43,7 +43,7 @@ export class MediaSenderService {
       case 'document':
         return await this.sendDocument(chatId, content.fileId, content.text, replyParameters);
       case 'animation':
-        return await this.sendAnimation(chatId, content.fileId, content.text, replyParameters, textAbove);
+        return await this.sendAnimation(chatId, content.fileId, content.text, replyParameters, content.hasSpoiler, textAbove);
       case 'voice':
         return await this.sendVoice(chatId, content.fileId, content.text, replyParameters);
       case 'audio':
@@ -150,11 +150,13 @@ export class MediaSenderService {
     fileId: string,
     caption?: string,
     replyParameters?: ReplyParams,
+    hasSpoiler?: boolean,
     textAbove?: boolean
   ): Promise<number> {
     const result = await this.api.sendAnimation(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
+      ...(hasSpoiler ? { has_spoiler: true } : {}),
       ...(textAbove ? { show_caption_above_media: true } : {}),
       ...(replyParameters
         ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
