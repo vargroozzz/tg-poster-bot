@@ -60,6 +60,7 @@ export class SessionService {
       selectedUserId: post.selectedUserId,
       customText: post.customText,
       textAbove: post.textAbove,
+      spoilers: post.spoilers,
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt,

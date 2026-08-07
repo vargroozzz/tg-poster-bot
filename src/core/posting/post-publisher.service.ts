@@ -1,6 +1,7 @@
 import { Api } from 'grammy';
 import type { IScheduledPost, EmbeddedReplyData } from '../../database/models/scheduled-post.model.js';
 import { MediaSenderService } from '../sending/media-sender.service.js';
+import { withSpoilers } from '../sending/spoilers.js';
 
 /**
  * Service for publishing posts to Telegram
@@ -31,7 +32,7 @@ export class PostPublisherService {
 
     return await this.mediaSender.sendMessage(
       post.targetChannelId,
-      post.content,
+      withSpoilers(post.content, post.spoilers),
       replyParams,
       post.textAbove
     );
@@ -62,7 +63,7 @@ export class PostPublisherService {
 
     return await this.mediaSender.sendMessage(
       reply.targetChannelId,
-      reply.content,
+      withSpoilers(reply.content, reply.spoilers),
       replyParams,
       reply.textAbove
     );

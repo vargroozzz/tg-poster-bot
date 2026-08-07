@@ -6,11 +6,38 @@ import { createPreviewActionKeyboard } from '../../bot/keyboards/preview-action.
 import { logger } from '../../utils/logger.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../session/session.service.js';
+import type { ISession } from '../../database/models/session.model.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { PostingChannel } from '../../database/models/posting-channel.model.js';
 import { channelLabel } from '../../shared/helpers/channel.helper.js';
 import { findNextAvailableSlot, formatSlotTime } from '../../utils/time-slots.js';
-import { hasPlaceableText, textAboveFor } from '../session/preview-route.js';
+import { hasPlaceableText, textAboveFor, spoilersFor } from '../session/preview-route.js';
+import { spoilerSlots, withSpoilers } from '../sending/spoilers.js';
+
+/**
+ * The preview's action keyboard for the session as it stands. Shared with the buttons that
+ * adjust a live preview, so a keyboard they rebuild matches the one sendPreview would.
+ * `content` must already carry the spoiler overrides.
+ */
+export function previewKeyboardFor(
+  session: ISession,
+  sessionId: string,
+  content: MessageContent
+): InlineKeyboardMarkup {
+  // The toggle is only meaningful for a transformed post that has body text to place and
+  // media that can carry a caption above (a forward reposts the original untouched).
+  const textPlacement =
+    hasPlaceableText(session) && session.selectedAction !== 'forward' && supportsTextAbove(content)
+      ? textAboveFor(session)
+        ? 'above'
+        : 'below'
+      : undefined;
+
+  // Same rule for spoilers.
+  const slots = session.selectedAction === 'forward' ? [] : spoilerSlots(content);
+
+  return createPreviewActionKeyboard(sessionId, textPlacement, slots, session.spoilerMenu);
+}
 
 export class PreviewSenderService {
   private mediaSender: MediaSenderService;
@@ -25,7 +52,7 @@ export class PreviewSenderService {
 
   async sendPreview(
     userId: number,
-    content: MessageContent,
+    rawContent: MessageContent,
     sessionId: string,
     options?: { keyboard?: InlineKeyboardMarkup; controlPrefix?: string }
   ): Promise<number> {
@@ -36,7 +63,13 @@ export class PreviewSenderService {
       throw new Error(`Session ${sessionId} not found when generating preview`);
     }
 
+    // Preview what will actually be posted, spoiler choices included.
+    const content = withSpoilers(rawContent, spoilersFor(session));
+
     const previewMessageIds: number[] = [];
+    // The message holding the caption (album head or the single media message), so a
+    // text-placement toggle can edit it in place instead of re-sending the preview.
+    let contentMessageId: number | undefined;
 
     if (session.selectedAction === 'forward') {
       let sourceChatId: number;
@@ -136,14 +169,15 @@ export class PreviewSenderService {
           textAboveFor(session)
         );
         previewMessageIds.push(...ids);
+        contentMessageId = ids[0];
       } else {
-        const contentMsgId = await this.mediaSender.sendMessage(
+        contentMessageId = await this.mediaSender.sendMessage(
           userId,
           content,
           undefined,
           textAboveFor(session)
         );
-        previewMessageIds.push(contentMsgId);
+        previewMessageIds.push(contentMessageId);
       }
     }
 
@@ -151,6 +185,7 @@ export class PreviewSenderService {
     if (sessionSvc && previewMessageIds.length > 0) {
       await sessionSvc.update(sessionId, {
         previewMessageIds,
+        previewContentMessageId: contentMessageId,
       });
       logger.debug(`Stored ${previewMessageIds.length} preview message ID(s) on session ${sessionId}`);
     }
@@ -159,16 +194,7 @@ export class PreviewSenderService {
     // editMessageReplyMarkup cannot be used on media group messages, and is
     // unreliable for other media types in some clients, so a dedicated text
     // message with the keyboard is the most reliable approach.
-    // The toggle is only meaningful for a transformed post that has body text to place and
-    // media that can carry a caption above (a forward reposts the original untouched).
-    const textPlacement =
-      hasPlaceableText(session) && session.selectedAction !== 'forward' && supportsTextAbove(content)
-        ? textAboveFor(session)
-          ? 'above'
-          : 'below'
-        : undefined;
-
-    const keyboard = options?.keyboard ?? createPreviewActionKeyboard(sessionId, textPlacement);
+    const keyboard = options?.keyboard ?? previewKeyboardFor(session, sessionId, content);
     const baseControl = await this.buildControlMessage(session.selectedChannel);
     const controlText = options?.controlPrefix
       ? `${options.controlPrefix}\n\n${baseControl}`

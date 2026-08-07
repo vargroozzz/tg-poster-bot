@@ -691,7 +691,7 @@ const SINGLE_EXTRACTORS: ReadonlyArray<(m: Message) => MessageContent | undefine
   m => m.photo?.length
     ? { type: 'photo', fileId: m.photo[m.photo.length - 1].file_id, hasSpoiler: m.has_media_spoiler ?? undefined, text: captionHtml(m) }
     : undefined,
-  m => m.animation && { type: 'animation', fileId: m.animation.file_id, text: captionHtml(m) },
+  m => m.animation && { type: 'animation', fileId: m.animation.file_id, hasSpoiler: m.has_media_spoiler ?? undefined, text: captionHtml(m) },
   m => m.video && { type: 'video', fileId: m.video.file_id, hasSpoiler: m.has_media_spoiler ?? undefined, text: captionHtml(m) },
   m => m.video_note && { type: 'video_note', fileId: m.video_note.file_id },
   m => m.voice && { type: 'voice', fileId: m.voice.file_id, text: captionHtml(m) },

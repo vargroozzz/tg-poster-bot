@@ -15,6 +15,8 @@ export interface ISession extends Document, PostSelections {
   originalMessage?: Message;
   previewMessageId?: number;
   previewMessageIds?: number[];
+  // The preview message carrying the caption — the one a text-placement toggle edits.
+  previewContentMessageId?: number;
   editingPostId?: string;
   editingOriginalChannelId?: string;
   editingOriginalScheduledTime?: Date;
@@ -67,6 +69,8 @@ const sessionSchema = new Schema<ISession>({
   selectedUserId: Number,
   customText: String,
   textAbove: Boolean,
+  spoilers: { type: [Boolean], default: undefined },
+  spoilerMenu: Boolean,
   waitingForCustomText: Boolean,
   mediaGroupMessages: [Schema.Types.Mixed],
   replyChainMessages: [Schema.Types.Mixed],
@@ -77,6 +81,10 @@ const sessionSchema = new Schema<ISession>({
   previewMessageIds: {
     type: [Number],
     default: undefined,
+  },
+  previewContentMessageId: {
+    type: Number,
+    required: false,
   },
   editingPostId: { type: String },
   editingOriginalChannelId: { type: String },

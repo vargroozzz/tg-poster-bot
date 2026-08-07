@@ -50,6 +50,7 @@ export interface AnimationContent {
   type: 'animation';
   fileId: string;
   text?: string;
+  hasSpoiler?: boolean;
 }
 
 export interface VoiceContent {
@@ -149,6 +150,11 @@ export interface PostSelections {
   customText?: string;
   // Place the caption above the media rather than below it.
   textAbove?: boolean;
+  // Spoiler state per album position (index 0 for a single medium). Undefined means the
+  // source message's own flags stand; see core/sending/spoilers.ts.
+  spoilers?: boolean[];
+  // Whether the preview's per-item spoiler keyboard is open.
+  spoilerMenu?: boolean;
   waitingForCustomText?: boolean;
   mediaGroupMessages?: Message[];
   replyChainMessages?: Message[];
