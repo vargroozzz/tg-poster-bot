@@ -3,6 +3,7 @@
 ## Workflow Notes
 
 - Do NOT commit design docs or implementation plans. Write them to disk if needed but skip the commit — execution follows immediately.
+- Delete the design doc or plan once the work it describes has shipped. They are scratch for the session, not artifacts to keep around.
 - After completing any code change, always commit and push without waiting to be asked.
 
 ## Code Style
