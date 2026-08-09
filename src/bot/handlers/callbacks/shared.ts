@@ -20,6 +20,7 @@ import {
 } from '../../../shared/helpers/nickname.helper.js';
 import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
 import { createTextChoiceKeyboard } from '../../keyboards/text-handling.keyboard.js';
+import { flowCallbacks, type FlowCallbacks } from '../../keyboards/flow-callbacks.js';
 import { entitiesToHtml } from '../../../utils/entities-to-html.js';
 
 export async function resolveKnownNicknameUserId(forwardInfo: ForwardInfo): Promise<number | undefined> {
@@ -45,11 +46,19 @@ export async function knownCredit(ctx: Context, session: ISession, originalMessa
   return creditUserId(session, ctx, await resolveKnownNicknameUserId(parseForwardInfo(fullMessage)));
 }
 
+export const actionPrompt = (subject: 'message' | 'reply' = 'message'): string =>
+  `Choose how to post this ${subject}:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text`;
 export const TEXT_CHOICE_PROMPT = 'What text should the post have?';
 export const NICKNAME_PROMPT = 'Who should be credited for this post?';
+export const CUSTOM_TEXT_PROMPT =
+  "✍️ Reply to this message with your custom text.\n\nIt replaces the message's own text.";
 
-// The original text of the post, as HTML — the caption may live on any message of an album.
+// The original text of the post, as HTML. An edit session carries it on the stored content;
+// a new one on the forwarded message, whose caption may live on any item of an album.
 function originalTextHtml(session?: ISession): string {
+  const raw = session?.editingRawContent;
+  if (raw) return ('text' in raw ? raw.text ?? '' : '').trim();
+
   const messages = session?.mediaGroupMessages?.length
     ? session.mediaGroupMessages
     : session?.originalMessage
@@ -61,20 +70,39 @@ function originalTextHtml(session?: ISession): string {
   return entitiesToHtml(source.text ?? source.caption ?? '', source.entities ?? source.caption_entities).trim();
 }
 
-export async function textChoiceKeyboardFor(sessionId: string): Promise<InlineKeyboardMarkup> {
+export async function textChoiceKeyboardFor(
+  sessionId: string,
+  cb?: FlowCallbacks
+): Promise<InlineKeyboardMarkup> {
   const html = originalTextHtml(await getSessionService().findById(sessionId) ?? undefined);
   // '<blockquote' (not '<blockquote>') so expandable quotes count too.
-  return createTextChoiceKeyboard(!!html, html.includes('<blockquote'));
+  return createTextChoiceKeyboard(!!html, html.includes('<blockquote'), cb);
+}
+
+// The nickname step's keyboard for an edit session, or null when the source already has a
+// known nickname — that credit is selected here and the step skipped, as in the post flow.
+export async function editNicknameKeyboard(sessionId: string): Promise<InlineKeyboardMarkup | null> {
+  const sessionSvc = getSessionService();
+  const session = await sessionSvc.findById(sessionId);
+  if (!session) return null; // Expired: the caller's preview step reports it.
+
+  const fromUserId = session.editingOriginalForward?.fromUserId;
+  if (fromUserId && (await findNicknameByUserId(fromUserId))) {
+    await sessionSvc.update(sessionId, { selectedUserId: fromUserId });
+    return null;
+  }
+
+  return getNicknameKeyboard(flowCallbacks('edit', sessionId));
 }
 
 type StepRenderer = (ctx: Context, sessionId: string) => Promise<void>;
 
 const STEP_RENDERERS: Record<FlowStep['type'], StepRenderer> = {
   show_action_select: async ctx => {
-    await ctx.editMessageText(
-      'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
-      { reply_markup: createForwardActionKeyboard(), parse_mode: 'HTML' }
-    );
+    await ctx.editMessageText(actionPrompt(), {
+      reply_markup: createForwardActionKeyboard(),
+      parse_mode: 'HTML',
+    });
   },
   show_text_handling: async (ctx, sessionId) => {
     await ctx.editMessageText(TEXT_CHOICE_PROMPT, {

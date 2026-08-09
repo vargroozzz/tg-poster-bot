@@ -7,7 +7,6 @@ import { logger } from '../../utils/logger.js';
 import { bot } from '../bot.js';
 import type { MediaGroupItem, MessageContent } from '../../types/message.types.js';
 import { getActivePostingChannels } from '../../database/models/posting-channel.model.js';
-import { toChannelInfo } from '../../shared/helpers/channel.helper.js';
 import { DIContainer } from '../../shared/di/container.js';
 import type { SessionService } from '../../core/session/session.service.js';
 import type { ISession } from '../../database/models/session.model.js';
@@ -18,7 +17,7 @@ import { entitiesToHtml } from '../../utils/entities-to-html.js';
 import { config } from '../../config/index.js';
 import { getUserNickname } from '../../database/models/user-nickname.model.js';
 import { getNicknameKeyboard } from '../../shared/helpers/nickname.helper.js';
-import { NICKNAME_PROMPT, knownCredit } from './callbacks/shared.js';
+import { NICKNAME_PROMPT, editNicknameKeyboard, knownCredit } from './callbacks/shared.js';
 import { transition } from '../../core/session/session-state-machine.js';
 
 let _sessionService: SessionService | undefined;
@@ -50,9 +49,7 @@ async function handleReplyContent(
     return;
   }
 
-  const channels = postingChannels.map(toChannelInfo);
-
-  const keyboard = createChannelSelectKeyboard(channels);
+  const keyboard = createChannelSelectKeyboard(postingChannels);
   await ctx.reply('Choose the target channel for this reply:', {
     reply_markup: keyboard,
     reply_to_message_id: message.message_id,
@@ -168,8 +165,8 @@ bot.on('message:text').filter(
 
     // Typed custom text replaces the message's own text. Route it through the state machine
     // so it lands on the same step as the keyboard choices would; only the rendering differs
-    // (a new message, since the user replied instead of tapping). The edit flow (/queue) does
-    // not use the state machine and goes straight to its preview.
+    // (a new message, since the user replied instead of tapping). The edit flow (/queue) walks
+    // the same steps without the state machine, so it repeats them below.
     if (session.state === SessionState.TEXT_HANDLING && session.originalMessage) {
       const { newState, step, sessionUpdates } = transition(session.state, {
         type: 'TEXT_CHOSEN',
@@ -186,6 +183,16 @@ bot.on('message:text').filter(
         });
         return;
       }
+    } else if (session.editingPostId) {
+      const nicknameKeyboard = await editNicknameKeyboard(foundKey);
+      const updates = { customText, textHandling: 'remove' as const, waitingForCustomText: false };
+
+      if (nicknameKeyboard) {
+        await sessionSvc.updateState(foundKey, SessionState.NICKNAME_SELECT, updates);
+        await ctx.reply(NICKNAME_PROMPT, { reply_markup: nicknameKeyboard });
+        return;
+      }
+      await sessionSvc.updateState(foundKey, SessionState.PREVIEW, updates);
     } else {
       await sessionSvc.updateState(foundKey, SessionState.PREVIEW, {
         customText,
@@ -481,9 +488,7 @@ async function processSingleMessage(ctx: Context, message: Message) {
   const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
   // Create channel selection keyboard
-  const channels = postingChannels.map(toChannelInfo);
-
-  const keyboard = createChannelSelectKeyboard(channels);
+  const keyboard = createChannelSelectKeyboard(postingChannels);
 
   if (sessionSvc && ctx.from?.id) {
     try {
@@ -551,9 +556,7 @@ async function processMediaGroup(mediaGroupId: string) {
   const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
 
   // Create channel selection keyboard
-  const channels = postingChannels.map(toChannelInfo);
-
-  const keyboard = createChannelSelectKeyboard(channels);
+  const keyboard = createChannelSelectKeyboard(postingChannels);
 
   const sessionSvc = getSessionService();
   if (sessionSvc && primaryMessage.from?.id) {
@@ -658,8 +661,7 @@ async function processReplyChain(bufferKey: string) {
   }
 
   // Build channel selection keyboard
-  const channels = postingChannels.map(toChannelInfo);
-  const keyboard = createChannelSelectKeyboard(channels);
+  const keyboard = createChannelSelectKeyboard(postingChannels);
 
   const promptText = isPureAlbum
     ? `📍 Select target channel for this album (${messages.length} items):`
