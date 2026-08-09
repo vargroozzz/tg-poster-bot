@@ -5,9 +5,14 @@ vi.mock('../../../database/models/custom-text-preset.model.js', () => ({
 }));
 
 const { createTextChoiceKeyboard } = await import('../text-handling.keyboard.js');
+const { flowCallbacks } = await import('../flow-callbacks.js');
 
-const callbacks = async (hasText: boolean, hasBlockquotes: boolean): Promise<string[]> => {
-  const kb = await createTextChoiceKeyboard(hasText, hasBlockquotes);
+const callbacks = async (
+  hasText: boolean,
+  hasBlockquotes: boolean,
+  cb?: Parameters<typeof createTextChoiceKeyboard>[2]
+): Promise<string[]> => {
+  const kb = await createTextChoiceKeyboard(hasText, hasBlockquotes, cb);
   return (kb.inline_keyboard as Array<Array<{ callback_data: string }>>)
     .flat()
     .map((b) => b.callback_data);
@@ -35,6 +40,17 @@ describe('createTextChoiceKeyboard', () => {
       'custom_text:preset:p1',
       'text:remove',
       'custom_text:add',
+    ]);
+  });
+
+  it('renders the same step for the edit flow, with session-keyed callbacks', async () => {
+    const sid = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+    expect(await callbacks(true, false, flowCallbacks('edit', sid))).toEqual([
+      `queue:edit:text:${sid}:keep`,
+      `queue:edit:text:${sid}:quote`,
+      `ec:preset:${sid}:p1`,
+      `queue:edit:text:${sid}:remove`,
+      `queue:edit:custom:${sid}:add`,
     ]);
   });
 

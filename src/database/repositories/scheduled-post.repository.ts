@@ -159,9 +159,19 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
       spoilers?: boolean[];
     }
   ): Promise<IScheduledPost | null> {
+    // Mongoose drops undefined from an update, so a field the edit cleared (customText, once
+    // the user picks the original text again) has to be $unset to actually go away.
+    const entries = Object.entries(updates);
+    const unset = Object.fromEntries(
+      entries.filter(([, value]) => value === undefined).map(([key]) => [key, ''])
+    );
+
     return await this.model.findOneAndUpdate(
       { _id: postId, status: 'pending' },
-      { $set: updates },
+      {
+        $set: Object.fromEntries(entries.filter(([, value]) => value !== undefined)),
+        ...(Object.keys(unset).length > 0 && { $unset: unset }),
+      },
       { new: true }
     );
   }

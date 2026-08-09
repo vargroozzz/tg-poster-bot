@@ -7,7 +7,7 @@ import { transformerService } from '../../../services/transformer.service.js';
 import { extractMessageContent } from '../forward.handler.js';
 import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
 import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyboard.js';
-import { createEditChannelSelectKeyboard } from '../../keyboards/edit-keyboards.js';
+import { flowCallbacks } from '../../keyboards/flow-callbacks.js';
 import { createReplySlotKeyboard } from '../../keyboards/reply-slot.keyboard.js';
 import {
   createAddReplyKeyboard,
@@ -22,7 +22,7 @@ import { logger } from '../../../utils/logger.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
 import { NICKNAME_NONE_KEY } from '../../keyboards/nickname-select.keyboard.js';
 import { findNicknameByUserId } from '../../../shared/helpers/nickname.helper.js';
-import { channelLabel, toChannelInfo } from '../../../shared/helpers/channel.helper.js';
+import { channelLabel } from '../../../shared/helpers/channel.helper.js';
 import { PostSchedulerService } from '../../../core/posting/post-scheduler.service.js';
 import { config } from '../../../config/index.js';
 import {
@@ -46,6 +46,7 @@ import { ScheduledPostRepository } from '../../../database/repositories/schedule
 import { QueueService } from '../../../core/queue/queue.service.js';
 import type { ISession } from '../../../database/models/session.model.js';
 import {
+  actionPrompt,
   getSessionService,
   deletePreviewMessages,
   showPreview,
@@ -930,7 +931,7 @@ export function registerScheduling(): void {
         }
 
         await ctx.api.sendMessage(config.authorizedUserId, '📍 Select target channel:', {
-          reply_markup: createChannelSelectKeyboard(adjustChannels.map(toChannelInfo)),
+          reply_markup: createChannelSelectKeyboard(adjustChannels),
           reply_to_message_id: ownerCopy.message_id,
         });
 
@@ -958,9 +959,8 @@ export function registerScheduling(): void {
           return;
         }
         if (!fromId) return;
-        const keyboard = createEditChannelSelectKeyboard(channels, sessionKey);
         await ctx.api.sendMessage(fromId, '📍 Select target channel:', {
-          reply_markup: keyboard,
+          reply_markup: createChannelSelectKeyboard(channels, flowCallbacks('edit', sessionKey)),
         });
 
         logger.info(`Edit back: re-showing channel select for session ${sessionKey}`);
@@ -985,8 +985,6 @@ export function registerScheduling(): void {
         return;
       }
 
-      const channels = postingChannels.map(toChannelInfo);
-
       const origMsg = session.originalMessage;
       if (!origMsg) return;
 
@@ -994,7 +992,7 @@ export function registerScheduling(): void {
         origMsg.chat.id,
         '📍 Select target channel:',
         {
-          reply_markup: createChannelSelectKeyboard(channels),
+          reply_markup: createChannelSelectKeyboard(postingChannels),
           reply_to_message_id: origMsg.message_id,
         }
       );
@@ -1046,11 +1044,10 @@ export function registerScheduling(): void {
         }
       }
 
-      const keyboard = createForwardActionKeyboard();
-      await ctx.editMessageText(
-        'Choose how to post this reply:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
-        { reply_markup: keyboard, parse_mode: 'HTML' }
-      );
+      await ctx.editMessageText(actionPrompt('reply'), {
+        reply_markup: createForwardActionKeyboard(),
+        parse_mode: 'HTML',
+      });
 
       logger.debug(`Reply slot mode "${mode}" set for session ${sessionId}`);
     } catch (error) {

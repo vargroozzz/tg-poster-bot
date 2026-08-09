@@ -1,6 +1,7 @@
 import { listUserNicknames, getUserNickname } from '../../database/models/user-nickname.model.js';
 import { ScheduledPost } from '../../database/models/scheduled-post.model.js';
 import { createNicknameSelectKeyboard } from '../../bot/keyboards/nickname-select.keyboard.js';
+import type { FlowCallbacks } from '../../bot/keyboards/flow-callbacks.js';
 
 export interface NicknameOption {
   userId: number;
@@ -23,8 +24,8 @@ export async function getNicknameOptions(): Promise<NicknameOption[]> {
     .map(({ userId, nickname }) => ({ userId, nickname }));
 }
 
-export async function getNicknameKeyboard() {
-  return createNicknameSelectKeyboard(await getNicknameOptions());
+export async function getNicknameKeyboard(cb?: FlowCallbacks) {
+  return createNicknameSelectKeyboard(await getNicknameOptions(), cb);
 }
 
 export async function findNicknameByUserId(userId: number): Promise<string | null> {

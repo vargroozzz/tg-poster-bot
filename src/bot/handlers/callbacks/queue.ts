@@ -13,21 +13,24 @@ import { PreviewGeneratorService } from '../../../core/preview/preview-generator
 import { PreviewSenderService } from '../../../core/preview/preview-sender.service.js';
 import { transformerService } from '../../../services/transformer.service.js';
 import { CustomTextPreset } from '../../../database/models/custom-text-preset.model.js';
-import { findNicknameByUserId, getNicknameOptions } from '../../../shared/helpers/nickname.helper.js';
 import { NICKNAME_NONE_KEY } from '../../keyboards/nickname-select.keyboard.js';
 import { createQueueChannelSelectKeyboard } from '../../keyboards/queue-channel-select.keyboard.js';
 import { createQueueListKeyboard } from '../../keyboards/queue-list.keyboard.js';
 import { channelLabel } from '../../../shared/helpers/channel.helper.js';
-import {
-  createEditChannelSelectKeyboard,
-  createEditForwardActionKeyboard,
-  createEditTextHandlingKeyboard,
-  createEditNicknameKeyboard,
-  createEditCustomTextKeyboard,
-} from '../../keyboards/edit-keyboards.js';
+import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyboard.js';
+import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
+import { flowCallbacks } from '../../keyboards/flow-callbacks.js';
 import type { TextHandling } from '../../../types/message.types.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
-import { getSessionService } from './shared.js';
+import {
+  actionPrompt,
+  CUSTOM_TEXT_PROMPT,
+  NICKNAME_PROMPT,
+  TEXT_CHOICE_PROMPT,
+  editNicknameKeyboard,
+  getSessionService,
+  textChoiceKeyboardFor,
+} from './shared.js';
 
 const queueService = new QueueService();
 
@@ -128,29 +131,21 @@ async function showEditPreview(ctx: Context, sessionId: string): Promise<void> {
   }
 }
 
-async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<void> {
-  const sessionSvc = getSessionService();
-  const session = await sessionSvc.findById(sessionId);
-  if (!session) return;
+// Same one-tap step as the post flow: the original text, a custom one, or none.
+async function showEditTextChoiceStep(ctx: Context, sessionId: string): Promise<void> {
+  await ctx.editMessageText(TEXT_CHOICE_PROMPT, {
+    reply_markup: await textChoiceKeyboardFor(sessionId, flowCallbacks('edit', sessionId)),
+  });
+}
 
-  const fromUserId = session.editingOriginalForward?.fromUserId;
-  if (fromUserId) {
-    const autoNickname = await findNicknameByUserId(fromUserId);
-    if (autoNickname) {
-      await sessionSvc.update(sessionId, { selectedUserId: fromUserId });
-      const keyboard = await createEditCustomTextKeyboard(sessionId);
-      await ctx.editMessageText('Do you want to add custom text to this post?', {
-        reply_markup: keyboard,
-      });
-      return;
-    }
+async function showEditNicknameStep(ctx: Context, sessionId: string): Promise<void> {
+  const keyboard = await editNicknameKeyboard(sessionId);
+  if (!keyboard) {
+    await showEditPreview(ctx, sessionId);
+    return;
   }
 
-  const options = await getNicknameOptions();
-  const keyboard = createEditNicknameKeyboard(options, sessionId);
-  await ctx.editMessageText('Who should be credited for this post?', {
-    reply_markup: keyboard,
-  });
+  await ctx.editMessageText(NICKNAME_PROMPT, { reply_markup: keyboard });
 }
 
 export function registerQueue(): void {
@@ -351,9 +346,8 @@ export function registerQueue(): void {
         return;
       }
 
-      const keyboard = createEditChannelSelectKeyboard(channels, sessionId);
       await ctx.api.sendMessage(userId, '📍 Select target channel:', {
-        reply_markup: keyboard,
+        reply_markup: createChannelSelectKeyboard(channels, flowCallbacks('edit', sessionId)),
       });
 
       logger.debug(`Edit session ${sessionId} started for user ${userId}, post ${postId}`);
@@ -386,44 +380,27 @@ export function registerQueue(): void {
         await ctx.reply('❌ Edit session is corrupted. Please start over.');
         return;
       }
-      const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
-      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote') ?? false);
-      const effectiveHasText = hasText && !hasBlockquotes;
-      const isPoll = rawContent.type === 'poll';
 
       await sessionSvc.updateState(sessionId, SessionState.CHANNEL_SELECT, {
         selectedChannel: channelId,
       });
 
-      if (isPoll) {
-        await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
-        await showEditPreview(ctx, sessionId);
-        return;
-      }
-
-      if (isGreenListed) {
+      if (rawContent.type === 'poll' || isGreenListed) {
         await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
         await showEditPreview(ctx, sessionId);
         return;
       }
 
       if (isRedListed) {
-        await sessionSvc.update(sessionId, { selectedAction: 'transform' });
-        if (hasBlockquotes) await sessionSvc.update(sessionId, { textHandling: 'keep' });
-        if (effectiveHasText) {
-          await ctx.editMessageText('How should the text be handled?', {
-            reply_markup: createEditTextHandlingKeyboard(sessionId),
-          });
-        } else {
-          await showEditNicknameStep(ctx, sessionId);
-        }
+        await sessionSvc.updateState(sessionId, SessionState.TEXT_HANDLING, { selectedAction: 'transform' });
+        await showEditTextChoiceStep(ctx, sessionId);
         return;
       }
 
-      await ctx.editMessageText(
-        'Choose how to post this message:\n⚡ <b>Quick post</b> — transform, no attribution, no extra text',
-        { reply_markup: createEditForwardActionKeyboard(sessionId), parse_mode: 'HTML' }
-      );
+      await ctx.editMessageText(actionPrompt(), {
+        reply_markup: createForwardActionKeyboard(flowCallbacks('edit', sessionId)),
+        parse_mode: 'HTML',
+      });
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting channel.', 'queue:edit:ch');
     }
@@ -447,9 +424,6 @@ export function registerQueue(): void {
         await ctx.reply('❌ Edit session is corrupted. Please start over.');
         return;
       }
-      const hasText = !!(rawContent.text && rawContent.text.trim().length > 0);
-      const hasBlockquotes = hasText && (rawContent.text?.includes('<blockquote') ?? false);
-      const effectiveHasText = hasText && !hasBlockquotes;
 
       if (action === 'quick') {
         await sessionSvc.updateState(sessionId, SessionState.PREVIEW, {
@@ -468,15 +442,8 @@ export function registerQueue(): void {
         return;
       }
 
-      if (hasBlockquotes) await sessionSvc.update(sessionId, { selectedAction: 'transform', textHandling: 'keep' });
-      else await sessionSvc.update(sessionId, { selectedAction: 'transform' });
-      if (effectiveHasText) {
-        await ctx.editMessageText('How should the text be handled?', {
-          reply_markup: createEditTextHandlingKeyboard(sessionId),
-        });
-      } else {
-        await showEditNicknameStep(ctx, sessionId);
-      }
+      await sessionSvc.updateState(sessionId, SessionState.TEXT_HANDLING, { selectedAction: 'transform' });
+      await showEditTextChoiceStep(ctx, sessionId);
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting action.', 'queue:edit:action');
     }
@@ -495,8 +462,10 @@ export function registerQueue(): void {
         return;
       }
 
-      await sessionSvc.update(sessionId, {
+      // Picking the original text (or none) drops any custom text the post carried.
+      await sessionSvc.updateState(sessionId, SessionState.NICKNAME_SELECT, {
         textHandling: textHandling as TextHandling,
+        customText: undefined,
       });
       await showEditNicknameStep(ctx, sessionId);
     } catch (error) {
@@ -520,22 +489,18 @@ export function registerQueue(): void {
       const parsedUserId = parseInt(nicknameKey, 10);
       const selectedUserId = nicknameKey === NICKNAME_NONE_KEY || isNaN(parsedUserId) ? null : parsedUserId;
 
-      await sessionSvc.update(sessionId, { selectedUserId });
-
-      const keyboard = await createEditCustomTextKeyboard(sessionId);
-      await ctx.editMessageText('Do you want to add custom text to this post?', {
-        reply_markup: keyboard,
-      });
+      await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { selectedUserId });
+      await showEditPreview(ctx, sessionId);
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting nickname.', 'queue:edit:nickname');
     }
   });
 
-  // queue:edit:custom:{sessionId}:{choice} — custom text choice for edit flow
-  bot.callbackQuery(/^queue:edit:custom:([^:]+):(add|skip)$/, async (ctx: Context) => {
+  // queue:edit:custom:{sessionId}:add — typed custom text for edit flow
+  bot.callbackQuery(/^queue:edit:custom:([^:]+):add$/, async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
-      const [, sessionId, choice] = ctx.match as RegExpExecArray;
+      const [, sessionId] = ctx.match as RegExpExecArray;
 
       const sessionSvc = getSessionService();
       const session = await sessionSvc.findById(sessionId);
@@ -544,17 +509,10 @@ export function registerQueue(): void {
         return;
       }
 
-      if (choice === 'skip') {
-        await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { customText: undefined });
-        await showEditPreview(ctx, sessionId);
-      } else {
-        await sessionSvc.updateState(sessionId, SessionState.CUSTOM_TEXT, {
-          waitingForCustomText: true,
-        });
-        await ctx.editMessageText(
-          '✍️ Reply to this message with your custom text.\n\nThis text will be added at the beginning of your post.'
-        );
-      }
+      await sessionSvc.updateState(sessionId, SessionState.CUSTOM_TEXT, {
+        waitingForCustomText: true,
+      });
+      await ctx.editMessageText(CUSTOM_TEXT_PROMPT);
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error with custom text.', 'queue:edit:custom');
     }
@@ -579,8 +537,12 @@ export function registerQueue(): void {
         return;
       }
 
-      await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { customText: preset.text });
-      await showEditPreview(ctx, sessionId);
+      // A custom text replaces the message's own, exactly as in the post flow.
+      await sessionSvc.updateState(sessionId, SessionState.NICKNAME_SELECT, {
+        customText: preset.text,
+        textHandling: 'remove',
+      });
+      await showEditNicknameStep(ctx, sessionId);
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error selecting preset.', 'ec:preset');
     }
