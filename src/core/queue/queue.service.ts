@@ -34,7 +34,12 @@ export class QueueService {
 
     const { targetChannelId: channelId, scheduledTime: deletedTime } = post;
 
-    await this.repository.delete(postId);
+    // Conditional on the post still being pending: a post the worker published while the
+    // user sat in the queue or the edit flow must not be erased, nor its successors shifted.
+    // ponytail: the worker flips to 'posted' only after sending, so a post going out right
+    // now still reads pending — claim posts up front if that window ever bites.
+    if (!(await this.repository.deletePending(postId))) return null;
+
     await this.repository.shiftPostsEarlier(channelId, deletedTime);
 
     logger.info(`Deleted post ${postId}, shifted later posts for channel ${channelId} by -30 min`);

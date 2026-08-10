@@ -97,6 +97,7 @@ export function createAddReplyKeyboard(postId: string): InlineKeyboardMarkup {
     inline_keyboard: [
       [
         { text: '💬 Add a reply', callback_data: `reply_trigger:${postId}` },
+        { text: '✏️ Edit', callback_data: `queue:edit:${postId}` },
       ],
     ],
   };

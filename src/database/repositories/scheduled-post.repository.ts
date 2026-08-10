@@ -51,6 +51,14 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   /**
    * Mark a post as successfully posted
    */
+  /**
+   * Delete a post only while it is still pending. Returns false once the worker has
+   * published it, so a delete can't erase a post that already went out.
+   */
+  async deletePending(postId: string): Promise<boolean> {
+    return (await this.model.findOneAndDelete({ _id: postId, status: 'pending' })) !== null;
+  }
+
   async markPosted(postId: string, telegramMessageId: number): Promise<void> {
     await this.model.findByIdAndUpdate(postId, {
       status: 'posted',
@@ -230,6 +238,23 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
           status: 'pending',
         },
       }
+    );
+  }
+
+  /**
+   * Re-point replies at a parent that was re-created under a new id (channel move).
+   * They follow the parent's channel — a reply must live in the same chat as the message
+   * it answers.
+   * ponytail: keeps each reply's own slot, which can collide with the new channel's queue.
+   */
+  async reparentSeparatedReplies(
+    oldParentPostId: string,
+    newParentPostId: string,
+    newChannelId: string
+  ): Promise<void> {
+    await this.model.updateMany(
+      { parentPostId: oldParentPostId, status: 'waiting_parent' },
+      { $set: { parentPostId: newParentPostId, targetChannelId: newChannelId } }
     );
   }
 }

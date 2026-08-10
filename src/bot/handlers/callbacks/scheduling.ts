@@ -296,13 +296,23 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     }
 
     await ctx.reply(
-      `✅ Post updated!\nTarget: ${await channelLabelById(editingOriginalChannelId)}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`
+      `✅ Post updated!\nTarget: ${await channelLabelById(editingOriginalChannelId)}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`,
+      { reply_markup: createAddReplyKeyboard(editingPostId) }
     );
   } else {
-    await queueService.deleteAndCascade(editingPostId);
+    // Replies point at the post being replaced, so carry them to its successor below.
+    const movedEmbeddedReply = (await repository.findById(editingPostId))?.embeddedReply;
+
+    // Moving channels is delete + reschedule, so bail if the delete found nothing pending —
+    // scheduling anyway would duplicate a post the worker had already published.
+    if (!(await queueService.deleteAndCascade(editingPostId))) {
+      await finalizePreview(c);
+      await ctx.reply('⚠️ Post was already published — it was not moved.');
+      return;
+    }
 
     const newChannelId = session.selectedChannel ?? editingOriginalChannelId;
-    const { scheduledTime } =
+    const { scheduledTime, postId: movedPostId } =
       session.selectedAction === 'forward'
         ? await postScheduler.scheduleForwardPost({
             targetChannelId: newChannelId,
@@ -320,10 +330,16 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             spoilers: spoilersFor(session),
           });
 
+    if (movedEmbeddedReply) {
+      await repository.attachEmbeddedReply(movedPostId, movedEmbeddedReply);
+    }
+    await repository.reparentSeparatedReplies(editingPostId, movedPostId, newChannelId);
+
     await finalizePreview(c);
 
     await ctx.reply(
-      `✅ Moved to ${await channelLabelById(newChannelId)}\nScheduled for: ${formatSlotTime(scheduledTime)}`
+      `✅ Moved to ${await channelLabelById(newChannelId)}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
+      { reply_markup: createAddReplyKeyboard(movedPostId) }
     );
   }
 
