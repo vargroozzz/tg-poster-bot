@@ -45,6 +45,7 @@ import { PostingChannel, getActivePostingChannels } from '../../../database/mode
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
 import { QueueService } from '../../../core/queue/queue.service.js';
 import type { ISession } from '../../../database/models/session.model.js';
+import { editSeed } from '../../../core/session/session.service.js';
 import {
   actionPrompt,
   getSessionService,
@@ -214,6 +215,24 @@ async function finalizePreview(c: Confirm): Promise<void> {
   await teardownPreviewMessages(c);
   await c.sessionSvc.complete(c.sessionKey);
 }
+
+// Everything a Back drops: the flow restarts at channel selection, so no earlier tap may
+// survive it — including the preview-only toggles, which no later step asks about again.
+// Listed explicitly (not omitted) because updateState turns undefined into a $unset.
+const CLEARED_SELECTIONS: Partial<ISession> = {
+  selectedChannel: undefined,
+  selectedAction: undefined,
+  selectedUserId: undefined,
+  textHandling: undefined,
+  customText: undefined,
+  textAbove: undefined,
+  spoilers: undefined,
+  spoilerMenu: undefined,
+  waitingForCustomText: undefined,
+  previewMessageId: undefined,
+  previewMessageIds: undefined,
+  previewContentMessageId: undefined,
+};
 
 async function channelLabelById(channelId: string): Promise<string> {
   const doc = await PostingChannel.findOne({ channelId }).lean();
@@ -910,18 +929,12 @@ export function registerScheduling(): void {
         // Re-home onto the owner-chat copy and hand ownership to the owner, keeping
         // proposedByUserId so attribution/promotion still target the proposer.
         await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
+          ...CLEARED_SELECTIONS,
           originalMessage: ownerCopy,
           messageId: ownerCopy.message_id,
           chatId: config.authorizedUserId,
           userId: config.authorizedUserId,
           proposalPending: false,
-          selectedChannel: undefined,
-          selectedAction: undefined,
-          selectedUserId: undefined,
-          textHandling: undefined,
-          customText: undefined,
-          previewMessageId: undefined,
-          previewMessageIds: undefined,
         });
 
         const adjustChannels = await getActivePostingChannels();
@@ -941,24 +954,31 @@ export function registerScheduling(): void {
 
       await teardownPreviewMessages(c);
 
-      // Edit sessions: re-send channel selection
+      // Edit sessions: reseed the edit from the stored post, as entering it from /queue does.
+      // Clearing the selections outright would drop what the post already carries (placement,
+      // spoilers) instead of restoring it. The session id stays put so the stale-tap guard
+      // above still swallows a double-tapped Back.
       if (session.editingPostId) {
-        await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
-          selectedChannel: session.editingOriginalChannelId,
-          selectedAction: undefined,
-          textHandling: undefined,
-          selectedUserId: undefined,
-          customText: undefined,
-          previewMessageId: undefined,
-          previewMessageIds: undefined,
-        });
+        if (!fromId) return;
+
+        const post = await new ScheduledPostRepository().findById(session.editingPostId);
+        if (!post || post.status !== 'pending') {
+          await sessionSvc.complete(sessionKey);
+          await ctx.reply('⚠️ This post has left the queue — it was published or deleted.');
+          return;
+        }
 
         const channels = await getActivePostingChannels();
         if (channels.length === 0) {
           await ctx.reply('⚠️ No posting channels configured.');
           return;
         }
-        if (!fromId) return;
+
+        await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
+          ...CLEARED_SELECTIONS,
+          ...editSeed(post),
+        });
+
         await ctx.api.sendMessage(fromId, '📍 Select target channel:', {
           reply_markup: createChannelSelectKeyboard(channels, flowCallbacks('edit', sessionKey)),
         });
@@ -968,15 +988,7 @@ export function registerScheduling(): void {
       }
 
       // Reset session back to channel selection state
-      await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, {
-        selectedChannel: undefined,
-        selectedAction: undefined,
-        selectedUserId: undefined,
-        textHandling: undefined,
-        customText: undefined,
-        previewMessageId: undefined,
-        previewMessageIds: undefined,
-      });
+      await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, CLEARED_SELECTIONS);
 
       // Re-send channel selection keyboard
       const postingChannels = await getActivePostingChannels();

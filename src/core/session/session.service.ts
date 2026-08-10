@@ -6,6 +6,25 @@ import { SessionState } from '../../shared/constants/flow-states.js';
 import { logger } from '../../utils/logger.js';
 
 /**
+ * What an edit session starts from: the post's own settings. Shared by createForEdit and
+ * the preview's Back, which restarts an edit in place rather than blanking it.
+ */
+export const editSeed = (post: IScheduledPost): Partial<ISession> => ({
+  editingPostId: post._id.toString(),
+  editingOriginalChannelId: post.targetChannelId,
+  editingOriginalScheduledTime: post.scheduledTime,
+  editingRawContent: post.rawContent ?? post.content,
+  editingOriginalForward: post.originalForward,
+  selectedChannel: post.targetChannelId,
+  selectedAction: post.action,
+  textHandling: post.textHandling,
+  selectedUserId: post.selectedUserId,
+  customText: post.customText,
+  textAbove: post.textAbove,
+  spoilers: post.spoilers,
+});
+
+/**
  * Service for managing user sessions
  * Replaces in-memory pendingForwards Map with database-backed storage
  */
@@ -49,18 +68,7 @@ export class SessionService {
       messageId: 0,
       chatId: userId,
       state: SessionState.CHANNEL_SELECT,
-      editingPostId: post._id.toString(),
-      editingOriginalChannelId: post.targetChannelId,
-      editingOriginalScheduledTime: post.scheduledTime,
-      editingRawContent: post.rawContent ?? post.content,
-      editingOriginalForward: post.originalForward,
-      selectedChannel: post.targetChannelId,
-      selectedAction: post.action,
-      textHandling: post.textHandling,
-      selectedUserId: post.selectedUserId,
-      customText: post.customText,
-      textAbove: post.textAbove,
-      spoilers: post.spoilers,
+      ...editSeed(post),
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt,
