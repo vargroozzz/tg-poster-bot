@@ -321,6 +321,7 @@ For messages with text/caption, users can choose:
 - `/addnickname <userId> <nickname>` - Add a custom nickname for a user (reply-driven supported)
 - `/listnicknames` - Show all configured nicknames
 - `/removenickname <userId>` - Remove a nickname (reply-driven supported)
+- `/getid [@username]` - Show your own ID, resolve a @username, or reply to a message to get its author/channel ID
 
 ### Sleep Window
 - `/sleep` - View or configure sleep hours (no posts scheduled during this window)
