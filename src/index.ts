@@ -45,6 +45,7 @@ async function main() {
       { command: 'addnickname', description: 'Set nickname for a user' },
       { command: 'removenickname', description: 'Remove nickname for a user' },
       { command: 'listnicknames', description: 'List all configured nicknames' },
+      { command: 'getid', description: 'Get user/channel ID (reply or @username)' },
       { command: 'addpreset', description: 'Add a custom text preset' },
       { command: 'removepreset', description: 'Remove a custom text preset' },
       { command: 'listpresets', description: 'List all custom text presets' },

@@ -23,6 +23,7 @@ import {
   removeCustomTextPreset,
 } from '../../database/models/custom-text-preset.model.js';
 import { parseForwardInfo } from '../../utils/message-parser.js';
+import { escapeHtml } from '../../utils/entities-to-html.js';
 import { createQueueChannelSelectKeyboard } from '../keyboards/queue-channel-select.keyboard.js';
 import { getSleepWindow } from '../../utils/sleep-window.js';
 import { createSleepStatusKeyboard } from '../keyboards/sleep.keyboard.js';
@@ -53,6 +54,7 @@ Commands:
 /addred <channel_id> - Add channel to red list (omit channel reference)
 /addnickname <user_id> <nickname> - Set custom nickname for a user
 /listnicknames - Show all user nicknames
+/getid [@username] - Get user/channel ID (or reply to a message)
 /help - Show this help message${setupMessage}`
   );
 });
@@ -75,6 +77,7 @@ bot.command('help', async (ctx: Context) => {
 /addnickname <user_id> <nickname> - Set custom nickname for a user
 /removenickname <user_id> - Remove user nickname
 /listnicknames - Show all user nicknames
+/getid [@username] - Get user/channel ID (or reply to a message)
 
 💡 How it works:
 1. Add channels with /addchannel (bot must be admin)
@@ -485,6 +488,70 @@ bot.command('listnicknames', async (ctx: Context) => {
     logger.error('Error listing nicknames:', error);
     await ctx.reply('❌ Error fetching nicknames. Please try again.');
   }
+});
+
+bot.command('getid', async (ctx: Context) => {
+  const replied = ctx.message?.reply_to_message;
+  const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
+
+  if (arg) {
+    // ponytail: getChat resolves @username only for chats the bot has seen
+    // (public channels, or users who have messaged it). Nothing else works via Bot API.
+    const chat = await ctx.api.getChat(arg.startsWith('@') ? arg : `@${arg}`).catch((error) => {
+      logger.error(`getChat failed for ${arg}:`, error);
+      return undefined;
+    });
+
+    if (!chat) {
+      await ctx.reply(
+        `❌ Could not resolve ${escapeHtml(arg)}.\n\n` +
+          'Telegram only resolves usernames the bot already knows — public channels, or users who have messaged this bot. ' +
+          'Ask them to send anything here, then reply to it with /getid.',
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    const title = 'title' in chat ? chat.title : [chat.first_name, chat.last_name].filter(Boolean).join(' ');
+    await ctx.reply(
+      `🆔 ${chat.type === 'private' ? '👤' : '📢'} <code>${chat.id}</code>${title ? ` (${escapeHtml(title)})` : ''}`,
+      { parse_mode: 'HTML' }
+    );
+    return;
+  }
+
+  if (!replied) {
+    await ctx.reply(
+      `🆔 Your ID: <code>${ctx.from?.id}</code>\n\n` +
+        '💡 Reply to a message with /getid, or use /getid @username.',
+      { parse_mode: 'HTML' }
+    );
+    return;
+  }
+
+  const info = parseForwardInfo(replied);
+  const origin = replied.forward_origin;
+  // parseForwardInfo only covers user/channel origins; groups live in origin.sender_chat
+  const senderChat = origin?.type === 'chat' ? origin.sender_chat : replied.sender_chat;
+
+  const line =
+    info.fromUserId !== undefined
+      ? `👤 User: <code>${info.fromUserId}</code>${info.fromUsername ? ` (@${info.fromUsername})` : ''}`
+      : info.fromChannelId !== undefined
+        ? `📢 Channel: <code>${info.fromChannelId}</code>${info.fromChannelTitle ? ` (${escapeHtml(info.fromChannelTitle)})` : ''}`
+        : senderChat
+          ? `📢 Chat: <code>${senderChat.id}</code>${'title' in senderChat && senderChat.title ? ` (${escapeHtml(senderChat.title)})` : ''}`
+          : origin?.type === 'hidden_user'
+            ? `🕵️ Hidden sender${origin.sender_user_name ? `: ${escapeHtml(origin.sender_user_name)}` : ''}\n\n` +
+              'Telegram does not expose the ID when the author hides their account. ' +
+              'Try <code>/getid @username</code>, or ask them to send a message to this bot.'
+            : replied.from
+              ? `${replied.from.is_bot ? '🤖 Bot' : '👤 User'}: <code>${replied.from.id}</code>` +
+                `${replied.from.username ? ` (@${replied.from.username})` : ''}` +
+                `${replied.from.is_bot ? '\n\n⚠️ This message was written by a bot, not the original author.' : ''}`
+              : '❌ No user/channel ID in this message.';
+
+  await ctx.reply(`🆔 ${line}`, { parse_mode: 'HTML' });
 });
 
 bot.command('queue', async (ctx: Context) => {
