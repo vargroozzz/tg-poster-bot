@@ -1,6 +1,6 @@
 import { addMinutes } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
-import { ScheduledPost } from '../../database/models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES } from '../../database/models/scheduled-post.model.js';
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
 import { getPostInterval } from '../../utils/post-interval.js';
 import { getSleepWindow, skipSleepWindow, type SleepWindow } from '../../utils/sleep-window.js';
@@ -36,7 +36,7 @@ export class QueueRepackService {
 
   async repackAll(): Promise<{ totalPosts: number; channelCount: number }> {
     const channelIds = (await ScheduledPost.distinct('targetChannelId', {
-      status: 'pending',
+      status: { $in: QUEUED_STATUSES },
     })) as string[];
 
     const counts = await Promise.all(

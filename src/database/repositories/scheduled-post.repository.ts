@@ -1,7 +1,8 @@
 import { BaseRepository } from './base.repository.js';
-import { ScheduledPost, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
 import type { RetryMetadata } from '../models/scheduled-post.model.js';
 import type { MessageContent, TextHandling, TransformAction } from '../../types/message.types.js';
+import { getPostInterval } from '../../utils/post-interval.js';
 
 /**
  * Repository for scheduled posts
@@ -37,13 +38,13 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Find pending posts for a specific channel
+   * Find the posts still holding a slot for a channel (pending + replies waiting on a parent).
    */
   async findPendingByChannel(channelId: string): Promise<IScheduledPost[]> {
     return await this.model
       .find({
         targetChannelId: channelId,
-        status: 'pending',
+        status: { $in: QUEUED_STATUSES },
       })
       .sort({ scheduledTime: 1 });
   }
@@ -52,11 +53,14 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
    * Mark a post as successfully posted
    */
   /**
-   * Delete a post only while it is still pending. Returns false once the worker has
+   * Delete a post only while it still holds a slot. Returns false once the worker has
    * published it, so a delete can't erase a post that already went out.
    */
   async deletePending(postId: string): Promise<boolean> {
-    return (await this.model.findOneAndDelete({ _id: postId, status: 'pending' })) !== null;
+    return (await this.model.findOneAndDelete({
+      _id: postId,
+      status: { $in: QUEUED_STATUSES },
+    })) !== null;
   }
 
   async markPosted(postId: string, telegramMessageId: number): Promise<void> {
@@ -116,7 +120,7 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Find pending posts for a channel with pagination
+   * Find the slot-holding posts for a channel with pagination
    */
   async findPendingByChannelPaginated(
     channelId: string,
@@ -124,34 +128,38 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
     pageSize: number = 5
   ): Promise<IScheduledPost[]> {
     return await this.model
-      .find({ targetChannelId: channelId, status: 'pending' })
+      .find({ targetChannelId: channelId, status: { $in: QUEUED_STATUSES } })
       .sort({ scheduledTime: 1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize);
   }
 
   /**
-   * Count pending posts for a channel
+   * Count the slot-holding posts for a channel
    */
   async countPendingByChannel(channelId: string): Promise<number> {
-    return await this.count({ targetChannelId: channelId, status: 'pending' });
+    return await this.count({ targetChannelId: channelId, status: { $in: QUEUED_STATUSES } });
   }
 
   /**
-   * Shift all pending posts for a channel earlier by 30 minutes
-   * Used to fill the gap after a post is deleted
+   * Close the gap left by a deleted post: pull every later post of the channel back by one
+   * slot. The shift must use the channel's own interval — a fixed 30 minutes would land a
+   * 15-minute queue in the past and a 60-minute queue on top of the deleted slot.
+   * ponytail: a plain subtraction can land a post inside the sleep window; /repack fixes it.
    */
   async shiftPostsEarlier(channelId: string, afterTime: Date): Promise<void> {
+    const intervalMinutes = await getPostInterval(channelId);
+
     await this.model.updateMany(
-      { targetChannelId: channelId, status: 'pending', scheduledTime: { $gt: afterTime } },
-      [{ $set: { scheduledTime: { $subtract: ['$scheduledTime', 30 * 60 * 1000] } } }]
+      { targetChannelId: channelId, status: { $in: QUEUED_STATUSES }, scheduledTime: { $gt: afterTime } },
+      [{ $set: { scheduledTime: { $subtract: ['$scheduledTime', intervalMinutes * 60 * 1000] } } }]
     );
   }
 
   /**
    * Update content and scheduling parameters of a pending post in-place.
    * scheduledTime is intentionally not touched.
-   * Only updates posts with status 'pending' to prevent updating already-published posts.
+   * Only updates a post that still holds a slot, so an already-published post is never touched.
    * Returns the updated document if successful, or null if the post was already published.
    */
   async updatePost(
@@ -175,7 +183,7 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
     );
 
     return await this.model.findOneAndUpdate(
-      { _id: postId, status: 'pending' },
+      { _id: postId, status: { $in: QUEUED_STATUSES } },
       {
         $set: Object.fromEntries(entries.filter(([, value]) => value !== undefined)),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
@@ -185,15 +193,15 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Set embeddedReply on a pending parent post.
-   * Only updates posts with status 'pending' — returns null if already published.
+   * Set embeddedReply on a parent post that still holds a slot.
+   * Returns null if the post was already published.
    */
   async attachEmbeddedReply(
     parentPostId: string,
     replyData: EmbeddedReplyData
   ): Promise<IScheduledPost | null> {
     return await this.model.findOneAndUpdate(
-      { _id: parentPostId, status: 'pending' },
+      { _id: parentPostId, status: { $in: QUEUED_STATUSES } },
       { $set: { embeddedReply: replyData } },
       { new: true }
     );

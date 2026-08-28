@@ -1,6 +1,6 @@
 import { addMinutes, setMinutes, setSeconds, setMilliseconds } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
-import { ScheduledPost } from '../database/models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES } from '../database/models/scheduled-post.model.js';
 import { config } from '../config/index.js';
 import { logger } from './logger.js';
 import { getSleepWindow, skipSleepWindow } from './sleep-window.js';
@@ -25,7 +25,7 @@ export async function findNextAvailableSlot(targetChannelId: string): Promise<Da
   const nextSlotAfterNow = sleepWindow ? skipSleepWindow(rawNextSlot, sleepWindow) : rawNextSlot;
 
   const latestPending = await ScheduledPost
-    .findOne({ targetChannelId, status: 'pending' })
+    .findOne({ targetChannelId, status: { $in: QUEUED_STATUSES } })
     .sort({ scheduledTime: -1 });
 
   if (latestPending && latestPending.scheduledTime >= nextSlotAfterNow) {
