@@ -42,7 +42,7 @@ export class QueueService {
 
     await this.repository.shiftPostsEarlier(channelId, deletedTime);
 
-    logger.info(`Deleted post ${postId}, shifted later posts for channel ${channelId} by -30 min`);
+    logger.info(`Deleted post ${postId}, shifted later posts for channel ${channelId} back one slot`);
     return { channelId, deletedTime };
   }
 
