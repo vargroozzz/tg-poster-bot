@@ -133,3 +133,23 @@ describe('parseForwardInfo — forward_origin with external_reply', () => {
     expect(result.replyParameters).toEqual({ chatId: -4001, messageId: 99 });
   });
 });
+
+describe('parseForwardInfo — quotes', () => {
+  const quote = { text: 'part', position: 3, entities: [{ type: 'bold' as const, offset: 0, length: 4 }] };
+  const channel = { id: -1001, type: 'channel' as const, title: 'Test Chan' };
+
+  it('keeps the quote of an external_reply in replyParameters', () => {
+    const msg = makeBase({
+      external_reply: { origin: { type: 'channel', date: 0, chat: channel, message_id: 42 }, chat: channel, message_id: 42 },
+      quote,
+    });
+    expect(parseForwardInfo(msg).replyParameters).toEqual({ chatId: -1001, messageId: 42, quote });
+  });
+
+  it('keeps an in-chat quote-reply as replyQuote', () => {
+    const msg = makeBase({ reply_to_message: makeBase({ message_id: 5 }) as Message['reply_to_message'], quote });
+    const result = parseForwardInfo(msg);
+    expect(result.replyQuote).toEqual(quote);
+    expect(result.replyParameters).toBeUndefined();
+  });
+});

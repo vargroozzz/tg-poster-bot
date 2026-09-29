@@ -1,12 +1,22 @@
-import { Message } from 'grammy/types';
-import type { ForwardInfo } from '../types/message.types.js';
+import type { Message, TextQuote } from 'grammy/types';
+import type { ForwardInfo, ReplyQuote } from '../types/message.types.js';
 import { logger } from './logger.js';
 
-/** Extract reply-to parameters from external_reply, if available. */
-function extractReplyParameters(message: Message): { chatId: number; messageId: number } | undefined {
+const toReplyQuote = ({ text, position, entities }: TextQuote): ReplyQuote => ({
+  text,
+  position,
+  ...(entities ? { entities } : {}),
+});
+
+/** Extract reply-to parameters (and the quoted fragment, if any) from external_reply. */
+function extractReplyParameters(message: Message): ForwardInfo['replyParameters'] {
   const ext = message.external_reply;
   if (ext?.chat && ext.message_id !== undefined) {
-    return { chatId: ext.chat.id, messageId: ext.message_id };
+    return {
+      chatId: ext.chat.id,
+      messageId: ext.message_id,
+      ...(message.quote ? { quote: toReplyQuote(message.quote) } : {}),
+    };
   }
   return undefined;
 }
@@ -30,7 +40,10 @@ export function parseForwardInfo(message: Message): ForwardInfo {
     }
 
     logger.debug('Non-forwarded message, using original message info');
-    return base;
+    // A quote-reply to one of the bot's own messages — on 💬 Add reply, that's the parent's text.
+    return message.quote && message.reply_to_message
+      ? { ...base, replyQuote: toReplyQuote(message.quote) }
+      : base;
   }
 
   const origin = message.forward_origin;

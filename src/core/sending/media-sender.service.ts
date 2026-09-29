@@ -1,12 +1,23 @@
 import { Api } from 'grammy';
-import type { MessageContent, MediaGroupItem } from '../../types/message.types.js';
+import type { ReplyParameters } from 'grammy/types';
+import type { MessageContent, MediaGroupItem, ReplyQuote } from '../../types/message.types.js';
 
-type ReplyParams = { chatId: number; messageId: number };
+export type ReplyParams = { chatId: number; messageId: number; quote?: ReplyQuote };
+
+export const toReplyParameters = ({ chatId, messageId, quote }: ReplyParams): ReplyParameters => ({
+  message_id: messageId,
+  chat_id: chatId,
+  ...(quote
+    ? {
+        quote: quote.text,
+        quote_position: quote.position,
+        ...(quote.entities ? { quote_entities: quote.entities } : {}),
+      }
+    : {}),
+});
 
 const replyOpts = (replyParameters?: ReplyParams) =>
-  replyParameters
-    ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-    : {};
+  replyParameters ? { reply_parameters: toReplyParameters(replyParameters) } : {};
 
 // Telegram's show_caption_above_media only exists on photo, video and animation (and on
 // those same types inside an album, where only the first item carries the caption).
@@ -102,9 +113,7 @@ export class MediaSenderService {
       parse_mode: 'HTML',
       ...(hasSpoiler ? { has_spoiler: true } : {}),
       ...(textAbove ? { show_caption_above_media: true } : {}),
-      ...(replyParameters
-        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-        : {}),
+      ...replyOpts(replyParameters),
     });
     return result.message_id;
   }
@@ -122,9 +131,7 @@ export class MediaSenderService {
       parse_mode: 'HTML',
       ...(hasSpoiler ? { has_spoiler: true } : {}),
       ...(textAbove ? { show_caption_above_media: true } : {}),
-      ...(replyParameters
-        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-        : {}),
+      ...replyOpts(replyParameters),
     });
     return result.message_id;
   }
@@ -138,9 +145,7 @@ export class MediaSenderService {
     const result = await this.api.sendDocument(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
-      ...(replyParameters
-        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-        : {}),
+      ...replyOpts(replyParameters),
     });
     return result.message_id;
   }
@@ -158,9 +163,7 @@ export class MediaSenderService {
       parse_mode: 'HTML',
       ...(hasSpoiler ? { has_spoiler: true } : {}),
       ...(textAbove ? { show_caption_above_media: true } : {}),
-      ...(replyParameters
-        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-        : {}),
+      ...replyOpts(replyParameters),
     });
     return result.message_id;
   }
@@ -174,9 +177,7 @@ export class MediaSenderService {
     const result = await this.api.sendVoice(chatId, fileId, {
       caption,
       parse_mode: 'HTML',
-      ...(replyParameters
-        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-        : {}),
+      ...replyOpts(replyParameters),
     });
     return result.message_id;
   }
@@ -204,9 +205,7 @@ export class MediaSenderService {
     const result = await this.api.sendMessage(chatId, text, {
       parse_mode: 'HTML',
       link_preview_options: linkPreviewOptions ?? { is_disabled: true },
-      ...(replyParameters
-        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-        : {}),
+      ...replyOpts(replyParameters),
     });
     return result.message_id;
   }
@@ -248,9 +247,7 @@ export class MediaSenderService {
     }));
 
     const result = await this.api.sendMediaGroup(chatId, media, {
-      ...(replyParameters
-        ? { reply_parameters: { message_id: replyParameters.messageId, chat_id: replyParameters.chatId } }
-        : {}),
+      ...replyOpts(replyParameters),
     });
     return result.map((m) => m.message_id);
   }

@@ -1,4 +1,11 @@
-import type { Message } from 'grammy/types';
+import type { Message, MessageEntity } from 'grammy/types';
+
+/** A highlighted fragment of the replied-to message (Telegram's quote-reply). */
+export interface ReplyQuote {
+  text: string;
+  position: number;
+  entities?: MessageEntity[];
+}
 
 export interface ForwardInfo {
   messageId: number;
@@ -11,7 +18,9 @@ export interface ForwardInfo {
   messageLink?: string;
   mediaGroupMessageIds?: number[]; // For forwarding entire albums
   replyChainMessageIds?: number[]; // For reply chains
-  replyParameters?: { chatId: number; messageId: number }; // For cross-chat reply posting
+  replyParameters?: { chatId: number; messageId: number; quote?: ReplyQuote }; // For cross-chat reply posting
+  // Quote of an in-chat message (the parent post's text the bot sent on 💬 Add reply)
+  replyQuote?: ReplyQuote;
 }
 
 export interface MediaGroupItem {

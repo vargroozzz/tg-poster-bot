@@ -77,7 +77,9 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     replyParameters: {
       chatId: Number,
       messageId: Number,
+      quote: Schema.Types.Mixed,
     },
+    replyQuote: Schema.Types.Mixed,
   },
   content: {
     type: {

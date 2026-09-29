@@ -30,6 +30,8 @@ export interface ISession extends Document, PostSelections {
   proposedByUserId?: number;
   replyParentPostId?: string;
   replyMode?: 'together' | 'separated';
+  // The bot's echo of the parent's text on 💬 Add reply — only a quote of this message is kept.
+  replyQuoteSourceId?: number;
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date;
@@ -96,6 +98,7 @@ const sessionSchema = new Schema<ISession>({
   proposedByUserId: { type: Number },
   replyParentPostId: { type: String },
   replyMode: { type: String, enum: ['together', 'separated'] },
+  replyQuoteSourceId: { type: Number },
   createdAt: {
     type: Date,
     default: Date.now,

@@ -1,7 +1,12 @@
 import { Api } from 'grammy';
 import type { IScheduledPost, EmbeddedReplyData } from '../../database/models/scheduled-post.model.js';
-import { MediaSenderService } from '../sending/media-sender.service.js';
+import { MediaSenderService, toReplyParameters } from '../sending/media-sender.service.js';
 import { withSpoilers } from '../sending/spoilers.js';
+import { logger } from '../../utils/logger.js';
+
+// Telegram rejects a quote it can't find in the replied-to message (e.g. the parent was edited
+// after the reply was queued). Post without the quote rather than failing the post.
+const QUOTE_ERROR = /QUOTE/;
 
 /**
  * Service for publishing posts to Telegram
@@ -19,16 +24,36 @@ export class PostPublisherService {
    * Returns the Telegram message ID of the published message
    */
   async publish(post: IScheduledPost): Promise<number> {
+    const hasQuote = !!(post.originalForward.replyQuote ?? post.originalForward.replyParameters?.quote);
+    return this.withQuoteFallback(hasQuote, (quoted) => this.publishOnce(post, quoted));
+  }
+
+  private async withQuoteFallback(hasQuote: boolean, send: (quoted: boolean) => Promise<number>): Promise<number> {
+    try {
+      return await send(hasQuote);
+    } catch (error) {
+      if (!(hasQuote && error instanceof Error && QUOTE_ERROR.test(error.message))) throw error;
+      logger.warn(`Reply quote rejected (${error.message}), posting without it`);
+      return await send(false);
+    }
+  }
+
+  private async publishOnce(post: IScheduledPost, quoted: boolean): Promise<number> {
     // For 'forward' action, use forwardMessage to preserve "Forwarded from" attribution
     if (post.action === 'forward') {
-      return await this.copyMessage(post);
+      return await this.copyMessage(post, quoted);
     }
 
     // For 'transform' action, thread reply_parameters from separated reply or forward origin
+    const origin = post.originalForward.replyParameters;
     const replyParams =
       post.replyToMessageId && post.replyToChannelId
-        ? { messageId: post.replyToMessageId, chatId: parseInt(post.replyToChannelId, 10) }
-        : post.originalForward.replyParameters;
+        ? {
+            messageId: post.replyToMessageId,
+            chatId: parseInt(post.replyToChannelId, 10),
+            quote: quoted ? post.originalForward.replyQuote : undefined,
+          }
+        : origin && { chatId: origin.chatId, messageId: origin.messageId, quote: quoted ? origin.quote : undefined };
 
     return await this.mediaSender.sendMessage(
       post.targetChannelId,
@@ -48,15 +73,30 @@ export class PostPublisherService {
     parentMessageId: number,
     parentChannelId: string
   ): Promise<number> {
+    return this.withQuoteFallback(!!reply.originalForward.replyQuote, (quoted) =>
+      this.publishEmbeddedReplyOnce(reply, parentMessageId, parentChannelId, quoted)
+    );
+  }
+
+  private async publishEmbeddedReplyOnce(
+    reply: EmbeddedReplyData,
+    parentMessageId: number,
+    parentChannelId: string,
+    quoted: boolean
+  ): Promise<number> {
     const parentChatId = parseInt(parentChannelId, 10);
-    const replyParams = { messageId: parentMessageId, chatId: parentChatId };
+    const replyParams = {
+      messageId: parentMessageId,
+      chatId: parentChatId,
+      quote: quoted ? reply.originalForward.replyQuote : undefined,
+    };
 
     if (reply.action === 'forward') {
       const result = await this.api.copyMessage(
         reply.targetChannelId,
         reply.originalForward.chatId,
         reply.originalForward.messageId,
-        { reply_parameters: { message_id: parentMessageId, chat_id: parentChatId } }
+        { reply_parameters: toReplyParameters(replyParams) }
       );
       return result.message_id;
     }
@@ -74,7 +114,7 @@ export class PostPublisherService {
    * This preserves the "Forwarded from" attribution
    * For media groups, forwards all messages atomically to preserve the album
    */
-  private async copyMessage(post: IScheduledPost): Promise<number> {
+  private async copyMessage(post: IScheduledPost, quoted: boolean): Promise<number> {
     if (!post.originalForward.chatId || !post.originalForward.messageId) {
       throw new Error('Missing chatId or messageId for forwardMessage');
     }
@@ -106,10 +146,11 @@ export class PostPublisherService {
         post.originalForward.chatId,
         post.originalForward.messageId,
         {
-          reply_parameters: {
-            message_id: post.replyToMessageId,
-            chat_id: parseInt(post.replyToChannelId, 10),
-          },
+          reply_parameters: toReplyParameters({
+            messageId: post.replyToMessageId,
+            chatId: parseInt(post.replyToChannelId, 10),
+            quote: quoted ? post.originalForward.replyQuote : undefined,
+          }),
         }
       );
       return result.message_id;

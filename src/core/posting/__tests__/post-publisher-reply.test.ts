@@ -68,3 +68,32 @@ describe('PostPublisherService.publishEmbeddedReply', () => {
     );
   });
 });
+
+describe('PostPublisherService reply quotes', () => {
+  const quote = { text: 'part', position: 3 };
+  const replyData: EmbeddedReplyData = {
+    targetChannelId: '-1001111',
+    content: { type: 'text', text: 'hello reply' },
+    action: 'transform',
+    originalForward: { messageId: 1, chatId: 100, replyQuote: quote },
+  };
+
+  it('quotes the parent', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 42 });
+    await new PostPublisherService({ sendMessage } as unknown as Api).publishEmbeddedReply(replyData, 99, '-1002222');
+    expect(sendMessage).toHaveBeenCalledWith('-1001111', 'hello reply', expect.objectContaining({
+      reply_parameters: { message_id: 99, chat_id: -1002222, quote: 'part', quote_position: 3 },
+    }));
+  });
+
+  it('retries without the quote when Telegram rejects it', async () => {
+    const sendMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('Call to sendMessage failed! (400: Bad Request: QUOTE_TEXT_INVALID)'))
+      .mockResolvedValue({ message_id: 43 });
+    const msgId = await new PostPublisherService({ sendMessage } as unknown as Api).publishEmbeddedReply(replyData, 99, '-1002222');
+    expect(msgId).toBe(43);
+    expect(sendMessage).toHaveBeenLastCalledWith('-1001111', 'hello reply', expect.objectContaining({
+      reply_parameters: { message_id: 99, chat_id: -1002222 },
+    }));
+  });
+});

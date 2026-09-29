@@ -36,9 +36,15 @@ async function handleReplyContent(
 ): Promise<void> {
   const sessionId = replySession._id.toString();
 
+  // Only a quote of the parent's echo applies to the parent; drop one taken from any other message.
+  const quotesParent =
+    message.external_reply !== undefined ||
+    message.reply_to_message?.message_id === replySession.replyQuoteSourceId;
+  const content = quotesParent ? message : { ...message, quote: undefined };
+
   // Update session: set the real message, advance to CHANNEL_SELECT
   await sessionSvc.updateState(sessionId, SessionState.CHANNEL_SELECT, {
-    originalMessage: message,
+    originalMessage: content,
     messageId: message.message_id,
     chatId: message.chat.id,
   });
@@ -157,6 +163,9 @@ bot.on('message:text').filter(
     }
 
     const sessionSvc = getSessionService();
+    // A pending 💬 Add reply takes precedence: the user is quote-replying to the parent's echo.
+    if (await sessionSvc?.findWaitingForReplyContent(userId)) return next();
+
     const session = await sessionSvc?.findWaitingForCustomText(userId) ?? undefined;
     if (!session || !sessionSvc) return next(); // No active session — pass through to main handler
 
