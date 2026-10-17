@@ -43,6 +43,10 @@ interface QueuePreviewState {
 
 const queuePreviewStateMap = new Map<number, QueuePreviewState>();
 
+/** The first message of the queue preview on screen — the post as it will appear in the channel. */
+export const queuePreviewMessageId = (userId: number): number | undefined =>
+  queuePreviewStateMap.get(userId)?.previewMessageIds[0];
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 async function renderQueuePage(

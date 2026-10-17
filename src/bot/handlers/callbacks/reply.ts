@@ -3,96 +3,107 @@ import { Context } from 'grammy';
 import { bot } from '../../bot.js';
 import { logger } from '../../../utils/logger.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
+import { REPLY_CALLBACK_PATTERN, REPLY_FROM_QUEUE } from '../../../shared/constants/reply-callbacks.js';
 import { getSessionService } from './shared.js';
+import { queuePreviewMessageId } from './queue.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
+import type { IScheduledPost } from '../../../database/models/scheduled-post.model.js';
+import { MediaSenderService } from '../../../core/sending/media-sender.service.js';
+import { withSpoilers } from '../../../core/sending/spoilers.js';
+
+const REPLY_PROMPT = '💬 Send the content for this reply. You can forward a message or send any media/text.';
 
 // Content types whose text is actually shown in the channel (stickers, dice, polls… aren't).
 const QUOTABLE_TYPES = ['text', 'photo', 'video', 'document', 'animation', 'voice', 'audio', 'media_group'];
 
-// Sends the parent's text as its own message so the user can quote-reply a fragment of it:
-// the quote's text and position then match the parent as it is posted in the channel.
-async function promptForReply(ctx: Context, sessionId: string, parentPostId: string): Promise<void> {
-  await ctx.reply('💬 Send the content for this reply. You can forward a message or send any media/text.');
+type QuoteOffer = 'sent' | 'shown' | 'no_text' | 'bulk_forward' | 'failed';
 
-  try {
-    const parent = await new ScheduledPostRepository().findById(parentPostId);
-    const text = parent?.content.text;
-    // A forwarded album/thread is replied to via its first message, which may not hold the text.
-    const bulk =
-      parent?.action === 'forward' &&
-      ((parent.originalForward.mediaGroupMessageIds?.length ?? 0) > 1 ||
-        (parent.originalForward.replyChainMessageIds?.length ?? 0) > 1);
-    if (!parent || !text || bulk || !QUOTABLE_TYPES.includes(parent.content.type)) return;
+const PROMPTS: Record<QuoteOffer | 'plain', string> = {
+  plain: REPLY_PROMPT,
+  sent: '❝ Select text in the post above and reply to it with your content.',
+  shown: '❝ Select text in the post preview above and reply to it with your content.',
+  no_text: `This post has no text to quote.\n\n${REPLY_PROMPT}`,
+  bulk_forward: `Quoting isn't supported for forwarded albums and threads.\n\n${REPLY_PROMPT}`,
+  failed: `⚠️ Quoting isn't available right now.\n\n${REPLY_PROMPT}`,
+};
 
-    const echo = await ctx.reply(text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-    await getSessionService().update(sessionId, { replyQuoteSourceId: echo.message_id });
-    await ctx.reply('❝ To quote part of the post, select text in the message above and reply to it with your content.');
-  } catch (error) {
-    // The reply session is already live — quoting is optional, so don't report the flow as failed.
-    logger.warn('Could not offer a quote of the parent post:', error);
+// Gives the user the parent post as it will appear in the channel to quote-reply a fragment of:
+// the quote's text and position then match the parent once it is posted. From /queue the preview
+// is already on screen, so that is reused; otherwise the post is sent.
+async function offerPostToQuote(
+  ctx: Context,
+  userId: number,
+  sessionId: string,
+  parent: IScheduledPost,
+  fromQueue: boolean
+): Promise<QuoteOffer> {
+  if (!parent.content.text || !QUOTABLE_TYPES.includes(parent.content.type)) return 'no_text';
+
+  const { action, originalForward: origin } = parent;
+  // A forwarded album/thread is replied to via its first message, which may not hold the text.
+  if (
+    action === 'forward' &&
+    ((origin.mediaGroupMessageIds?.length ?? 0) > 1 || (origin.replyChainMessageIds?.length ?? 0) > 1)
+  ) {
+    return 'bulk_forward';
   }
+
+  const previewId = fromQueue ? queuePreviewMessageId(userId) : undefined;
+  // A forward is posted with forwardMessage, so show exactly that rather than a re-render.
+  const sourceId =
+    previewId ??
+    (action === 'forward'
+      ? (await ctx.api.forwardMessage(userId, origin.chatId, origin.messageId)).message_id
+      : await new MediaSenderService(ctx.api).sendMessage(
+          userId,
+          withSpoilers(parent.content, parent.spoilers),
+          undefined,
+          parent.textAbove
+        ));
+  await getSessionService().update(sessionId, { replyQuoteSourceId: sourceId });
+  return previewId ? 'shown' : 'sent';
 }
 
 export function registerReply(): void {
 
-  // Triggered from post confirmation message after scheduling
-  bot.callbackQuery(/^reply_trigger:(.+)$/, async (ctx: Context) => {
+  // 💬 Add reply — from the scheduled-post confirmation or the queue preview.
+  // The quoted variant first offers the post itself to quote-reply to.
+  bot.callbackQuery(REPLY_CALLBACK_PATTERN, async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
 
-      const parentPostId = ctx.callbackQuery?.data?.match(/^reply_trigger:(.+)$/)?.[1];
-      if (!parentPostId) {
-        await ctx.answerCallbackQuery({ text: 'Invalid post reference.' });
+      const [, source, quoted, parentPostId] = ctx.match ?? [];
+      const fromId = ctx.from?.id;
+      if (!parentPostId || !fromId) return;
+
+      const parent = await new ScheduledPostRepository().findById(parentPostId);
+      if (!parent) {
+        await ctx.reply('❌ Post not found — it may have already been published or deleted.');
         return;
       }
 
-      const fromId = ctx.from?.id;
-      if (!fromId) return;
-
-      const sessionSvc = getSessionService();
-      const session = await sessionSvc.createForReply(fromId, parentPostId);
-
+      const session = await getSessionService().createForReply(fromId, parentPostId);
       await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
-      await promptForReply(ctx, session._id.toString(), parentPostId);
 
-      logger.debug(`Reply session created for user ${fromId}, parent post ${parentPostId}`);
+      const offer = quoted
+        ? await offerPostToQuote(ctx, fromId, session._id.toString(), parent, source === REPLY_FROM_QUEUE).catch(
+            (error: unknown) => {
+              // The reply session is already live — quoting is optional, so don't fail the flow.
+              logger.warn('Could not offer the post to quote:', error);
+              return 'failed' as const;
+            }
+          )
+        : 'plain';
+
+      await ctx.reply(PROMPTS[offer]);
+
+      logger.debug(`Reply session created for user ${fromId}, parent post ${parentPostId}, quote: ${offer}`);
     } catch (error) {
       await ErrorMessages.catchAndReply(
         ctx,
         error,
         'Failed to start reply flow. Please try again.',
-        'Error in reply_trigger callback'
-      );
-    }
-  });
-
-  // Triggered from queue preview action keyboard
-  bot.callbackQuery(/^queue_reply:(.+)$/, async (ctx: Context) => {
-    try {
-      await ctx.answerCallbackQuery().catch(() => {});
-
-      const postId = ctx.callbackQuery?.data?.match(/^queue_reply:(.+)$/)?.[1];
-      if (!postId) {
-        await ctx.answerCallbackQuery({ text: 'Invalid post reference.' });
-        return;
-      }
-
-      const fromId = ctx.from?.id;
-      if (!fromId) return;
-
-      const sessionSvc = getSessionService();
-      const session = await sessionSvc.createForReply(fromId, postId);
-
-      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
-      await promptForReply(ctx, session._id.toString(), postId);
-
-      logger.debug(`Reply session created from queue for user ${fromId}, post ${postId}`);
-    } catch (error) {
-      await ErrorMessages.catchAndReply(
-        ctx,
-        error,
-        'Failed to start reply flow. Please try again.',
-        'Error in queue_reply callback'
+        'Error in add reply callback'
       );
     }
   });
