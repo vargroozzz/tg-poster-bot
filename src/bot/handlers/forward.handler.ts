@@ -1,5 +1,5 @@
 import { Context, NextFunction } from 'grammy';
-import { Message } from 'grammy/types';
+import type { InlineKeyboardMarkup, Message } from 'grammy/types';
 import { parseForwardInfo } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { createChannelSelectKeyboard } from '../keyboards/channel-select.keyboard.js';
@@ -17,8 +17,17 @@ import { entitiesToHtml } from '../../utils/entities-to-html.js';
 import { config } from '../../config/index.js';
 import { getUserNickname } from '../../database/models/user-nickname.model.js';
 import { getNicknameKeyboard } from '../../shared/helpers/nickname.helper.js';
-import { NICKNAME_PROMPT, editNicknameKeyboard, knownCredit } from './callbacks/shared.js';
+import {
+  NICKNAME_PROMPT,
+  actionPrompt,
+  editNicknameKeyboard,
+  knownCredit,
+  showPreview,
+} from './callbacks/shared.js';
+import { startPublishedReply } from './callbacks/reply.js';
+import { createForwardActionKeyboard } from '../keyboards/forward-action.keyboard.js';
 import { transition } from '../../core/session/session-state-machine.js';
+import { publishedReplyTarget } from '../../core/session/preview-route.js';
 
 let _sessionService: SessionService | undefined;
 const getSessionService = (): SessionService => {
@@ -42,6 +51,21 @@ async function handleReplyContent(
     message.reply_to_message?.message_id === replySession.replyQuoteSourceId;
   const content = quotesParent ? message : { ...message, quote: undefined };
 
+  // A reply to a published post goes in that post's channel, in its own slot — no choices left.
+  const published = publishedReplyTarget(replySession);
+  if (published) {
+    await sessionSvc.updateState(sessionId, SessionState.ACTION_SELECT, {
+      originalMessage: content,
+      messageId: message.message_id,
+      chatId: message.chat.id,
+      selectedChannel: published.replyToChannelId,
+    });
+    await promptReplyAction(ctx, sessionId, content, false, (text, other) =>
+      ctx.reply(text, { ...other, reply_to_message_id: message.message_id })
+    );
+    return;
+  }
+
   // Update session: set the real message, advance to CHANNEL_SELECT
   await sessionSvc.updateState(sessionId, SessionState.CHANNEL_SELECT, {
     originalMessage: content,
@@ -59,6 +83,31 @@ async function handleReplyContent(
   await ctx.reply('Choose the target channel for this reply:', {
     reply_markup: keyboard,
     reply_to_message_id: message.message_id,
+  });
+}
+
+/**
+ * The action step of a reply. No green-list auto-forward and no Forward button: a reply can't
+ * be forwarded (see forward-action.keyboard). A poll can't be transformed, so it stays
+ * 'forward', is posted as a copy, and goes straight to the preview. `onControl` says whether
+ * ctx's message is a live control message (button tap) the preview replaces.
+ */
+export async function promptReplyAction(
+  ctx: Context,
+  sessionId: string,
+  originalMessage: Message | undefined,
+  onControl: boolean,
+  show: (text: string, other: { reply_markup: InlineKeyboardMarkup; parse_mode: 'HTML' }) => Promise<unknown>
+): Promise<void> {
+  if (originalMessage && extractMessageContent(originalMessage)?.type === 'poll') {
+    await getSessionService().update(sessionId, { selectedAction: 'forward' });
+    await showPreview(ctx, sessionId, onControl);
+    return;
+  }
+
+  await show(actionPrompt('reply'), {
+    reply_markup: createForwardActionKeyboard(undefined, true),
+    parse_mode: 'HTML',
   });
 }
 
@@ -446,6 +495,15 @@ bot.on([
 });
 
 async function processSingleMessage(ctx: Context, message: Message) {
+  // A pasted link to a post in a posting channel starts a reply to that published post. It
+  // replaces a reply still waiting for content: an abandoned 💬 Add reply lives for a day and
+  // would otherwise swallow the link as text, while the bot's answer here says what happened.
+  const tookLink = await startPublishedReply(ctx, message).catch((error: unknown) => {
+    logger.error('Error starting a published-post reply:', error);
+    return false; // fall through to normal processing
+  });
+  if (tookLink) return;
+
   // Check for a reply session waiting for content before starting a new standalone session
   try {
     const userId = ctx.from?.id;

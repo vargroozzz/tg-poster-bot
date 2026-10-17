@@ -87,6 +87,8 @@ bot.command('help', async (ctx: Context) => {
 5. Choose "Transform & Schedule" or "Forward As-Is"
 6. Posts are scheduled to the nearest hh:00:01 or hh:30:01 time slot
 
+↩️ Reply to a published post: send me its link (Copy post link in the channel), then the reply content.
+
 🕐 Timezone: Europe/Kyiv`
   );
 });

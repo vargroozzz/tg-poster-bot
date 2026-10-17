@@ -1,4 +1,5 @@
 import type { ISession } from '../../database/models/session.model.js';
+import type { ReplyTarget } from '../posting/post-scheduler.service.js';
 
 /**
  * Which path `preview:schedule` takes when the user confirms. Pure function of
@@ -14,6 +15,7 @@ export type ScheduleRoute =
   | 'edit-move-channel'
   | 'reply-together'
   | 'reply-separated'
+  | 'reply-published'
   | 'normal';
 
 /**
@@ -55,12 +57,20 @@ export function spoilersFor(session: ISession): boolean[] | undefined {
   return session.selectedAction === 'forward' ? undefined : session.spoilers;
 }
 
+/** The published post this reply session answers (from a pasted post link), if it is one. */
+export function publishedReplyTarget(session: ISession): ReplyTarget | undefined {
+  const { isReply, replyToChannelId, replyToMessageId } = session;
+  return isReply && replyToChannelId && replyToMessageId ? { replyToChannelId, replyToMessageId } : undefined;
+}
+
 export function classifyScheduleConfirm(session: ISession): ScheduleRoute {
   if (session.editingPostId) {
     return session.selectedChannel === session.editingOriginalChannelId
       ? 'edit-same-channel'
       : 'edit-move-channel';
   }
+
+  if (publishedReplyTarget(session)) return 'reply-published';
 
   if (session.isReply && session.replyParentPostId) {
     return session.replyMode === 'together' ? 'reply-together' : 'reply-separated';

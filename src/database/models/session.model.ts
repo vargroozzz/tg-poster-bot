@@ -30,6 +30,10 @@ export interface ISession extends Document, PostSelections {
   proposedByUserId?: number;
   replyParentPostId?: string;
   replyMode?: 'together' | 'separated';
+  // A reply to a post already published in a channel (from a pasted post link), instead of
+  // a queued parent.
+  replyToChannelId?: string;
+  replyToMessageId?: number;
   // The bot's echo of the parent's text on 💬 Add reply — only a quote of this message is kept.
   replyQuoteSourceId?: number;
   createdAt: Date;
@@ -99,6 +103,8 @@ const sessionSchema = new Schema<ISession>({
   replyParentPostId: { type: String },
   replyMode: { type: String, enum: ['together', 'separated'] },
   replyQuoteSourceId: { type: Number },
+  replyToChannelId: { type: String },
+  replyToMessageId: { type: Number },
   createdAt: {
     type: Date,
     default: Date.now,

@@ -15,8 +15,12 @@ export const editSeed = (post: IScheduledPost): Partial<ISession> => ({
   editingOriginalScheduledTime: post.scheduledTime,
   editingRawContent: post.rawContent ?? post.content,
   editingOriginalForward: post.originalForward,
-  // A separated reply; drops Forward from the action choice (see forward-action.keyboard).
-  isReply: !!post.parentPostId,
+  // A separated reply or a reply to a published post; drops Forward from the action choice
+  // (see forward-action.keyboard).
+  isReply: !!post.parentPostId || !!post.replyToMessageId,
+  // Lets the edit preview show the published post this one replies to.
+  replyToChannelId: post.replyToChannelId,
+  replyToMessageId: post.replyToMessageId,
   selectedChannel: post.targetChannelId,
   selectedAction: post.action,
   textHandling: post.textHandling,
@@ -83,8 +87,12 @@ export class SessionService {
   /**
    * Create a session waiting for the user to send reply content.
    * messageId: -1 is a sentinel — will be updated to the real message_id when content arrives.
+   * The target is a queued parent post, or a post already published in a channel.
    */
-  async createForReply(userId: number, parentPostId: string): Promise<ISession> {
+  async createForReply(
+    userId: number,
+    target: Pick<ISession, 'replyParentPostId' | 'replyToChannelId' | 'replyToMessageId' | 'replyQuoteSourceId'>
+  ): Promise<ISession> {
     const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);
     // Remove any existing reply sentinel session to avoid unique-index conflict
     await this.repository.deleteMany({ userId, messageId: -1 });
@@ -95,13 +103,13 @@ export class SessionService {
       chatId: userId,
       state: SessionState.WAITING_FOR_REPLY_CONTENT,
       isReply: true,
-      replyParentPostId: parentPostId,
+      ...target,
       createdAt: new Date(),
       updatedAt: new Date(),
       expiresAt,
     } as Partial<ISession>);
 
-    logger.debug(`Created reply session ${session._id} for user ${userId}, parent ${parentPostId}`);
+    logger.debug(`Created reply session ${session._id} for user ${userId}, target ${JSON.stringify(target)}`);
     return session;
   }
 

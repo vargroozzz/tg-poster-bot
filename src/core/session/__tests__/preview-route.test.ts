@@ -45,6 +45,12 @@ describe('classifyScheduleConfirm — reply sessions', () => {
     ).toBe('reply-separated');
   });
 
+  it('routes a reply to an already-published post to reply-published', () => {
+    expect(
+      classifyScheduleConfirm(session({ isReply: true, replyToChannelId: 'chA', replyToMessageId: 42 }))
+    ).toBe('reply-published');
+  });
+
   it('treats an incomplete reply session (no parent) as normal', () => {
     expect(classifyScheduleConfirm(session({ isReply: true }))).toBe('normal');
   });

@@ -5,6 +5,12 @@ import { findNextAvailableSlot } from '../../utils/time-slots.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { getUserNickname } from '../../database/models/user-nickname.model.js';
 
+/** A message already in a channel that the post is published as a reply to. */
+export interface ReplyTarget {
+  replyToChannelId: string;
+  replyToMessageId: number;
+}
+
 /**
  * Service for scheduling posts
  * Consolidates duplicate scheduling logic from handlers
@@ -30,6 +36,7 @@ export class PostSchedulerService {
     customText?: string;
     textAbove?: boolean;
     spoilers?: boolean[];
+    replyTo?: ReplyTarget;
   }): Promise<{ scheduledTime: Date; postId: string }> {
     const {
       targetChannelId,
@@ -40,6 +47,7 @@ export class PostSchedulerService {
       customText,
       textAbove,
       spoilers,
+      replyTo,
     } = params;
 
     const selectedNickname = selectedUserId ? await getUserNickname(selectedUserId) : null;
@@ -68,6 +76,7 @@ export class PostSchedulerService {
       customText,
       textAbove,
       spoilers,
+      ...replyTo,
       createdAt: new Date(),
     });
 
@@ -85,8 +94,9 @@ export class PostSchedulerService {
     originalMessage?: Message;
     forwardInfo: ForwardInfo;
     content: MessageContent;
+    replyTo?: ReplyTarget;
   }): Promise<{ scheduledTime: Date; postId: string }> {
-    const { targetChannelId, forwardInfo, content } = params;
+    const { targetChannelId, forwardInfo, content, replyTo } = params;
 
     const nextSlot = await findNextAvailableSlot(targetChannelId);
 
@@ -105,6 +115,7 @@ export class PostSchedulerService {
       rawContent: content,
       textHandling: 'keep',
       selectedUserId: null,
+      ...replyTo,
       createdAt: new Date(),
     });
 

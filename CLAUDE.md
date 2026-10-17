@@ -208,6 +208,31 @@ For messages with text/caption, users can choose:
 - `src/bot/keyboards/text-handling.keyboard.ts` - Text options UI
 - `src/types/message.types.ts` - TextHandling type
 
+### Replies to Published Posts
+
+A queued post gets replies via 💬 Add reply (the reply waits for its parent, or rides along
+with it). A post **already published** in a posting channel is addressed by its link instead:
+
+1. The owner sends a message that is only the post's link (`t.me/<username>/<id>` or
+   `t.me/c/<internal id>/<id>`, as "Copy post link" gives it). `findLinkedPost` matches it
+   against active posting channels; a link to any other channel is scheduled as a normal post.
+2. The bot forwards the post to the owner (this checks it exists; an unknown id gets an error
+   and no session; a protected channel's post just isn't shown) and creates a reply session with `replyToChannelId`/`replyToMessageId` (no
+   `replyParentPostId`). Quote-replying to that forward quotes the post. The link check runs
+   before the pending-reply check, so it replaces a 💬 Add reply still waiting for content.
+3. The next message is the reply content. Channel and slot need no choice: the reply goes in
+   the post's channel, in its own slot. The flow continues at Quick post / Transform (no
+   Forward, as for every reply).
+4. On confirm, route `reply-published` schedules the post and sets `replyToChannelId`/
+   `replyToMessageId` on it; the publisher already threads those as `reply_parameters`.
+
+Owner-only: reply routes schedule directly, without a proposer's handoff for review.
+
+**Files:**
+- `src/utils/post-link.ts` - Post link parsing (`findLinkedPost`)
+- `src/bot/handlers/callbacks/reply.ts` - `startPublishedReply`, 💬 Add reply
+- `src/bot/handlers/forward.handler.ts` - `handleReplyContent`, `promptReplyAction`
+
 ## Flow Diagrams
 
 ### Message Scheduling Flow
@@ -309,6 +334,7 @@ For messages with text/caption, users can choose:
 - `/status` - View pending scheduled posts count and next 5 posts
 - `/queue` - View and manage the post queue by channel
 - Forward any message - Start the scheduling flow
+- Send a post link (`t.me/<username>/<id>` or `t.me/c/<id>/<id>`) to a posting channel's post - Start a reply to that already-published post (see Replies to Published Posts)
 
 ### Channel Lists (Attribution Control)
 - `/addgreen [reply]` - Add channel to green list (auto-forward without changes)
@@ -1023,6 +1049,8 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - [x] DI container wiring all services (src/shared/di/container.ts)
 - [x] cron-job.org integration (keeps Render free tier awake for scheduled posts)
 - [x] Command hints (descriptions appear when typing "/" in Telegram)
+- [x] Replies to queued posts (💬 Add reply / ❝ Add quoted reply on the confirmation and queue preview)
+- [x] Replies to already-published posts (send the post link, then the content)
 
 ## Future Improvements
 

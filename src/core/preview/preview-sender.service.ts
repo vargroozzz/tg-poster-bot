@@ -11,7 +11,7 @@ import { parseForwardInfo } from '../../utils/message-parser.js';
 import { PostingChannel } from '../../database/models/posting-channel.model.js';
 import { channelLabel } from '../../shared/helpers/channel.helper.js';
 import { findNextAvailableSlot, formatSlotTime } from '../../utils/time-slots.js';
-import { hasPlaceableText, textAboveFor, spoilersFor } from '../session/preview-route.js';
+import { hasPlaceableText, textAboveFor, spoilersFor, publishedReplyTarget } from '../session/preview-route.js';
 import { spoilerSlots, withSpoilers } from '../sending/spoilers.js';
 
 /**
@@ -131,14 +131,20 @@ export class PreviewSenderService {
       const forwardInfo = session.editingPostId
         ? session.editingOriginalForward
         : session.originalMessage ? parseForwardInfo(session.originalMessage) : undefined;
-      const replyParams = forwardInfo?.replyParameters ?? undefined;
+      // A reply to a published post replies to that post, whatever the content itself replies to.
+      const target = publishedReplyTarget(session);
+      const publishedParent = target && {
+        chatId: Number(target.replyToChannelId),
+        messageId: target.replyToMessageId,
+      };
+      const replyParams = publishedParent ?? forwardInfo?.replyParameters;
 
       // For replies: forward the replied-to message into the PM as visual context,
       // since cross-chat reply_parameters are rejected in private chats by Telegram.
       if (replyParams) {
         // external_reply.chat may point to a private linked discussion group copy.
         // Prefer external_reply.origin (always the original public channel) for forwarding.
-        const extOrigin = session.originalMessage?.external_reply?.origin;
+        const extOrigin = publishedParent ? undefined : session.originalMessage?.external_reply?.origin;
         const channelOrigin =
           extOrigin?.type === 'channel' ? (extOrigin as MessageOriginChannel) : null;
         const fwdChatId = channelOrigin ? channelOrigin.chat.id : replyParams.chatId;

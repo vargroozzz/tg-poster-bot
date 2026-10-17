@@ -148,7 +148,7 @@ export async function deletePreviewMessages(
   );
 }
 
-export async function showPreview(ctx: Context, sessionKey: string): Promise<void> {
+export async function showPreview(ctx: Context, sessionKey: string, deleteControl = true): Promise<void> {
   try {
     const fromId = ctx.from?.id;
     if (!fromId) return;
@@ -168,12 +168,16 @@ export async function showPreview(ctx: Context, sessionKey: string): Promise<voi
     );
 
     await sessionSvc.updateState(sessionKey, SessionState.PREVIEW, { previewMessageId });
-    await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+    if (deleteControl) {
+      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+    }
 
     logger.debug(`Preview shown for session ${sessionKey}`);
   } catch (error) {
     logger.error('Error showing preview:', error);
-    await ctx.editMessageText('Preview generation failed. Please try again.');
+    const failed = 'Preview generation failed. Please try again.';
+    // Without a control message (a poll reply goes straight to the preview) there is nothing to edit.
+    await (deleteControl ? ctx.editMessageText(failed) : ctx.reply(failed));
   }
 }
 

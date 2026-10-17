@@ -4,8 +4,7 @@ import type { Message } from 'grammy/types';
 import { bot } from '../../bot.js';
 import { parseForwardInfo } from '../../../utils/message-parser.js';
 import { transformerService } from '../../../services/transformer.service.js';
-import { extractMessageContent } from '../forward.handler.js';
-import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
+import { extractMessageContent, promptReplyAction } from '../forward.handler.js';
 import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyboard.js';
 import { flowCallbacks } from '../../keyboards/flow-callbacks.js';
 import { createReplySlotKeyboard } from '../../keyboards/reply-slot.keyboard.js';
@@ -39,7 +38,12 @@ import { PreviewSenderService, previewKeyboardFor } from '../../../core/preview/
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import type { FlowEvent } from '../../../shared/constants/flow-states.js';
 import { transition } from '../../../core/session/session-state-machine.js';
-import { classifyScheduleConfirm, textAboveFor, spoilersFor } from '../../../core/session/preview-route.js';
+import {
+  classifyScheduleConfirm,
+  textAboveFor,
+  spoilersFor,
+  publishedReplyTarget,
+} from '../../../core/session/preview-route.js';
 import type { ScheduleRoute } from '../../../core/session/preview-route.js';
 import { PostingChannel, getActivePostingChannels } from '../../../database/models/posting-channel.model.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
@@ -47,7 +51,6 @@ import { QueueService } from '../../../core/queue/queue.service.js';
 import type { ISession } from '../../../database/models/session.model.js';
 import { editSeed } from '../../../core/session/session.service.js';
 import {
-  actionPrompt,
   getSessionService,
   deletePreviewMessages,
   showPreview,
@@ -302,6 +305,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     );
   } else {
     // Replies point at the post being replaced, so carry them to its successor below.
+    // A reply moved to another channel leaves its thread: a reply lives in its parent's chat.
     const movedEmbeddedReply = (await repository.findById(editingPostId))?.embeddedReply;
 
     // Moving channels is delete + reschedule, so bail if the delete found nothing pending —
@@ -362,15 +366,16 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
     return;
   }
 
-  // Routing guarantees this; the guard just narrows it for TypeScript.
+  // Routing guarantees one of these; the guard just narrows them for TypeScript.
   const parentPostId = session.replyParentPostId;
-  if (!parentPostId) {
+  const publishedParent = publishedReplyTarget(session);
+  if (!parentPostId && !publishedParent) {
     await ctx.reply('Reply session is corrupted. Please start over.');
     return;
   }
 
   const repository = new ScheduledPostRepository();
-  const parentPost = await repository.findById(parentPostId);
+  const parentPost = parentPostId ? await repository.findById(parentPostId) : null;
 
   const replyForwardInfo = parseForwardInfo(replyOriginalMessage);
   const replyMediaGroupMessages = session.mediaGroupMessages;
@@ -391,7 +396,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
     selectedAction: replyAction = 'transform',
   } = session;
 
-  if (route === 'reply-together') {
+  if (route === 'reply-together' && parentPostId) {
     const replyNickname = replyUserId ? await findNicknameByUserId(replyUserId) : null;
     const transformedReplyContent =
       replyAction === 'transform'
@@ -441,6 +446,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
     originalMessage: replyOriginalMessage,
     forwardInfo: replyForwardInfo,
     content: replyContent,
+    replyTo: publishedParent,
   };
 
   const { scheduledTime: replySlotTime, postId: replyPostId } =
@@ -455,7 +461,9 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
           spoilers: spoilersFor(session),
         });
 
-  await repository.convertToSeparatedReply(replyPostId, parentPostId, parentPost ?? null);
+  if (parentPostId) {
+    await repository.convertToSeparatedReply(replyPostId, parentPostId, parentPost);
+  }
 
   await finalizePreview(c);
 
@@ -600,6 +608,7 @@ const SCHEDULE_CONFIRM: Record<ScheduleRoute, (c: Confirm, route: ScheduleRoute)
   'edit-move-channel': confirmEdit,
   'reply-together': confirmReply,
   'reply-separated': confirmReply,
+  'reply-published': confirmReply,
   normal: (c) => confirmNew(c),
 };
 
@@ -1007,6 +1016,23 @@ export function registerScheduling(): void {
         return;
       }
 
+      const origMsg = session.originalMessage;
+
+      // A reply to a published post has no channel to choose: back to its action step.
+      const published = publishedReplyTarget(session);
+      if (published) {
+        if (!origMsg) return;
+        await sessionSvc.updateState(sessionKey, SessionState.ACTION_SELECT, {
+          ...CLEARED_SELECTIONS,
+          selectedChannel: published.replyToChannelId,
+        });
+        await promptReplyAction(ctx, sessionKey, origMsg, false, (text, other) =>
+          ctx.reply(text, { ...other, reply_to_message_id: origMsg.message_id })
+        );
+        logger.info(`Preview back for published reply ${sessionKey}`);
+        return;
+      }
+
       // Reset session back to channel selection state
       await sessionSvc.updateState(sessionKey, SessionState.CHANNEL_SELECT, CLEARED_SELECTIONS);
 
@@ -1017,7 +1043,6 @@ export function registerScheduling(): void {
         return;
       }
 
-      const origMsg = session.originalMessage;
       if (!origMsg) return;
 
       await ctx.api.sendMessage(
@@ -1056,22 +1081,9 @@ export function registerScheduling(): void {
 
       await sessionSvc.updateState(sessionId, SessionState.ACTION_SELECT, { replyMode: mode });
 
-      // No green-list auto-forward: a reply can't be forwarded (see forward-action.keyboard).
-      // A poll can't be transformed, so it stays 'forward' and is posted as a copy.
-      const originalMessage = session.originalMessage;
-      if (originalMessage) {
-        const content = extractMessageContent(originalMessage);
-        if (content?.type === 'poll') {
-          await sessionSvc.update(sessionId, { selectedAction: 'forward' });
-          await showPreview(ctx, sessionId);
-          return;
-        }
-      }
-
-      await ctx.editMessageText(actionPrompt('reply'), {
-        reply_markup: createForwardActionKeyboard(undefined, true),
-        parse_mode: 'HTML',
-      });
+      await promptReplyAction(ctx, sessionId, session.originalMessage, true, (text, other) =>
+        ctx.editMessageText(text, other)
+      );
 
       logger.debug(`Reply slot mode "${mode}" set for session ${sessionId}`);
     } catch (error) {
