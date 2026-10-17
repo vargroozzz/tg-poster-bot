@@ -26,6 +26,12 @@ import type { TextHandling } from '../../../types/message.types.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
 import { editEntryBlocker } from './edit-entry.js';
 import {
+  type QueuePreviewState,
+  saveQueuePreview,
+  takeQueuePreview,
+  takeQueuePreviewsOfPost,
+} from './queue-preview-state.js';
+import {
   actionPrompt,
   CUSTOM_TEXT_PROMPT,
   NICKNAME_PROMPT,
@@ -37,24 +43,20 @@ import {
 
 const queueService = new QueueService();
 
-interface QueuePreviewState {
-  previewMessageIds: number[];
-  postId: string;
-  controlMessageId: number;
-  queueMessageId: number;
-  channelId: string;
-  page: number;
-}
-
-const queuePreviewStateMap = new Map<number, QueuePreviewState>();
-
-/** The first message of the queue preview of this post — the post as it will appear in the channel. */
-export const queuePreviewMessageId = (userId: number, postId: string): number | undefined => {
-  const state = queuePreviewStateMap.get(userId);
-  return state?.postId === postId ? state.previewMessageIds[0] : undefined;
-};
-
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/** Deletes these queue previews' messages: the post as it will appear, and the control message. */
+async function deletePreviewMessages(ctx: Context, userId: number, previews: QueuePreviewState[]): Promise<void> {
+  await Promise.all(
+    previews
+      .flatMap((state) => [...state.previewMessageIds, state.controlMessageId])
+      .map((msgId) =>
+        ctx.api.deleteMessage(userId, msgId).catch((err) =>
+          logger.warn(`Failed to delete queue preview message ${msgId}:`, err)
+        )
+      )
+  );
+}
 
 async function renderQueuePage(
   ctx: Context,
@@ -227,7 +229,7 @@ export function registerQueue(): void {
       const previewSender = new QueuePreviewSenderService(ctx.api);
       const { previewMessageIds, controlMessageId } = await previewSender.sendPreview(userId, post);
 
-      queuePreviewStateMap.set(userId, {
+      saveQueuePreview(userId, {
         previewMessageIds,
         postId,
         controlMessageId,
@@ -246,35 +248,28 @@ export function registerQueue(): void {
       await ctx.answerCallbackQuery().catch(() => {});
       const postId = (ctx.match as RegExpExecArray)[1];
       const userId = ctx.from?.id;
-      if (!userId) return;
+      const controlMessageId = ctx.callbackQuery?.message?.message_id;
+      if (!userId || !controlMessageId) return;
 
-      const state = queuePreviewStateMap.get(userId);
-      if (!state) {
-        await ctx.reply('❌ Preview state expired. Please use /queue again.');
-        return;
-      }
+      // Taken up front so a second tap finds no preview; put back if the delete throws, so
+      // Delete or Back on it can still clean it up. Missing (bot restarted), the delete still runs.
+      const state = takeQueuePreview(userId, controlMessageId);
+      const result = await queueService.deleteAndCascade(postId).catch((error: unknown) => {
+        if (state) saveQueuePreview(userId, state);
+        throw error;
+      });
 
-      const { previewMessageIds, queueMessageId, channelId, page } = state;
-      queuePreviewStateMap.delete(userId);
-
-      const result = await queueService.deleteAndCascade(postId);
-
-      // Always clean up preview messages regardless of whether the post was found
-      await Promise.all(
-        previewMessageIds.map((msgId) =>
-          ctx.api.deleteMessage(userId, msgId).catch((err) =>
-            logger.warn(`Failed to delete preview message ${msgId}:`, err)
-          )
-        )
-      );
-      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+      // Every open preview of the post goes, found or not: none of them shows a queued post now.
+      const previews = [...(state ? [state] : []), ...takeQueuePreviewsOfPost(userId, postId)];
+      await deletePreviewMessages(ctx, userId, previews);
+      if (!state) await ctx.deleteMessage().catch(() => {});
 
       if (!result) {
         await ctx.reply('❌ Post not found — it may have already been published or deleted.');
       }
 
       // Refresh the queue list message (even if post was already gone, to show current state)
-      await renderQueuePage(ctx, channelId, page, queueMessageId);
+      if (state) await renderQueuePage(ctx, state.channelId, state.page, state.queueMessageId);
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error deleting post.', 'queue:del callback');
     }
@@ -285,27 +280,17 @@ export function registerQueue(): void {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const userId = ctx.from?.id;
-      if (!userId) return;
+      const controlMessageId = ctx.callbackQuery?.message?.message_id;
+      if (!userId || !controlMessageId) return;
 
-      const state = queuePreviewStateMap.get(userId);
+      const state = takeQueuePreview(userId, controlMessageId);
       if (!state) {
         // State gone (bot restarted) — just delete the control message
         await ctx.deleteMessage().catch(() => {});
         return;
       }
 
-      const { previewMessageIds } = state;
-      queuePreviewStateMap.delete(userId);
-
-      await Promise.all(
-        previewMessageIds.map((msgId) =>
-          ctx.api.deleteMessage(userId, msgId).catch((err) =>
-            logger.warn(`Failed to delete preview message ${msgId}:`, err)
-          )
-        )
-      );
-
-      await ctx.deleteMessage().catch((err) => logger.warn('Failed to delete control message:', err));
+      await deletePreviewMessages(ctx, userId, [state]);
     } catch (error) {
       await ErrorMessages.catchAndReply(ctx, error, '❌ Error going back.', 'queue:back callback');
     }
@@ -341,20 +326,15 @@ export function registerQueue(): void {
       const session = await getSessionService().createForEdit(userId, post);
       const sessionId = session._id.toString();
 
-      // The open queue preview goes only when it shows this post: the edit makes it stale.
+      // The open queue previews of this post go: the edit makes them stale.
       // A preview of another post stays, even when Edit was tapped on a confirmation.
-      const state = queuePreviewStateMap.get(userId);
-      if (state?.postId === postId) {
-        await Promise.all(
-          [...state.previewMessageIds, state.controlMessageId]
-            .filter((msgId) => msgId !== ctx.callbackQuery?.message?.message_id)
-            .map((msgId) =>
-            ctx.api.deleteMessage(userId, msgId).catch(() => {})
-          )
-        );
-        queuePreviewStateMap.delete(userId);
+      const stalePreviews = takeQueuePreviewsOfPost(userId, postId);
+      await deletePreviewMessages(ctx, userId, stalePreviews);
+      // Tapped on one of those previews, the tapped message is already gone.
+      const tappedMessageId = ctx.callbackQuery?.message?.message_id;
+      if (!stalePreviews.some((state) => state.controlMessageId === tappedMessageId)) {
+        await ctx.deleteMessage().catch(() => {});
       }
-      await ctx.deleteMessage().catch(() => {});
 
       await ctx.api.sendMessage(userId, '📍 Select target channel:', {
         reply_markup: createChannelSelectKeyboard(channels, flowCallbacks('edit', sessionId)),

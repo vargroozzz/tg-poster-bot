@@ -6,7 +6,7 @@ import { logger } from '../../../utils/logger.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
 import { REPLY_CALLBACK_PATTERN, REPLY_FROM_QUEUE } from '../../../shared/constants/reply-callbacks.js';
 import { getSessionService } from './shared.js';
-import { queuePreviewMessageId } from './queue.js';
+import { getQueuePreview } from './queue-preview-state.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
 import type { IScheduledPost } from '../../../database/models/scheduled-post.model.js';
 import { MediaSenderService } from '../../../core/sending/media-sender.service.js';
@@ -45,7 +45,7 @@ async function offerPostToQuote(
   userId: number,
   sessionId: string,
   parent: IScheduledPost,
-  fromQueue: boolean
+  previewId: number | undefined
 ): Promise<QuoteOffer> {
   if (!parent.content.text || !QUOTABLE_TYPES.includes(parent.content.type)) return 'no_text';
 
@@ -58,7 +58,6 @@ async function offerPostToQuote(
     return 'bulk_forward';
   }
 
-  const previewId = fromQueue ? queuePreviewMessageId(userId, parent._id.toString()) : undefined;
   // A forward is posted with forwardMessage, so show exactly that rather than a re-render.
   const sourceId =
     previewId ??
@@ -141,9 +140,13 @@ export function registerReply(): void {
 
       const session = await getSessionService().createForReply(fromId, { replyParentPostId: parentPostId });
       await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+      // The tapped preview's own post message, not another open preview of the same post.
+      const controlMessageId = ctx.callbackQuery?.message?.message_id;
+      const queuePreview =
+        source === REPLY_FROM_QUEUE && controlMessageId ? getQueuePreview(fromId, controlMessageId) : undefined;
 
       const offer = quoted
-        ? await offerPostToQuote(ctx, fromId, session._id.toString(), parent, source === REPLY_FROM_QUEUE).catch(
+        ? await offerPostToQuote(ctx, fromId, session._id.toString(), parent, queuePreview?.previewMessageIds[0]).catch(
             (error: unknown) => {
               // The reply session is already live — quoting is optional, so don't fail the flow.
               logger.warn('Could not offer the post to quote:', error);
