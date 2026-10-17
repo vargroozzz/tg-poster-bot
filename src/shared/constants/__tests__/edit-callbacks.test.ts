@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EDIT_POST_PATTERN, editPostCallback } from '../edit-callbacks.js';
+import { EDIT_POST_PATTERN, editPostCallback, editStepCallback, editStepPattern } from '../edit-callbacks.js';
 
 describe('edit callbacks', () => {
   const postId = 'a'.repeat(24);
@@ -9,6 +9,13 @@ describe('edit callbacks', () => {
   });
 
   it("doesn't match the edit flow's step callbacks", () => {
-    expect(`queue:edit:text:${postId}:keep`).not.toMatch(EDIT_POST_PATTERN);
+    expect(editStepCallback('text', postId, 'keep')).not.toMatch(EDIT_POST_PATTERN);
+  });
+
+  it("round-trips a step's session id and value", () => {
+    expect(editStepCallback('channel', postId, '-100123').match(editStepPattern('channel'))?.slice(1)).toEqual([
+      postId,
+      '-100123',
+    ]);
   });
 });

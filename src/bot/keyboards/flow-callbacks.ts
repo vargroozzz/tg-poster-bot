@@ -3,13 +3,20 @@
 // flow off a session id. Both variants live side by side here so a step's two encodings
 // can't drift apart, and the keyboards take a resolver instead of hardcoding either one.
 
+import {
+  ACTION_CHOICES,
+  EDIT_ADD_TEXT,
+  editStepCallback,
+  TEXT_CHOICES,
+} from '../../shared/constants/edit-callbacks.js';
+
 export type FlowKind = 'post' | 'edit';
 
 /** Payload each step's callback data carries. */
 type StepArg = {
   channel: string;
-  action: 'quick' | 'transform' | 'forward';
-  text: 'keep' | 'quote' | 'remove';
+  action: (typeof ACTION_CHOICES)[number];
+  text: (typeof TEXT_CHOICES)[number];
   preset: string;
   addText: undefined;
   nickname: string;
@@ -20,29 +27,27 @@ const CALLBACKS: {
 } = {
   channel: {
     post: (channelId) => `select_channel:${channelId}`,
-    edit: (channelId, sid) => `queue:edit:ch:${sid}:${channelId}`,
+    edit: (channelId, sid) => editStepCallback('channel', sid, channelId),
   },
   action: {
     post: (action) => `action:${action}`,
-    edit: (action, sid) => `queue:edit:action:${sid}:${action}`,
+    edit: (action, sid) => editStepCallback('action', sid, action),
   },
   text: {
     post: (handling) => `text:${handling}`,
-    edit: (handling, sid) => `queue:edit:text:${sid}:${handling}`,
+    edit: (handling, sid) => editStepCallback('text', sid, handling),
   },
-  // Callback data is capped at 64 bytes, so the edit preset prefix is shortened to `ec:` —
-  // a preset id (24 chars) rides along with the session id (24) in the same string.
   preset: {
     post: (presetId) => `custom_text:preset:${presetId}`,
-    edit: (presetId, sid) => `ec:preset:${sid}:${presetId}`,
+    edit: (presetId, sid) => editStepCallback('preset', sid, presetId),
   },
   addText: {
     post: () => 'custom_text:add',
-    edit: (_arg, sid) => `queue:edit:custom:${sid}:add`,
+    edit: (_arg, sid) => editStepCallback('addText', sid, EDIT_ADD_TEXT),
   },
   nickname: {
     post: (key) => `select_nickname:${key}`,
-    edit: (key, sid) => `queue:edit:nickname:${sid}:${key}`,
+    edit: (key, sid) => editStepCallback('nickname', sid, key),
   },
 };
 

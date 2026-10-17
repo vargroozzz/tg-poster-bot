@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { flowCallbacks } from '../flow-callbacks.js';
+import { NICKNAME_NONE_KEY } from '../nickname-select.keyboard.js';
+import { ACTION_CHOICES, editStepPattern, TEXT_CHOICES } from '../../../shared/constants/edit-callbacks.js';
 
 const SID = 'aaaaaaaaaaaaaaaaaaaaaaaa'; // 24-char session id
 
@@ -42,6 +44,21 @@ describe('flowCallbacks', () => {
       `queue:edit:custom:${SID}:add`,
       `queue:edit:nickname:${SID}:42`,
     ]);
+  });
+
+  // What the keyboards emit against what the edit handlers listen for, every value of every step.
+  it.each([
+    ['channel', '-100123'],
+    ...ACTION_CHOICES.map((action) => ['action', action] as const),
+    ...TEXT_CHOICES.map((handling) => ['text', handling] as const),
+    ['preset', 'b'.repeat(24)],
+    ['addText', undefined],
+    ['nickname', '42'],
+    ['nickname', NICKNAME_NONE_KEY],
+  ] as const)('the edit handler pattern matches the %s step with %s', (step, value) => {
+    const match = flowCallbacks('edit', SID)(step, value).match(editStepPattern(step));
+    expect(match?.[1]).toBe(SID);
+    if (value !== undefined) expect(match?.[2]).toBe(value);
   });
 
   it('stays inside Telegram’s 64-byte callback_data cap with 24-char ids', () => {

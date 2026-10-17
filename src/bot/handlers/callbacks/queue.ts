@@ -3,7 +3,8 @@ import { Context } from 'grammy';
 import { InlineKeyboard } from 'grammy';
 import { bot } from '../../bot.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
-import { EDIT_POST_PATTERN } from '../../../shared/constants/edit-callbacks.js';
+import { EDIT_POST_PATTERN, editStepPattern } from '../../../shared/constants/edit-callbacks.js';
+import { QUEUE_BACK, QUEUE_DELETE_PATTERN } from '../../../shared/constants/queue-callbacks.js';
 import { logger } from '../../../utils/logger.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
@@ -240,13 +241,10 @@ export function registerQueue(): void {
   });
 
   // queue:del:{postId} — delete post, cascade reschedule, refresh queue
-  bot.callbackQuery(/^queue:del:(.+)$/, async (ctx: Context) => {
+  bot.callbackQuery(QUEUE_DELETE_PATTERN, async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
-      const match = ctx.callbackQuery?.data?.match(/^queue:del:(.+)$/);
-      if (!match) return;
-
-      const postId = match[1];
+      const postId = (ctx.match as RegExpExecArray)[1];
       const userId = ctx.from?.id;
       if (!userId) return;
 
@@ -283,7 +281,7 @@ export function registerQueue(): void {
   });
 
   // queue:back — clean up preview messages, leave queue list unchanged
-  bot.callbackQuery('queue:back', async (ctx: Context) => {
+  bot.callbackQuery(QUEUE_BACK, async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const userId = ctx.from?.id;
@@ -369,7 +367,7 @@ export function registerQueue(): void {
   });
 
   // queue:edit:ch:{sessionId}:{channelId} — channel selection for edit flow
-  bot.callbackQuery(/^queue:edit:ch:([^:]+):(-?\d+)$/, async (ctx: Context) => {
+  bot.callbackQuery(editStepPattern('channel'), async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, sessionId, channelId] = ctx.match as RegExpExecArray;
@@ -420,7 +418,7 @@ export function registerQueue(): void {
   });
 
   // queue:edit:action:{sessionId}:{action} — action selection for edit flow
-  bot.callbackQuery(/^queue:edit:action:([^:]+):(transform|forward|quick)$/, async (ctx: Context) => {
+  bot.callbackQuery(editStepPattern('action'), async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, sessionId, action] = ctx.match as RegExpExecArray;
@@ -463,7 +461,7 @@ export function registerQueue(): void {
   });
 
   // queue:edit:text:{sessionId}:{textHandling} — text handling for edit flow
-  bot.callbackQuery(/^queue:edit:text:([^:]+):(keep|remove|quote)$/, async (ctx: Context) => {
+  bot.callbackQuery(editStepPattern('text'), async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, sessionId, textHandling] = ctx.match as RegExpExecArray;
@@ -487,7 +485,7 @@ export function registerQueue(): void {
   });
 
   // queue:edit:nickname:{sessionId}:{nicknameKey} — nickname selection for edit flow
-  bot.callbackQuery(/^queue:edit:nickname:([^:]+):([^:]+)$/, async (ctx: Context) => {
+  bot.callbackQuery(editStepPattern('nickname'), async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, sessionId, nicknameKey] = ctx.match as RegExpExecArray;
@@ -510,7 +508,7 @@ export function registerQueue(): void {
   });
 
   // queue:edit:custom:{sessionId}:add — typed custom text for edit flow
-  bot.callbackQuery(/^queue:edit:custom:([^:]+):add$/, async (ctx: Context) => {
+  bot.callbackQuery(editStepPattern('addText'), async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, sessionId] = ctx.match as RegExpExecArray;
@@ -532,7 +530,7 @@ export function registerQueue(): void {
   });
 
   // ec:preset:{sessionId}:{presetId} — shortened to stay under Telegram's 64-byte callback_data limit
-  bot.callbackQuery(/^ec:preset:([^:]+):(.+)$/, async (ctx: Context) => {
+  bot.callbackQuery(editStepPattern('preset'), async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
       const [, sessionId, presetId] = ctx.match as RegExpExecArray;
