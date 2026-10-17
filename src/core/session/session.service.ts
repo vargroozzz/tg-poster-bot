@@ -15,6 +15,8 @@ export const editSeed = (post: IScheduledPost): Partial<ISession> => ({
   editingOriginalScheduledTime: post.scheduledTime,
   editingRawContent: post.rawContent ?? post.content,
   editingOriginalForward: post.originalForward,
+  // A separated reply; drops Forward from the action choice (see forward-action.keyboard).
+  isReply: !!post.parentPostId,
   selectedChannel: post.targetChannelId,
   selectedAction: post.action,
   textHandling: post.textHandling,

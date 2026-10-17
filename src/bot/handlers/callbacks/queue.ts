@@ -385,7 +385,8 @@ export function registerQueue(): void {
         selectedChannel: channelId,
       });
 
-      if (rawContent.type === 'poll' || isGreenListed) {
+      // A reply can't be forwarded, so a green-listed one goes through the action choice.
+      if (rawContent.type === 'poll' || (isGreenListed && !session.isReply)) {
         await sessionSvc.updateState(sessionId, SessionState.PREVIEW, { selectedAction: 'forward' });
         await showEditPreview(ctx, sessionId);
         return;
@@ -397,8 +398,8 @@ export function registerQueue(): void {
         return;
       }
 
-      await ctx.editMessageText(actionPrompt(), {
-        reply_markup: createForwardActionKeyboard(flowCallbacks('edit', sessionId)),
+      await ctx.editMessageText(actionPrompt(session.isReply ? 'reply' : 'message'), {
+        reply_markup: createForwardActionKeyboard(flowCallbacks('edit', sessionId), session.isReply),
         parse_mode: 'HTML',
       });
     } catch (error) {

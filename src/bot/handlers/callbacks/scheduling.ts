@@ -1052,18 +1052,10 @@ export function registerScheduling(): void {
 
       await sessionSvc.updateState(sessionId, SessionState.ACTION_SELECT, { replyMode: mode });
 
-      // Check for green-listed source — auto-forward if applicable
+      // No green-list auto-forward: a reply can't be forwarded (see forward-action.keyboard).
+      // A poll can't be transformed, so it stays 'forward' and is posted as a copy.
       const originalMessage = session.originalMessage;
       if (originalMessage) {
-        const forwardInfo = parseForwardInfo(originalMessage);
-        const shouldAutoForward = await transformerService.shouldAutoForward(forwardInfo);
-
-        if (shouldAutoForward) {
-          await sessionSvc.update(sessionId, { selectedAction: 'forward' });
-          await showPreview(ctx, sessionId);
-          return;
-        }
-
         const content = extractMessageContent(originalMessage);
         if (content?.type === 'poll') {
           await sessionSvc.update(sessionId, { selectedAction: 'forward' });
@@ -1073,7 +1065,7 @@ export function registerScheduling(): void {
       }
 
       await ctx.editMessageText(actionPrompt('reply'), {
-        reply_markup: createForwardActionKeyboard(),
+        reply_markup: createForwardActionKeyboard(undefined, true),
         parse_mode: 'HTML',
       });
 
