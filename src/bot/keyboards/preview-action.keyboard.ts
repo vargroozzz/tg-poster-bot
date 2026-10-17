@@ -1,6 +1,7 @@
 import type { InlineKeyboardMarkup, InlineKeyboardButton } from 'grammy/types';
 import type { SpoilerSlot } from '../../core/sending/spoilers.js';
 import { REPLY_FROM_CONFIRMATION, replyCallback } from '../../shared/constants/reply-callbacks.js';
+import { editPostCallback } from '../../shared/constants/edit-callbacks.js';
 
 const ITEMS_PER_ROW = 4;
 
@@ -100,7 +101,7 @@ export function createAddReplyKeyboard(postId: string): InlineKeyboardMarkup {
         { text: '💬 Add a reply', callback_data: replyCallback(REPLY_FROM_CONFIRMATION, postId) },
         { text: '❝ Add quoted reply', callback_data: replyCallback(REPLY_FROM_CONFIRMATION, postId, true) },
       ],
-      [{ text: '✏️ Edit', callback_data: `queue:edit:${postId}` }],
+      [{ text: '✏️ Edit', callback_data: editPostCallback(postId) }],
     ],
   };
 }

@@ -3,6 +3,7 @@ import { Context } from 'grammy';
 import { InlineKeyboard } from 'grammy';
 import { bot } from '../../bot.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
+import { EDIT_POST_PATTERN } from '../../../shared/constants/edit-callbacks.js';
 import { logger } from '../../../utils/logger.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
@@ -308,7 +309,7 @@ export function registerQueue(): void {
   // ── Queue edit callbacks ──────────────────────────────────────────────────────
 
   // queue:edit:{postId} — entry point for editing a scheduled post
-  bot.callbackQuery(/^queue:edit:([a-f0-9]{24})$/, async (ctx: Context) => {
+  bot.callbackQuery(EDIT_POST_PATTERN, async (ctx: Context) => {
     try {
       const postId = (ctx.match as RegExpExecArray)[1];
       const userId = ctx.from?.id;
