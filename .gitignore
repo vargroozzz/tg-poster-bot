@@ -27,3 +27,11 @@ coverage/
 
 # Git worktrees
 .worktrees/
+
+# Local Claude Code session state
+/.claude/*
+!/.claude/settings.json
+!/.claude/agents/
+!/.claude/commands/
+!/.claude/skills/
+/CLAUDE.local.md
