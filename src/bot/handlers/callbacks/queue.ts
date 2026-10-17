@@ -23,6 +23,7 @@ import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyb
 import { flowCallbacks } from '../../keyboards/flow-callbacks.js';
 import type { TextHandling } from '../../../types/message.types.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
+import { editEntryBlocker } from './edit-entry.js';
 import {
   actionPrompt,
   CUSTOM_TEXT_PROMPT,
@@ -37,6 +38,8 @@ const queueService = new QueueService();
 
 interface QueuePreviewState {
   previewMessageIds: number[];
+  postId: string;
+  controlMessageId: number;
   queueMessageId: number;
   channelId: string;
   page: number;
@@ -44,9 +47,11 @@ interface QueuePreviewState {
 
 const queuePreviewStateMap = new Map<number, QueuePreviewState>();
 
-/** The first message of the queue preview on screen — the post as it will appear in the channel. */
-export const queuePreviewMessageId = (userId: number): number | undefined =>
-  queuePreviewStateMap.get(userId)?.previewMessageIds[0];
+/** The first message of the queue preview of this post — the post as it will appear in the channel. */
+export const queuePreviewMessageId = (userId: number, postId: string): number | undefined => {
+  const state = queuePreviewStateMap.get(userId);
+  return state?.postId === postId ? state.previewMessageIds[0] : undefined;
+};
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -219,10 +224,12 @@ export function registerQueue(): void {
       }
 
       const previewSender = new QueuePreviewSenderService(ctx.api);
-      const { previewMessageIds } = await previewSender.sendPreview(userId, post);
+      const { previewMessageIds, controlMessageId } = await previewSender.sendPreview(userId, post);
 
       queuePreviewStateMap.set(userId, {
         previewMessageIds,
+        postId,
+        controlMessageId,
         queueMessageId,
         channelId,
         page,
@@ -316,40 +323,40 @@ export function registerQueue(): void {
       if (!userId) return;
 
       const repository = new ScheduledPostRepository();
-      const post = await repository.findById(postId);
+      const [post, channels] = await Promise.all([
+        repository.findById(postId),
+        getActivePostingChannels(),
+      ]);
       if (!post) {
-        await ctx.answerCallbackQuery({ text: '❌ Post already published or deleted', show_alert: true });
+        await ctx.answerCallbackQuery({ text: '❌ Post already published or deleted', show_alert: true }).catch(() => {});
+        return;
+      }
+      const blocker = editEntryBlocker(post, channels.length);
+      if (blocker) {
+        await ctx.answerCallbackQuery({ text: blocker, show_alert: true }).catch(() => {});
         return;
       }
 
       await ctx.answerCallbackQuery().catch(() => {});
 
-      // Clean up stale preview messages for this user
+      // Session first: if it fails, the tapped message and its Edit button are still there.
+      const session = await getSessionService().createForEdit(userId, post);
+      const sessionId = session._id.toString();
+
+      // The open queue preview goes only when it shows this post: the edit makes it stale.
+      // A preview of another post stays, even when Edit was tapped on a confirmation.
       const state = queuePreviewStateMap.get(userId);
-      if (state) {
+      if (state?.postId === postId) {
         await Promise.all(
-          state.previewMessageIds.map((msgId) =>
+          [...state.previewMessageIds, state.controlMessageId]
+            .filter((msgId) => msgId !== ctx.callbackQuery?.message?.message_id)
+            .map((msgId) =>
             ctx.api.deleteMessage(userId, msgId).catch(() => {})
           )
         );
         queuePreviewStateMap.delete(userId);
       }
       await ctx.deleteMessage().catch(() => {});
-
-      const sessionSvc = getSessionService();
-      if (!sessionSvc) {
-        await ctx.reply('❌ Service unavailable. Please try again.');
-        return;
-      }
-
-      const session = await sessionSvc.createForEdit(userId, post);
-      const sessionId = session._id.toString();
-
-      const channels = await getActivePostingChannels();
-      if (channels.length === 0) {
-        await ctx.reply('⚠️ No posting channels configured.');
-        return;
-      }
 
       await ctx.api.sendMessage(userId, '📍 Select target channel:', {
         reply_markup: createChannelSelectKeyboard(channels, flowCallbacks('edit', sessionId)),

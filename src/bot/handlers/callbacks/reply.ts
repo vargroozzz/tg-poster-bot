@@ -48,7 +48,7 @@ async function offerPostToQuote(
     return 'bulk_forward';
   }
 
-  const previewId = fromQueue ? queuePreviewMessageId(userId) : undefined;
+  const previewId = fromQueue ? queuePreviewMessageId(userId, parent._id.toString()) : undefined;
   // A forward is posted with forwardMessage, so show exactly that rather than a re-render.
   const sourceId =
     previewId ??

@@ -55,6 +55,7 @@ import {
   creditUserId,
   knownCredit,
 } from './shared.js';
+import { editEntryBlocker } from './edit-entry.js';
 
 const postScheduler = new PostSchedulerService();
 const queueService = new QueueService();
@@ -977,16 +978,19 @@ export function registerScheduling(): void {
       if (session.editingPostId) {
         if (!fromId) return;
 
-        const post = await new ScheduledPostRepository().findById(session.editingPostId);
-        if (!post || post.status !== 'pending') {
+        const [post, channels] = await Promise.all([
+          new ScheduledPostRepository().findById(session.editingPostId),
+          getActivePostingChannels(),
+        ]);
+        if (!post) {
           await sessionSvc.complete(sessionKey);
           await ctx.reply('⚠️ This post has left the queue — it was published or deleted.');
           return;
         }
-
-        const channels = await getActivePostingChannels();
-        if (channels.length === 0) {
-          await ctx.reply('⚠️ No posting channels configured.');
+        const blocker = editEntryBlocker(post, channels.length);
+        if (blocker) {
+          await sessionSvc.complete(sessionKey);
+          await ctx.reply(blocker);
           return;
         }
 
