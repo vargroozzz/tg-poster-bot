@@ -88,10 +88,15 @@ export class SessionService {
    * Create a session waiting for the user to send reply content.
    * messageId: -1 is a sentinel — will be updated to the real message_id when content arrives.
    * The target is a queued parent post, or a post already published in a channel.
+   * The sentinel defeats the findByMessage idempotency check, so callers check
+   * replyStartedBy with the triggering update first; it is stored here for that.
    */
   async createForReply(
     userId: number,
-    target: Pick<ISession, 'replyParentPostId' | 'replyToChannelId' | 'replyToMessageId' | 'replyQuoteSourceId'>
+    target: Pick<
+      ISession,
+      'replyParentPostId' | 'replyToChannelId' | 'replyToMessageId' | 'replyQuoteSourceId' | 'replyTriggerUpdateId'
+    >
   ): Promise<ISession> {
     const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);
     // Remove any existing reply sentinel session to avoid unique-index conflict
@@ -115,6 +120,16 @@ export class SessionService {
 
   async findWaitingForReplyContent(userId: number): Promise<ISession | null> {
     return await this.repository.findWaitingForReplyContent(userId);
+  }
+
+  /**
+   * Whether a live reply session was already started by this update (a redelivery).
+   * ponytail: check-then-create, so two copies handled at the same instant both pass, and a
+   * copy arriving after the session ended is let through. A unique index on
+   * {userId, replyTriggerUpdateId} with create-first would close both if redeliveries overlap.
+   */
+  async replyStartedBy(userId: number, updateId: number): Promise<boolean> {
+    return !!(await this.repository.findOne({ userId, replyTriggerUpdateId: updateId }));
   }
 
   async findByMessage(userId: number, messageId: number): Promise<ISession | null> {

@@ -41,7 +41,9 @@ async function handleReplyContent(
   ctx: Context,
   message: Message,
   replySession: ISession,
-  sessionSvc: SessionService
+  sessionSvc: SessionService,
+  // An album sent as the reply: all its messages, `message` being the first.
+  mediaGroupMessages?: Message[]
 ): Promise<void> {
   const sessionId = replySession._id.toString();
 
@@ -56,6 +58,7 @@ async function handleReplyContent(
   if (published) {
     await sessionSvc.updateState(sessionId, SessionState.ACTION_SELECT, {
       originalMessage: content,
+      mediaGroupMessages,
       messageId: message.message_id,
       chatId: message.chat.id,
       selectedChannel: published.replyToChannelId,
@@ -69,6 +72,7 @@ async function handleReplyContent(
   // Update session: set the real message, advance to CHANNEL_SELECT
   await sessionSvc.updateState(sessionId, SessionState.CHANNEL_SELECT, {
     originalMessage: content,
+    mediaGroupMessages,
     messageId: message.message_id,
     chatId: message.chat.id,
   });
@@ -494,31 +498,46 @@ bot.on([
   }
 });
 
+/**
+ * Hands a message or album to a reply session waiting for content, before anything starts a new
+ * standalone session from it. Returns whether one took it.
+ */
+async function takeAsReplyContent(ctx: Context, messages: Message[]): Promise<boolean> {
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+  try {
+    const sessionSvc = getSessionService();
+    const replySession = await sessionSvc.findWaitingForReplyContent(userId);
+    if (!replySession) return false;
+    // Webhook updates can arrive out of order; the album's first item carries the reply/quote.
+    const sorted = messages.toSorted((a, b) => a.message_id - b.message_id);
+    await handleReplyContent(ctx, sorted[0], replySession, sessionSvc, sorted.length > 1 ? sorted : undefined);
+    return true;
+  } catch (error) {
+    logger.error('Error checking for reply session:', error);
+    return false; // fall through to normal processing
+  }
+}
+
 async function processSingleMessage(ctx: Context, message: Message) {
   // A pasted link to a post in a posting channel starts a reply to that published post. It
   // replaces a reply still waiting for content: an abandoned 💬 Add reply lives for a day and
   // would otherwise swallow the link as text, while the bot's answer here says what happened.
-  const tookLink = await startPublishedReply(ctx, message).catch((error: unknown) => {
+  const tookLink = await startPublishedReply(ctx, message).catch(async (error: unknown) => {
     logger.error('Error starting a published-post reply:', error);
-    return false; // fall through to normal processing
+    // Fall through to normal processing, unless the reply session was already created: it
+    // would then take the link itself as its content.
+    const userId = ctx.from?.id;
+    const started =
+      !!userId && (await getSessionService().replyStartedBy(userId, ctx.update.update_id).catch(() => false));
+    if (started) {
+      await ctx.reply('⚠️ Something went wrong, but the reply is started: send its content next.').catch(() => {});
+    }
+    return started;
   });
   if (tookLink) return;
 
-  // Check for a reply session waiting for content before starting a new standalone session
-  try {
-    const userId = ctx.from?.id;
-    if (userId) {
-      const sessionSvc = getSessionService();
-      const replySession = await sessionSvc.findWaitingForReplyContent(userId);
-      if (replySession) {
-        await handleReplyContent(ctx, message, replySession, sessionSvc);
-        return;
-      }
-    }
-  } catch (error) {
-    logger.error('Error checking for reply session:', error);
-    // Fall through to normal processing
-  }
+  if (await takeAsReplyContent(ctx, [message])) return;
 
   // Idempotency check: Skip if we already have a session for this message
   // This prevents duplicate processing during zero-downtime deployments
@@ -594,6 +613,8 @@ async function processMediaGroup(mediaGroupId: string) {
   if (messages.length === 0) {
     return;
   }
+
+  if (await takeAsReplyContent(buffer.ctx, messages)) return;
 
   // Use the first message as the primary message
   const primaryMessage = messages[0];
@@ -685,6 +706,10 @@ async function processReplyChain(bufferKey: string) {
     await processSingleMessage(ctx, messages[0]);
     return;
   }
+
+  // ponytail: only a forwarded album can be reply content; a forwarded thread still starts a
+  // post, since a reply holds one post's content. Route threads too if that's ever wanted.
+  if (isPureAlbum && (await takeAsReplyContent(ctx, messages))) return;
 
   // Get available posting channels
   const postingChannels = await getActivePostingChannels();

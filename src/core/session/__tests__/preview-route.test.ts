@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { classifyScheduleConfirm, hasPlaceableText, textAboveFor } from '../preview-route.js';
+import { classifyScheduleConfirm, hasPlaceableText, publishedReplyTarget, textAboveFor } from '../preview-route.js';
+import { editSeed } from '../session.service.js';
 import type { ISession } from '../../../database/models/session.model.js';
+import type { IScheduledPost } from '../../../database/models/scheduled-post.model.js';
 
 // Only the fields the classifier reads; the rest of ISession is irrelevant here.
 const session = (o: Partial<ISession>): ISession => o as ISession;
@@ -106,5 +108,23 @@ describe('hasPlaceableText / textAboveFor', () => {
   it('drops a stale placement once the text it was set for is gone', () => {
     expect(textAboveFor(session({ ...withPhoto('hi'), textHandling: 'keep', textAbove: true }))).toBe(true);
     expect(textAboveFor(session({ ...withPhoto('hi'), textHandling: 'remove', textAbove: true }))).toBeUndefined();
+  });
+});
+
+// What an edit's channel move carries over to the rescheduled reply.
+describe('publishedReplyTarget — edit of a reply', () => {
+  const post = (o: Partial<IScheduledPost>): IScheduledPost => ({ _id: 'p1', ...o }) as unknown as IScheduledPost;
+
+  it('keeps the target of a reply whose parent is published', () => {
+    const seed = editSeed(post({ parentPostId: 'parent', replyToChannelId: 'chA', replyToMessageId: 7 }));
+    expect(publishedReplyTarget(session(seed))).toEqual({ replyToChannelId: 'chA', replyToMessageId: 7 });
+  });
+
+  it('has none for a reply still waiting on its parent (the parent link carries it)', () => {
+    expect(publishedReplyTarget(session(editSeed(post({ parentPostId: 'parent' }))))).toBeUndefined();
+  });
+
+  it('has none for a plain post', () => {
+    expect(publishedReplyTarget(session(editSeed(post({}))))).toBeUndefined();
   });
 });

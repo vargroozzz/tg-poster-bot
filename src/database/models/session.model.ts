@@ -36,6 +36,9 @@ export interface ISession extends Document, PostSelections {
   replyToMessageId?: number;
   // The bot's echo of the parent's text on 💬 Add reply — only a quote of this message is kept.
   replyQuoteSourceId?: number;
+  // The Telegram update (a pasted post link, or a 💬 Add reply tap) that started this reply
+  // session, so a twice-delivered update doesn't start it again.
+  replyTriggerUpdateId?: number;
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date;
@@ -105,6 +108,7 @@ const sessionSchema = new Schema<ISession>({
   replyQuoteSourceId: { type: Number },
   replyToChannelId: { type: String },
   replyToMessageId: { type: Number },
+  replyTriggerUpdateId: { type: Number },
   createdAt: {
     type: Date,
     default: Date.now,

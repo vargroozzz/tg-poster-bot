@@ -12,6 +12,15 @@ export interface ReplyTarget {
 }
 
 /**
+ * What the post replies to, as stored fields. A reply to a queued parent is created waiting
+ * for it, never as a plain pending post first: the parent could publish in between and miss it.
+ */
+const replyFields = (replyTo?: ReplyTarget, parentPostId?: string) => ({
+  ...replyTo,
+  ...(parentPostId && { parentPostId, status: 'waiting_parent' as const }),
+});
+
+/**
  * Service for scheduling posts
  * Consolidates duplicate scheduling logic from handlers
  */
@@ -37,6 +46,7 @@ export class PostSchedulerService {
     textAbove?: boolean;
     spoilers?: boolean[];
     replyTo?: ReplyTarget;
+    parentPostId?: string;
   }): Promise<{ scheduledTime: Date; postId: string }> {
     const {
       targetChannelId,
@@ -48,6 +58,7 @@ export class PostSchedulerService {
       textAbove,
       spoilers,
       replyTo,
+      parentPostId,
     } = params;
 
     const selectedNickname = selectedUserId ? await getUserNickname(selectedUserId) : null;
@@ -76,7 +87,7 @@ export class PostSchedulerService {
       customText,
       textAbove,
       spoilers,
-      ...replyTo,
+      ...replyFields(replyTo, parentPostId),
       createdAt: new Date(),
     });
 
@@ -95,8 +106,9 @@ export class PostSchedulerService {
     forwardInfo: ForwardInfo;
     content: MessageContent;
     replyTo?: ReplyTarget;
+    parentPostId?: string;
   }): Promise<{ scheduledTime: Date; postId: string }> {
-    const { targetChannelId, forwardInfo, content, replyTo } = params;
+    const { targetChannelId, forwardInfo, content, replyTo, parentPostId } = params;
 
     const nextSlot = await findNextAvailableSlot(targetChannelId);
 
@@ -115,7 +127,7 @@ export class PostSchedulerService {
       rawContent: content,
       textHandling: 'keep',
       selectedUserId: null,
-      ...replyTo,
+      ...replyFields(replyTo, parentPostId),
       createdAt: new Date(),
     });
 

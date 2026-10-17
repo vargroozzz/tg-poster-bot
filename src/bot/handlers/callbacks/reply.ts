@@ -85,6 +85,10 @@ export async function startPublishedReply(ctx: Context, message: Message): Promi
   const post = findLinkedPost(message.text, await getActivePostingChannels());
   if (!post) return false;
 
+  // A redelivered update: the first delivery already started this reply.
+  const updateId = ctx.update.update_id;
+  if (await getSessionService().replyStartedBy(fromId, updateId)) return true;
+
   const { channel, messageId } = post;
   const label = channelLabel(channel);
   // Forwarding the post checks it exists (a typo'd or deleted id would otherwise only fail at
@@ -109,6 +113,7 @@ export async function startPublishedReply(ctx: Context, message: Message): Promi
     replyToChannelId: channel.channelId,
     replyToMessageId: messageId,
     replyQuoteSourceId: source?.message_id,
+    replyTriggerUpdateId: updateId,
   });
   await ctx.reply(
     source
@@ -132,13 +137,19 @@ export function registerReply(): void {
       const fromId = ctx.from?.id;
       if (!parentPostId || !fromId) return;
 
+      const updateId = ctx.update.update_id;
+      if (await getSessionService().replyStartedBy(fromId, updateId)) return; // redelivered tap
+
       const parent = await new ScheduledPostRepository().findById(parentPostId);
       if (!parent) {
         await ctx.reply('❌ Post not found — it may have already been published or deleted.');
         return;
       }
 
-      const session = await getSessionService().createForReply(fromId, { replyParentPostId: parentPostId });
+      const session = await getSessionService().createForReply(fromId, {
+        replyParentPostId: parentPostId,
+        replyTriggerUpdateId: updateId,
+      });
       await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
       // The tapped preview's own post message, not another open preview of the same post.
       const controlMessageId = ctx.callbackQuery?.message?.message_id;

@@ -304,9 +304,16 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
       { reply_markup: createAddReplyKeyboard(editingPostId) }
     );
   } else {
-    // Replies point at the post being replaced, so carry them to its successor below.
-    // A reply moved to another channel leaves its thread: a reply lives in its parent's chat.
-    const movedEmbeddedReply = (await repository.findById(editingPostId))?.embeddedReply;
+    // Replies to this post point at the post being replaced, so carry them to its successor below.
+    const moving = await repository.findById(editingPostId);
+    const movedEmbeddedReply = moving?.embeddedReply;
+    // If this post is itself a reply, it keeps what it answers: a published message, or a parent
+    // still queued. reply_parameters names the chat, so it may sit in another channel, as at creation.
+    const replyTo =
+      moving?.replyToChannelId && moving.replyToMessageId
+        ? { replyToChannelId: moving.replyToChannelId, replyToMessageId: moving.replyToMessageId }
+        : undefined;
+    const parentPostId = moving?.status === 'waiting_parent' ? moving.parentPostId : undefined;
 
     // Moving channels is delete + reschedule, so bail if the delete found nothing pending —
     // scheduling anyway would duplicate a post the worker had already published.
@@ -323,11 +330,15 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             targetChannelId: newChannelId,
             forwardInfo: editingOriginalForward,
             content: editingRawContent,
+            replyTo,
+            parentPostId,
           })
         : await postScheduler.scheduleTransformPost({
             targetChannelId: newChannelId,
             forwardInfo: editingOriginalForward,
             content: editingRawContent,
+            replyTo,
+            parentPostId,
             textHandling: session.textHandling ?? 'keep',
             selectedUserId: session.selectedUserId,
             customText: session.customText,
@@ -337,6 +348,9 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
 
     if (movedEmbeddedReply) {
       await repository.attachEmbeddedReply(movedPostId, movedEmbeddedReply);
+    }
+    if (parentPostId) {
+      await repository.releaseIfParentPosted(movedPostId, await repository.findById(parentPostId));
     }
     await repository.reparentSeparatedReplies(editingPostId, movedPostId, newChannelId);
 
@@ -440,13 +454,14 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
     return;
   }
 
-  // Separated reply: schedule normally, then convert to separated reply
+  // Separated reply: created waiting for its queued parent, or straight away for a published one
   const baseReplyParams = {
     targetChannelId: replySelectedChannel,
     originalMessage: replyOriginalMessage,
     forwardInfo: replyForwardInfo,
     content: replyContent,
     replyTo: publishedParent,
+    parentPostId,
   };
 
   const { scheduledTime: replySlotTime, postId: replyPostId } =
@@ -462,7 +477,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
         });
 
   if (parentPostId) {
-    await repository.convertToSeparatedReply(replyPostId, parentPostId, parentPost);
+    await repository.releaseIfParentPosted(replyPostId, await repository.findById(parentPostId));
   }
 
   await finalizePreview(c);

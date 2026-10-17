@@ -208,25 +208,22 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Convert a freshly-created pending post into a separated reply.
-   * If the parent is already posted, fills replyToMessageId/replyToChannelId and keeps status 'pending'.
-   * If the parent is still pending, sets status to 'waiting_parent'.
+   * Release a separated reply created 'waiting_parent' whose parent has already published:
+   * the worker only releases replies that exist when it posts the parent. Read the parent
+   * after creating the reply, so a publish in between is seen here or by the worker.
    */
-  async convertToSeparatedReply(
-    postId: string,
-    parentPostId: string,
-    parentPost: IScheduledPost | null
-  ): Promise<void> {
-    const update: Record<string, unknown> = { parentPostId };
-
-    if (parentPost?.status === 'posted' && parentPost.telegramScheduledMessageId) {
-      update.replyToMessageId = parentPost.telegramScheduledMessageId;
-      update.replyToChannelId = parentPost.targetChannelId;
-    } else {
-      update.status = 'waiting_parent';
-    }
-
-    await this.model.findByIdAndUpdate(postId, { $set: update });
+  async releaseIfParentPosted(postId: string, parentPost: IScheduledPost | null): Promise<void> {
+    if (parentPost?.status !== 'posted' || !parentPost.telegramScheduledMessageId) return;
+    await this.model.updateOne(
+      { _id: postId, status: 'waiting_parent' },
+      {
+        $set: {
+          replyToMessageId: parentPost.telegramScheduledMessageId,
+          replyToChannelId: parentPost.targetChannelId,
+          status: 'pending',
+        },
+      }
+    );
   }
 
   /**
