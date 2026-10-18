@@ -111,7 +111,7 @@ describe('hasPlaceableText / textAboveFor', () => {
   });
 });
 
-// What an edit's channel move carries over to the rescheduled reply.
+// The published post an edit session's preview shows the reply against.
 describe('publishedReplyTarget — edit of a reply', () => {
   const post = (o: Partial<IScheduledPost>): IScheduledPost => ({ _id: 'p1', ...o }) as unknown as IScheduledPost;
 

@@ -1,5 +1,5 @@
 import { BaseRepository } from './base.repository.js';
-import { ScheduledPost, QUEUED_STATUSES, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES, WAITING_PARENT, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
 import type { RetryMetadata } from '../models/scheduled-post.model.js';
 import type { MessageContent, TextHandling, TransformAction } from '../../types/message.types.js';
 import { getPostInterval } from '../../utils/post-interval.js';
@@ -208,22 +208,15 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Release a separated reply created 'waiting_parent' whose parent has already published:
-   * the worker only releases replies that exist when it posts the parent. Read the parent
-   * after creating the reply, so a publish in between is seen here or by the worker.
+   * Release the replies created waiting on a parent that has already published: the worker
+   * only releases replies that exist when it posts the parent. Call it after creating the
+   * reply, so a publish in between is seen here or by the worker.
+   * ponytail: a parent deleted or failed before the reply was created leaves it waiting forever.
    */
-  async releaseIfParentPosted(postId: string, parentPost: IScheduledPost | null): Promise<void> {
-    if (parentPost?.status !== 'posted' || !parentPost.telegramScheduledMessageId) return;
-    await this.model.updateOne(
-      { _id: postId, status: 'waiting_parent' },
-      {
-        $set: {
-          replyToMessageId: parentPost.telegramScheduledMessageId,
-          replyToChannelId: parentPost.targetChannelId,
-          status: 'pending',
-        },
-      }
-    );
+  async releaseIfParentPosted(parentPostId: string): Promise<void> {
+    const parent = await this.findById(parentPostId);
+    if (parent?.status !== 'posted' || !parent.telegramScheduledMessageId) return;
+    await this.unblockSeparatedReplies(parentPostId, parent.telegramScheduledMessageId, parent.targetChannelId);
   }
 
   /**
@@ -235,7 +228,7 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
     parentChannelId: string
   ): Promise<void> {
     await this.model.updateMany(
-      { parentPostId, status: 'waiting_parent' },
+      { parentPostId, status: WAITING_PARENT },
       {
         $set: {
           replyToMessageId: parentMessageId,
@@ -248,18 +241,23 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
 
   /**
    * Re-point replies at a parent that was re-created under a new id (channel move).
-   * They follow the parent's channel — a reply must live in the same chat as the message
-   * it answers.
+   * A reply in the parent's old channel follows it; one moved to another channel stays there
+   * (reply_parameters names the parent's chat, so it may live elsewhere).
    * ponytail: keeps each reply's own slot, which can collide with the new channel's queue.
    */
   async reparentSeparatedReplies(
     oldParentPostId: string,
     newParentPostId: string,
+    oldChannelId: string,
     newChannelId: string
   ): Promise<void> {
-    await this.model.updateMany(
-      { parentPostId: oldParentPostId, status: 'waiting_parent' },
-      { $set: { parentPostId: newParentPostId, targetChannelId: newChannelId } }
-    );
+    await this.model.updateMany({ parentPostId: oldParentPostId, status: WAITING_PARENT }, [
+      {
+        $set: {
+          parentPostId: newParentPostId,
+          targetChannelId: { $cond: [{ $eq: ['$targetChannelId', oldChannelId] }, newChannelId, '$targetChannelId'] },
+        },
+      },
+    ]);
   }
 }

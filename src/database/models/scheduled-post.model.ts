@@ -186,7 +186,8 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
 // Statuses that still hold a slot in the queue: 'pending' and separated replies waiting on
 // their parent. Anything that occupies a slot must be counted here, or slot allocation hands
 // the same slot out twice and the unique index below rejects the insert.
-export const QUEUED_STATUSES = ['pending', 'waiting_parent'] as const;
+export const WAITING_PARENT = 'waiting_parent' as const;
+export const QUEUED_STATUSES = ['pending', WAITING_PARENT] as const;
 
 // Compound unique index to prevent double-booking
 scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true });

@@ -58,7 +58,7 @@ import {
   creditUserId,
   knownCredit,
 } from './shared.js';
-import { editEntryBlocker } from './edit-entry.js';
+import { editEntryBlocker, movedReplyFields } from './edit-entry.js';
 
 const postScheduler = new PostSchedulerService();
 const queueService = new QueueService();
@@ -307,13 +307,8 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     // Replies to this post point at the post being replaced, so carry them to its successor below.
     const moving = await repository.findById(editingPostId);
     const movedEmbeddedReply = moving?.embeddedReply;
-    // If this post is itself a reply, it keeps what it answers: a published message, or a parent
-    // still queued. reply_parameters names the chat, so it may sit in another channel, as at creation.
-    const replyTo =
-      moving?.replyToChannelId && moving.replyToMessageId
-        ? { replyToChannelId: moving.replyToChannelId, replyToMessageId: moving.replyToMessageId }
-        : undefined;
-    const parentPostId = moving?.status === 'waiting_parent' ? moving.parentPostId : undefined;
+    // If this post is itself a reply, it keeps what it answers.
+    const { replyTo, parentPostId } = movedReplyFields(moving);
 
     // Moving channels is delete + reschedule, so bail if the delete found nothing pending —
     // scheduling anyway would duplicate a post the worker had already published.
@@ -347,12 +342,17 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
           });
 
     if (movedEmbeddedReply) {
-      await repository.attachEmbeddedReply(movedPostId, movedEmbeddedReply);
+      // As with separated replies: one in the parent's old channel follows it.
+      await repository.attachEmbeddedReply(movedPostId, {
+        ...movedEmbeddedReply,
+        targetChannelId:
+          movedEmbeddedReply.targetChannelId === editingOriginalChannelId ? newChannelId : movedEmbeddedReply.targetChannelId,
+      });
     }
     if (parentPostId) {
-      await repository.releaseIfParentPosted(movedPostId, await repository.findById(parentPostId));
+      await repository.releaseIfParentPosted(parentPostId);
     }
-    await repository.reparentSeparatedReplies(editingPostId, movedPostId, newChannelId);
+    await repository.reparentSeparatedReplies(editingPostId, movedPostId, editingOriginalChannelId, newChannelId);
 
     await finalizePreview(c);
 
@@ -477,7 +477,7 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
         });
 
   if (parentPostId) {
-    await repository.releaseIfParentPosted(replyPostId, await repository.findById(parentPostId));
+    await repository.releaseIfParentPosted(parentPostId);
   }
 
   await finalizePreview(c);

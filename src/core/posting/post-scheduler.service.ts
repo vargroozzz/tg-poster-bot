@@ -1,6 +1,7 @@
 import type { Message } from 'grammy/types';
 import type { ForwardInfo, MessageContent, TextHandling } from '../../types/message.types.js';
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
+import { WAITING_PARENT } from '../../database/models/scheduled-post.model.js';
 import { findNextAvailableSlot } from '../../utils/time-slots.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { getUserNickname } from '../../database/models/user-nickname.model.js';
@@ -17,7 +18,7 @@ export interface ReplyTarget {
  */
 const replyFields = (replyTo?: ReplyTarget, parentPostId?: string) => ({
   ...replyTo,
-  ...(parentPostId && { parentPostId, status: 'waiting_parent' as const }),
+  ...(parentPostId && { parentPostId, status: WAITING_PARENT }),
 });
 
 /**

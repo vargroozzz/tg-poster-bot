@@ -1,3 +1,5 @@
+import { OBJECT_ID_SOURCE } from './object-id.js';
+
 /** Callback prefixes for 💬 Add reply: from the scheduled-post confirmation and the queue preview. */
 export const REPLY_FROM_CONFIRMATION = 'reply_trigger';
 export const REPLY_FROM_QUEUE = 'queue_reply';
@@ -10,5 +12,5 @@ export const replyCallback = (prefix: string, postId: string, quoted = false): s
 
 /** Groups: [1] prefix, [2] quoted suffix (or undefined), [3] post id. */
 export const REPLY_CALLBACK_PATTERN = new RegExp(
-  `^(${REPLY_FROM_CONFIRMATION}|${REPLY_FROM_QUEUE})(${QUOTED_REPLY_SUFFIX})?:(.+)$`
+  `^(${REPLY_FROM_CONFIRMATION}|${REPLY_FROM_QUEUE})(${QUOTED_REPLY_SUFFIX})?:(${OBJECT_ID_SOURCE})$`
 );

@@ -1,5 +1,5 @@
 import { Api } from 'grammy';
-import { ScheduledPost, type IScheduledPost } from '../database/models/scheduled-post.model.js';
+import { ScheduledPost, WAITING_PARENT, type IScheduledPost } from '../database/models/scheduled-post.model.js';
 import { logger } from '../utils/logger.js';
 import { formatSlotTime } from '../utils/time-slots.js';
 import { PostPublisherService } from '../core/posting/post-publisher.service.js';
@@ -122,7 +122,7 @@ export class PostWorkerService {
       // Unblock separated reply posts that were waiting for this parent
       try {
         await ScheduledPost.updateMany(
-          { parentPostId: post._id.toString(), status: 'waiting_parent' },
+          { parentPostId: post._id.toString(), status: WAITING_PARENT },
           {
             $set: {
               replyToMessageId: messageId,

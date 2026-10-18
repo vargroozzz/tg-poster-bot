@@ -85,9 +85,25 @@ export async function startPublishedReply(ctx: Context, message: Message): Promi
   const post = findLinkedPost(message.text, await getActivePostingChannels());
   if (!post) return false;
 
+  // From here the link is never content: a failure must not hand it to a waiting reply session.
+  try {
+    await replyToLinkedPost(ctx, message, fromId, post);
+  } catch (error) {
+    logger.error('Error starting a published-post reply:', error);
+    await ctx.reply("❌ Couldn't start the reply. Send the link again.").catch(() => {});
+  }
+  return true;
+}
+
+async function replyToLinkedPost(
+  ctx: Context,
+  message: Message,
+  fromId: number,
+  post: NonNullable<ReturnType<typeof findLinkedPost>>
+): Promise<void> {
   // A redelivered update: the first delivery already started this reply.
   const updateId = ctx.update.update_id;
-  if (await getSessionService().replyStartedBy(fromId, updateId)) return true;
+  if (await getSessionService().replyStartedBy(fromId, updateId)) return;
 
   const { channel, messageId } = post;
   const label = channelLabel(channel);
@@ -106,7 +122,7 @@ export async function startPublishedReply(ctx: Context, message: Message): Promi
         : `❌ Couldn't reach ${label}. Send the link again in a moment.`,
       { reply_to_message_id: message.message_id }
     );
-    return true;
+    return;
   }
 
   await getSessionService().createForReply(fromId, {
@@ -122,7 +138,6 @@ export async function startPublishedReply(ctx: Context, message: Message): Promi
     { reply_to_message_id: source?.message_id ?? message.message_id }
   );
   logger.debug(`Published-reply session created for user ${fromId}, post ${channel.channelId}/${messageId}`);
-  return true;
 }
 
 export function registerReply(): void {

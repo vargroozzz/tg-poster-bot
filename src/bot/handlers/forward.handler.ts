@@ -505,35 +505,32 @@ bot.on([
 async function takeAsReplyContent(ctx: Context, messages: Message[]): Promise<boolean> {
   const userId = ctx.from?.id;
   if (!userId) return false;
-  try {
-    const sessionSvc = getSessionService();
-    const replySession = await sessionSvc.findWaitingForReplyContent(userId);
-    if (!replySession) return false;
-    // Webhook updates can arrive out of order; the album's first item carries the reply/quote.
-    const sorted = messages.toSorted((a, b) => a.message_id - b.message_id);
-    await handleReplyContent(ctx, sorted[0], replySession, sessionSvc, sorted.length > 1 ? sorted : undefined);
-    return true;
-  } catch (error) {
+  const sessionSvc = getSessionService();
+  const replySession = await sessionSvc.findWaitingForReplyContent(userId).catch((error: unknown) => {
     logger.error('Error checking for reply session:', error);
-    return false; // fall through to normal processing
+    return null; // fall through to normal processing
+  });
+  if (!replySession) return false;
+  // Webhook updates can arrive out of order; the album's first item carries the reply/quote.
+  const sorted = messages.toSorted((a, b) => a.message_id - b.message_id);
+  try {
+    await handleReplyContent(ctx, sorted[0], replySession, sessionSvc, sorted.length > 1 ? sorted : undefined);
+  } catch (error) {
+    // The session may already own this message; starting a post from it too would collide.
+    logger.error('Error taking reply content:', error);
+    await ctx.reply('❌ Something went wrong with this reply. Start it again.').catch(() => {});
   }
+  return true;
 }
 
 async function processSingleMessage(ctx: Context, message: Message) {
   // A pasted link to a post in a posting channel starts a reply to that published post. It
   // replaces a reply still waiting for content: an abandoned 💬 Add reply lives for a day and
   // would otherwise swallow the link as text, while the bot's answer here says what happened.
-  const tookLink = await startPublishedReply(ctx, message).catch(async (error: unknown) => {
+  // A throw here comes before the link is recognised: fall through to normal processing.
+  const tookLink = await startPublishedReply(ctx, message).catch((error: unknown) => {
     logger.error('Error starting a published-post reply:', error);
-    // Fall through to normal processing, unless the reply session was already created: it
-    // would then take the link itself as its content.
-    const userId = ctx.from?.id;
-    const started =
-      !!userId && (await getSessionService().replyStartedBy(userId, ctx.update.update_id).catch(() => false));
-    if (started) {
-      await ctx.reply('⚠️ Something went wrong, but the reply is started: send its content next.').catch(() => {});
-    }
-    return started;
+    return false;
   });
   if (tookLink) return;
 
