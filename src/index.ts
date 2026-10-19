@@ -130,8 +130,20 @@ async function main() {
     server.listen(port, async () => {
       logger.info(`Server listening on port ${port}`);
 
-      // If no webhook, start long polling
-      if (!webhookUrl) {
+      // Render's free tier sleeps after 15 min without inbound traffic; a request to our own
+      // public URL goes through Render's proxy and counts. Survives the external pinger dying.
+      // ponytail: keeps a running instance awake only; once spun down, cron-job.org or a webhook wakes it.
+      if (webhookUrl) {
+        setInterval(() => {
+          fetch(`${webhookUrl}/health`, { signal: AbortSignal.timeout(10_000) })
+            .then(async (res) => {
+              await res.body?.cancel();
+              if (!res.ok) logger.warn(`Keep-alive ping returned ${res.status}`);
+            })
+            .catch((error: Error) => logger.warn(`Keep-alive ping failed: ${error.message} (${String(error.cause)})`));
+        }, 10 * 60 * 1000).unref();
+      } else {
+        // No webhook: long polling
         logger.info('Starting long polling...');
         bot.start().catch((error) => {
           logger.error('Error in long polling:', error);

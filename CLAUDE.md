@@ -899,7 +899,10 @@ The bot runs continuously and has an HTTP endpoint for health checks, so it's co
 
 **Problem:** Render free tier spins down services after 15 minutes of inactivity. Since the bot uses webhooks (not polling), there may be no HTTP traffic for hours, causing the service to sleep and miss scheduled posts.
 
-**Solution:** Use **cron-job.org** (free external service) to ping the health endpoint regularly:
+**Solution:** When `WEBHOOK_URL` is set, the bot pings its own `${WEBHOOK_URL}/health` every 10
+minutes (`src/index.ts`); the request goes through Render's proxy, so it counts as inbound traffic.
+This only keeps a running instance awake. **cron-job.org** stays as a backup that wakes a service
+that has already spun down (cron-job.org auto-disables a job after repeated failures, so check it's still enabled):
 
 1. **Create account at cron-job.org** (free, no credit card required)
 
@@ -910,12 +913,8 @@ The bot runs continuously and has an HTTP endpoint for health checks, so it's co
    - **Method:** GET
    - **Enable:** Yes
 
-3. **Verify health endpoint exists** in `src/index.ts`:
-   ```typescript
-   app.get('/health', (req, res) => {
-     res.json({ status: 'ok' });
-   });
-   ```
+3. **Verify health endpoint exists**: `GET /health` is served by the `http.createServer` handler in
+   `src/index.ts` (`curl https://tg-poster-bot.onrender.com/health` → 200).
 
 4. **Bot uses continuous worker** (not HTTP-triggered):
    - Worker runs every 30 seconds checking for due posts
@@ -926,7 +925,6 @@ The bot runs continuously and has an HTTP endpoint for health checks, so it's co
 - ✅ Service never sleeps (pinged every 10 min)
 - ✅ Posts publish on time
 - ✅ Free (cron-job.org free tier allows frequent pings)
-- ✅ Zero configuration changes to bot code
 
 **Monitoring:**
 - Check cron-job.org execution history for successful pings
