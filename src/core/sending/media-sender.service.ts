@@ -1,6 +1,7 @@
 import { Api } from 'grammy';
-import type { ReplyParameters } from 'grammy/types';
+import type { InputRichBlock, ReplyParameters } from 'grammy/types';
 import type { MessageContent, MediaGroupItem, ReplyQuote } from '../../types/message.types.js';
+import { htmlToRichBlocks, mediaBlock, collageBlock } from './rich.js';
 
 export type ReplyParams = { chatId: number; messageId: number; quote?: ReplyQuote };
 
@@ -30,6 +31,33 @@ export const supportsTextAbove = (content: MessageContent): boolean =>
     (content.type === 'media_group' && ABOVE_CAPABLE.includes(content.mediaGroup[0]?.type)));
 
 /**
+ * Whether this send goes out as a rich message. A rich source always does. So does text placed
+ * above media when it carries an attribution: a caption moves as a whole, so only a rich
+ * message can put the text above the media and keep the from/via line below it.
+ */
+export const sendsAsRich = (content: MessageContent, textAbove?: boolean): boolean =>
+  content.type === 'rich' || (!!textAbove && !!content.attribution && supportsTextAbove(content));
+
+/** The rich layout: added text, then the post's own blocks or media, then the attribution. */
+export function richBlocksFor(content: MessageContent): InputRichBlock[] {
+  const text = content.text ?? '';
+  const attribution = content.attribution && text.endsWith(content.attribution) ? content.attribution : '';
+  const body =
+    content.type === 'rich'
+      ? content.blocks
+      : content.type === 'media_group'
+        ? [collageBlock(content.mediaGroup)]
+        : 'fileId' in content
+          ? [mediaBlock(content)]
+          : [];
+  return [
+    ...htmlToRichBlocks(text.slice(0, text.length - attribution.length)),
+    ...body,
+    ...htmlToRichBlocks(attribution),
+  ];
+}
+
+/**
  * Shared service for sending media to Telegram
  * Used by both preview and publishing to avoid code duplication
  */
@@ -46,6 +74,8 @@ export class MediaSenderService {
     replyParameters?: ReplyParams,
     textAbove?: boolean
   ): Promise<number> {
+    if (sendsAsRich(content, textAbove)) return this.sendRich(chatId, content, replyParameters);
+
     switch (content.type) {
       case 'photo':
         return await this.sendPhoto(chatId, content.fileId, content.text, replyParameters, content.hasSpoiler, textAbove);
@@ -98,6 +128,26 @@ export class MediaSenderService {
       default:
         throw new Error(`Unsupported content type: ${(content as unknown as { type: string }).type}`);
     }
+  }
+
+  /**
+   * Send the content and return every message it became: one per album item for an album,
+   * otherwise one. Use this when each message must be tracked for later cleanup.
+   */
+  async sendAll(
+    chatId: number | string,
+    content: MessageContent,
+    replyParameters?: ReplyParams,
+    textAbove?: boolean
+  ): Promise<number[]> {
+    return content.type === 'media_group' && !sendsAsRich(content, textAbove)
+      ? await this.sendMediaGroupAll(chatId, content.mediaGroup, content.text, replyParameters, textAbove)
+      : [await this.sendMessage(chatId, content, replyParameters, textAbove)];
+  }
+
+  async sendRich(chatId: number | string, content: MessageContent, replyParameters?: ReplyParams): Promise<number> {
+    const result = await this.api.sendRichMessage(chatId, { blocks: richBlocksFor(content) }, replyOpts(replyParameters));
+    return result.message_id;
   }
 
   async sendPhoto(
@@ -246,7 +296,9 @@ export class MediaSenderService {
       ...(item.hasSpoiler ? { has_spoiler: true } : {}),
     }));
 
-    const result = await this.api.sendMediaGroup(chatId, media, {
+    // Telegram keeps an album to one kind (audio, documents, or photos and videos); the
+    // items come from one album, so they already are.
+    const result = await this.api.sendMediaGroup(chatId, media as Parameters<Api['sendMediaGroup']>[1], {
       ...replyOpts(replyParameters),
     });
     return result.map((m) => m.message_id);

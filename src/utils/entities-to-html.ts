@@ -28,6 +28,10 @@ function openTag(entity: MessageEntity): string {
       return `<a href="${entity.url}">`;
     case 'text_mention':
       return `<a href="tg://user?id=${entity.user?.id}">`;
+    case 'date_time':
+      return entity.date_time_format
+        ? `<tg-time unix="${entity.unix_time}" format="${entity.date_time_format}">`
+        : `<tg-time unix="${entity.unix_time}">`;
     default:
       return '';
   }
@@ -57,6 +61,8 @@ function closeTag(entity: MessageEntity): string {
       return '</a>';
     case 'text_mention':
       return '</a>';
+    case 'date_time':
+      return '</tg-time>';
     default:
       return '';
   }

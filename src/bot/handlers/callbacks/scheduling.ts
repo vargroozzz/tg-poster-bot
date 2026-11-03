@@ -15,6 +15,7 @@ import {
 import type { EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
 import type { MessageContent } from '../../../types/message.types.js';
 import { nextSpoilers, spoilerSlots, withSpoilers } from '../../../core/sending/spoilers.js';
+import { sendsAsRich } from '../../../core/sending/media-sender.service.js';
 import { CustomTextPreset } from '../../../database/models/custom-text-preset.model.js';
 import { formatSlotTime } from '../../../utils/time-slots.js';
 import { logger } from '../../../utils/logger.js';
@@ -805,17 +806,20 @@ export function registerScheduling(): void {
       session.textAbove = textAbove;
 
       const contentMessageId = session.previewContentMessageId;
-      if (!contentMessageId || !fromId) {
-        // Preview predates the in-place edit (or we can't address the chat): re-send it.
+      const resend = async () => {
         if (fromId) await deletePreviewMessages(ctx, fromId, session);
         await showPreview(ctx, sessionKey);
-        return;
-      }
+      };
+      // Preview predates the in-place edit (or we can't address the chat): re-send it.
+      if (!contentMessageId || !fromId) return resend();
+      const content = await currentPreviewContent(session);
+      // With an attribution, text above goes out as a rich message (text, media, then the
+      // from/via line), and a message can't be edited into another kind.
+      if (sendsAsRich(content, true)) return resend();
 
       // Only the placement changes, so edit the caption in place rather than tearing the
       // whole preview down — no flicker, and the message keeps its position in the chat.
       // Placement is a send-time flag, so the caption text itself is unchanged.
-      const content = await currentPreviewContent(session);
 
       await ctx.api.editMessageCaption(fromId, contentMessageId, {
         caption: content.text,

@@ -233,6 +233,25 @@ Owner-only: reply routes schedule directly, without a proposer's handoff for rev
 - `src/bot/handlers/callbacks/reply.ts` - `startPublishedReply`, 💬 Add reply
 - `src/bot/handlers/forward.handler.ts` - `handleReplyContent`, `promptReplyAction`
 
+### Rich Messages (Bot API 10.1+)
+
+Telegram's rich messages (headings, lists, tables, media between paragraphs) are a separate
+message kind, sent with `sendRichMessage`; captions can't hold them. The bot uses them twice:
+
+- **Rich source posts**: a forwarded or original rich post becomes content `type: 'rich'`, its
+  blocks converted for resending (`toInputRichBlocks`). Transform sends custom text, then the
+  source's blocks, then the attribution. Its own text lives in the blocks, so the text step
+  offers only "No text" / custom text, as for a captionless photo.
+- **Text above + attribution**: `show_caption_above_media` moves the whole caption, from/via line
+  included. When the text goes above and the post has an attribution, it's sent as a rich
+  message instead: text, the media (an album as a collage), then the attribution.
+  `sendsAsRich` decides; `content.attribution` (the tail of `text`, set by `transformContent`)
+  is what lets the sender split them. Toggling text placement re-sends the preview then, since
+  a message can't be edited into another kind.
+
+**Files:** `src/core/sending/rich.ts` (block conversion, HTML → rich blocks),
+`src/core/sending/media-sender.service.ts` (`sendsAsRich`, `richBlocksFor`, `sendAll`)
+
 ## Flow Diagrams
 
 ### Message Scheduling Flow
@@ -1050,6 +1069,8 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - [x] Command hints (descriptions appear when typing "/" in Telegram)
 - [x] Replies to queued posts (💬 Add reply / ❝ Add quoted reply on the confirmation and queue preview)
 - [x] Replies to already-published posts (send the post link, then the content)
+- [x] Rich posts: rich source posts can be transformed; text above media keeps the attribution below (sent as a rich message)
+- [x] `date_time` entities survive transform as `<tg-time>` (each reader sees their local time)
 
 ## Future Improvements
 

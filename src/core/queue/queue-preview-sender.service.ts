@@ -50,19 +50,7 @@ export class QueuePreviewSenderService {
     } else {
       // Transform action: send the already-transformed content from DB as-is
       const content = withSpoilers(post.content, post.spoilers);
-      if (content.type === 'media_group' && content.mediaGroup?.length) {
-        const ids = await this.mediaSender.sendMediaGroupAll(
-          userId,
-          content.mediaGroup,
-          content.text,
-          undefined,
-          post.textAbove
-        );
-        previewMessageIds.push(...ids);
-      } else {
-        const id = await this.mediaSender.sendMessage(userId, content, undefined, post.textAbove);
-        previewMessageIds.push(id);
-      }
+      previewMessageIds.push(...(await this.mediaSender.sendAll(userId, content, undefined, post.textAbove)));
     }
 
     const keyboard = createQueuePreviewActionKeyboard(post._id.toString());

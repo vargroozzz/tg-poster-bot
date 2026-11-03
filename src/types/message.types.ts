@@ -1,4 +1,4 @@
-import type { Message, MessageEntity } from 'grammy/types';
+import type { InputRichBlock, Message, MessageEntity } from 'grammy/types';
 
 /** A highlighted fragment of the replied-to message (Telegram's quote-reply). */
 export interface ReplyQuote {
@@ -125,12 +125,23 @@ export interface MediaGroupContent {
   text?: string;
 }
 
+// A rich message (headings, lists, tables, media in the text). `blocks` is the source post,
+// ready to send; `text` is what the transform adds around it: custom text, then attribution.
+// Its text handling has nothing to act on: the source's own text lives in `blocks`.
+export interface RichContent {
+  type: 'rich';
+  blocks: InputRichBlock[];
+  text?: string;
+}
+
 export interface PollContent {
   type: 'poll';
   text?: string;
 }
 
-export type MessageContent =
+// `attribution` is the from/via line the transform appended: the tail of `text`, kept apart
+// so a send can place it on its own (see core/sending/rich.ts).
+export type MessageContent = (
   | TextContent
   | PhotoContent
   | VideoContent
@@ -145,7 +156,9 @@ export type MessageContent =
   | LocationContent
   | VenueContent
   | MediaGroupContent
-  | PollContent;
+  | PollContent
+  | RichContent
+) & { attribution?: string };
 
 export type TransformAction = 'transform' | 'forward';
 

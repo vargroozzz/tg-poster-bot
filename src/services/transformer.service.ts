@@ -10,25 +10,27 @@ const channelListRepo = new ChannelListRepository();
  * Facade for message transformation.
  * Coordinates text transformation and attribution.
  */
-export async function transformMessage(
+/** The post's text and, separately, the attribution line appended to it (when there is one). */
+async function transformParts(
   originalText: string,
   forwardInfo: ForwardInfo,
   action: TransformAction,
-  textHandling: TextHandling = 'keep',
+  textHandling: TextHandling,
   manualNickname?: string | null,
   customText?: string
-): Promise<string> {
+): Promise<{ text: string; attribution?: string }> {
   const processedText = transformText(originalText, textHandling, customText);
 
-  if (action === 'forward') return processedText;
+  if (action === 'forward') return { text: processedText };
 
-  const attributionText = await buildAttribution(forwardInfo, manualNickname);
-  return processedText + (attributionText ?? '');
+  const attribution = (await buildAttribution(forwardInfo, manualNickname)) ?? undefined;
+  return { text: processedText + (attribution ?? ''), attribution };
 }
 
 /**
- * Applies transformMessage to a MessageContent's text, guarding against
- * text-only content ending up empty (Telegram rejects empty sendMessage text).
+ * Applies the transform to a MessageContent's text, guarding against text-only content
+ * ending up empty (Telegram rejects empty sendMessage text). The attribution is also kept
+ * on its own, so a send can place it apart from the text.
  */
 export async function transformContent(
   content: MessageContent,
@@ -39,8 +41,10 @@ export async function transformContent(
   customText?: string
 ): Promise<MessageContent> {
   const originalText = content.text ?? '';
-  const transformedText = await transformMessage(originalText, forwardInfo, action, textHandling, manualNickname, customText);
-  return { ...content, text: preventEmptyTextContent(content.type, originalText, transformedText) };
+  const { text, attribution } = await transformParts(originalText, forwardInfo, action, textHandling, manualNickname, customText);
+  const finalText = preventEmptyTextContent(content.type, originalText, text);
+  // A text post that fell back to its original no longer ends with the attribution.
+  return { ...content, text: finalText, attribution: finalText === text ? attribution : undefined };
 }
 
 export async function shouldAutoForward(forwardInfo: ForwardInfo): Promise<boolean> {
@@ -59,7 +63,6 @@ export async function isRedListed(channelId: string): Promise<boolean> {
 
 // Keep singleton export for backwards compat with call sites that import `transformerService`
 export const transformerService = {
-  transformMessage,
   transformContent,
   shouldAutoForward,
   isRedListed,

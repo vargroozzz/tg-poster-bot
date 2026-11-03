@@ -86,11 +86,14 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
       type: String,
       enum: [
         'text', 'photo', 'video', 'document', 'animation', 'voice', 'audio', 'video_note',
-        'sticker', 'dice', 'contact', 'location', 'venue', 'media_group', 'poll',
+        'sticker', 'dice', 'contact', 'location', 'venue', 'media_group', 'poll', 'rich',
       ],
       required: true,
     },
     text: String,
+    attribution: String,
+    // A rich post's blocks: a deep, Telegram-defined tree, so stored as-is.
+    blocks: { type: Schema.Types.Mixed, default: undefined },
     fileId: String,
     hasSpoiler: Boolean,
     emoji: String,

@@ -26,4 +26,14 @@ describe('entitiesToHtml', () => {
     const entities: MessageEntity[] = [{ type: 'bold', offset: 0, length: 7 }];
     expect(entitiesToHtml('a < b & c', entities)).toBe('<b>a &lt; b &amp;</b> c');
   });
+
+  it('keeps a date_time entity as a tg-time tag, with and without a format', () => {
+    const entities: MessageEntity[] = [
+      { type: 'date_time', offset: 3, length: 5, unix_time: 1647531900, date_time_format: 'wDT' },
+      { type: 'date_time', offset: 12, length: 5, unix_time: 1647531900, date_time_format: '' },
+    ];
+    expect(entitiesToHtml('at 22:45 or 22:45', entities)).toBe(
+      'at <tg-time unix="1647531900" format="wDT">22:45</tg-time> or <tg-time unix="1647531900">22:45</tg-time>'
+    );
+  });
 });

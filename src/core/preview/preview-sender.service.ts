@@ -165,26 +165,10 @@ export class PreviewSenderService {
         }
       }
 
-      if (content.type === 'media_group' && content.mediaGroup && content.mediaGroup.length > 0) {
-        // Collect all album message IDs so every item can be deleted on cleanup
-        const ids = await this.mediaSender.sendMediaGroupAll(
-          userId,
-          content.mediaGroup,
-          content.text,
-          undefined,
-          textAboveFor(session)
-        );
-        previewMessageIds.push(...ids);
-        contentMessageId = ids[0];
-      } else {
-        contentMessageId = await this.mediaSender.sendMessage(
-          userId,
-          content,
-          undefined,
-          textAboveFor(session)
-        );
-        previewMessageIds.push(contentMessageId);
-      }
+      // Collect every message the content became, so all of them can be deleted on cleanup.
+      const ids = await this.mediaSender.sendAll(userId, content, undefined, textAboveFor(session));
+      previewMessageIds.push(...ids);
+      contentMessageId = ids[0];
     }
 
     // Update session with previewMessageIds for multi-message cleanup

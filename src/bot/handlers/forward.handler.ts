@@ -14,6 +14,7 @@ import { SessionState } from '../../shared/constants/flow-states.js';
 import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
 import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
 import { entitiesToHtml } from '../../utils/entities-to-html.js';
+import { toInputRichBlocks } from '../../core/sending/rich.js';
 import { config } from '../../config/index.js';
 import { getUserNickname } from '../../database/models/user-nickname.model.js';
 import { getNicknameKeyboard } from '../../shared/helpers/nickname.helper.js';
@@ -328,6 +329,7 @@ bot.on([
   'message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation',
   'message:voice', 'message:audio', 'message:video_note', 'message:sticker', 'message:dice',
   'message:contact', 'message:location', 'message:venue', 'message:text', 'message:poll',
+  'message:rich_message',
 ], async (ctx: Context) => {
   try {
     const message = ctx.message;
@@ -672,6 +674,7 @@ const SINGLE_EXTRACTORS: ReadonlyArray<(m: Message) => MessageContent | undefine
   },
   m => m.location && { type: 'location', latitude: m.location.latitude, longitude: m.location.longitude },
   m => m.poll && { type: 'poll' },
+  m => m.rich_message && { type: 'rich', blocks: toInputRichBlocks(m.rich_message.blocks) },
   m => m.text
     ? { type: 'text', text: entitiesToHtml(m.text, m.entities), linkPreviewOptions: m.link_preview_options ?? { is_disabled: true } }
     : undefined,
