@@ -1026,6 +1026,7 @@ Currently no automated tests. Future improvement: add Jest tests for:
 ## Implemented Features
 
 - [x] Media group support (albums with multiple photos/videos via forwardMessages API)
+- [x] Forward batches: forwards arriving within 1s of each other (an album counts as one post) prompt "📦 Together / ✂️ Separately" — one thread post, or each through its own flow. Grouped by arrival time because Telegram drops reply links on forwards
 - [x] Inline nickname selection with "No attribution" option (always shown in Transform flow)
 - [x] Auto-nickname selection for known users (streamlines workflow)
 - [x] Custom text feature (prepend text to posts)

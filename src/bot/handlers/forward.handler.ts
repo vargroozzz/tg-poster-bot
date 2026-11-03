@@ -124,69 +124,111 @@ interface MediaGroupBuffer {
 
 const mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
 
-// Store reply chain buffers temporarily
-interface ReplyChainBuffer {
+// Forwards that arrive in one burst (a multi-select forward) are buffered per user, then the
+// owner chooses to post them together (one thread) or separately. Telegram drops reply links
+// on forwards (external_reply is always null), so arrival time is the only grouping signal.
+const BURST_WINDOW_MS = 1000;
+const PENDING_BATCH_TTL_MS = 60 * 60 * 1000;
+const BATCH_TOGETHER = 'batch_together';
+const BATCH_SEPARATE = 'batch_separate';
+
+interface BurstBuffer {
   messages: Message[];
   timeout: NodeJS.Timeout;
-  // ctx is stored here to support the single-message fallback path (processSingleMessage
-  // requires a full Grammy Context). Stale entries are cleaned by the periodic interval
-  // below, so this does not cause a long-lived memory leak.
   ctx: Context;
-  createdAt: number; // epoch ms — used by periodic cleanup
 }
 
-const replyChainBuffers = new Map<string, ReplyChainBuffer>();
+// A burst of more than one post, waiting for the together/separately choice.
+interface PendingBatch {
+  items: Message[][];
+  ctx: Context;
+  createdAt: number;
+}
 
-// Maps a forwarded message_id (in bot chat) to its buffer key, so that
-// subsequent messages replying to it (in the bot chat) can be linked to the same buffer.
-const forwardedMsgToBufferKey = new Map<number, string>();
+const burstBuffers = new Map<number, BurstBuffer>();
+// shortcut: in-memory, so a restart between the burst and the tap loses it; the tap then says to forward again.
+const pendingBatches = new Map<string, PendingBatch>();
 
-// Maps a message's "address" in its source channel (chatId_messageId of the ORIGINAL
-// message) to the buffer key it ended up in. This lets us detect when a newly-forwarded
-// message is itself a reply, in the source chat, to a message we already buffered —
-// the only reliable signal for "these forwards form a real reply chain". Messages that
-// are merely forwarded together (no such relationship) are NOT grouped.
-const originKeyToBufferKey = new Map<string, string>();
+const mediaGroupIdOf = (m: Message): string | undefined =>
+  'media_group_id' in m ? m.media_group_id : undefined;
 
-// Returns the "address" (source chat + original message_id) of a forwarded message in
-// its origin channel, if known. Only channel-origin forwards expose the original message_id.
-function getForwardOriginKey(message: Message): string | undefined {
-  const origin = message.forward_origin;
-  if (origin?.type === 'channel') {
-    return `${origin.chat.id}_${origin.message_id}`;
+/** Splits a burst into posts in arrival order: each album is one post, every other message its own. */
+export function groupBurstItems(messages: Message[]): Message[][] {
+  return messages
+    .toSorted((a, b) => a.message_id - b.message_id)
+    .reduce<Message[][]>((items, m) => {
+      const albumId = mediaGroupIdOf(m);
+      const album = albumId ? items.find((item) => mediaGroupIdOf(item[0]) === albumId) : undefined;
+      return album ? items.map((item) => (item === album ? [...item, m] : item)) : [...items, [m]];
+    }, []);
+}
+
+function bufferBurst(ctx: Context, message: Message, userId: number): void {
+  const existing = burstBuffers.get(userId);
+  if (existing) clearTimeout(existing.timeout);
+  const timeout = setTimeout(() => {
+    flushBurst(userId).catch(async (err) => {
+      logger.error('Error processing forward burst:', err);
+      await ctx.reply('❌ Error processing message. Please try again.').catch(() => {});
+    });
+  }, BURST_WINDOW_MS);
+  burstBuffers.set(userId, { messages: [...(existing?.messages ?? []), message], timeout, ctx: existing?.ctx ?? ctx });
+}
+
+async function flushBurst(userId: number): Promise<void> {
+  const buffer = burstBuffers.get(userId);
+  if (!buffer) return;
+  burstBuffers.delete(userId);
+
+  const items = groupBurstItems(buffer.messages);
+  logger.info(`Forward burst fired: user=${userId}, messages=${buffer.messages.length}, posts=${items.length}`);
+  if (items.length <= 1) {
+    await processReplyChain(buffer.ctx, buffer.messages);
+    return;
   }
-  return undefined;
-}
 
-// Returns the "address" of the message this one replies to in the source chat
-// (Bot API 7.0 external_reply), if known.
-function getExternalReplyKey(message: Message): string | undefined {
-  const ext = message.external_reply;
-  if (ext?.chat && ext.message_id !== undefined) {
-    return `${ext.chat.id}_${ext.message_id}`;
-  }
-  return undefined;
-}
-
-function cleanupBufferLinks(messages: Message[]): void {
-  messages.forEach((msg) => {
-    forwardedMsgToBufferKey.delete(msg.message_id);
-    const originKey = getForwardOriginKey(msg);
-    if (originKey) originKeyToBufferKey.delete(originKey);
+  // message_ids are per chat, so the user id keeps two users' batches apart.
+  const batchId = `${userId}_${items[0][0].message_id}`;
+  pendingBatches.set(batchId, { items, ctx: buffer.ctx, createdAt: Date.now() });
+  await buffer.ctx.reply(`📦 ${items.length} posts arrived together. Post them as one batch or separately?`, {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '📦 Together', callback_data: `${BATCH_TOGETHER}:${batchId}` },
+        { text: '✂️ Separately', callback_data: `${BATCH_SEPARATE}:${batchId}` },
+      ]],
+    },
+    reply_to_message_id: items[0][0].message_id,
   });
 }
 
-// Clean up stale reply-chain buffers every 5 minutes
+bot.callbackQuery(new RegExp(`^(${BATCH_TOGETHER}|${BATCH_SEPARATE}):(\\d+)_(\\d+)$`), async (ctx) => {
+  const [, choice, ownerId, firstId] = ctx.match;
+  await ctx.answerCallbackQuery();
+  if (String(ctx.from.id) !== ownerId) return;
+  const batchId = `${ownerId}_${firstId}`;
+  const batch = pendingBatches.get(batchId);
+  pendingBatches.delete(batchId); // taken once, so a double tap can't start the flows twice
+  if (!batch) {
+    await ctx.editMessageText('⚠️ This batch expired. Forward the messages again.').catch(() => {});
+    return;
+  }
+  await ctx.deleteMessage().catch(() => {});
+  const posts = choice === BATCH_TOGETHER ? [batch.items.flat()] : batch.items;
+  // Sequential, so the channel prompts arrive in the posts' order; one failure doesn't drop the rest.
+  for (const post of posts) {
+    await processReplyChain(batch.ctx, post).catch(async (error: unknown) => {
+      logger.error('Error processing forward batch:', error);
+      await ctx.reply('❌ Error processing one of these posts. Forward it again.', {
+        reply_to_message_id: post[0].message_id,
+      }).catch(() => {});
+    });
+  }
+});
+
 setInterval(() => {
   const now = Date.now();
-  const replyChainTtl = 5 * 60 * 1000; // 5 minutes
-  replyChainBuffers.forEach((buffer, key) => {
-    if (now - buffer.createdAt > replyChainTtl) {
-      clearTimeout(buffer.timeout);
-      cleanupBufferLinks(buffer.messages);
-      replyChainBuffers.delete(key);
-      logger.debug(`Cleaned up stale reply chain buffer: ${key}`);
-    }
+  pendingBatches.forEach((batch, key) => {
+    if (now - batch.createdAt > PENDING_BATCH_TTL_MS) pendingBatches.delete(key);
   });
 }, 5 * 60 * 1000);
 
@@ -306,192 +348,32 @@ bot.on([
       }
     }
 
-    // Check if this is part of a media group
-    const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
-
-    if (mediaGroupId) {
-      if (forwardOrigin && userId) {
-        // Forwarded album: only merge into an existing thread buffer if this album is
-        // itself a reply (in the source chat) to an already-buffered message. Albums
-        // forwarded together without such a relationship get their own buffer.
-        const replyTargetKey = getExternalReplyKey(message);
-        const linkedOriginBufferKey = replyTargetKey ? originKeyToBufferKey.get(replyTargetKey) : undefined;
-        const batchKey = linkedOriginBufferKey ?? `fwd_${userId}_mg_${mediaGroupId}`;
-
-        const originKey = getForwardOriginKey(message);
-        if (originKey) originKeyToBufferKey.set(originKey, batchKey);
-
-        forwardedMsgToBufferKey.set(message.message_id, batchKey);
-
-        const chainBuf = replyChainBuffers.get(batchKey);
-        if (chainBuf) {
-          chainBuf.messages.push(message);
-          clearTimeout(chainBuf.timeout);
-          logger.info(`Reply chain: joined (fwd album) ${batchKey} (${chainBuf.messages.length} messages)`);
-          chainBuf.timeout = setTimeout(() => {
-            processReplyChain(batchKey).catch((err) => {
-              logger.error('Error processing forward batch:', err);
-            });
-          }, 1000);
-        } else {
-          logger.info(`Reply chain: new buffer (fwd album) ${batchKey} origin=${forwardOrigin.type}`);
-          const timeout = setTimeout(() => {
-            processReplyChain(batchKey).catch((err) => {
-              logger.error('Error processing forward batch:', err);
-            });
-          }, 1000);
-          replyChainBuffers.set(batchKey, {
-            messages: [message],
-            timeout,
-            ctx,
-            createdAt: Date.now(),
-          });
-        }
-        return;
-      }
-
-      // Non-forwarded media group: existing handling unchanged
-      const buffer = mediaGroupBuffers.get(mediaGroupId);
-
-      if (buffer) {
-        // Add to existing buffer
-        buffer.messages.push(message);
-        // Reset timeout
-        clearTimeout(buffer.timeout);
-        buffer.timeout = setTimeout(() => {
-          processMediaGroup(mediaGroupId).catch((error) => {
-            logger.error('Error processing media group:', error);
-          });
-        }, 1000); // Wait 1 second for all messages
-      } else {
-        // Create new buffer
-        const timeout = setTimeout(() => {
-          processMediaGroup(mediaGroupId).catch((error) => {
-            logger.error('Error processing media group:', error);
-          });
-        }, 1000);
-
-        mediaGroupBuffers.set(mediaGroupId, {
-          messages: [message],
-          timeout,
-          ctx,
-        });
-      }
-
-      // Register this message ID so that thread comments arriving later can
-      // find and join the same media group buffer.
-      forwardedMsgToBufferKey.set(message.message_id, `mg:${mediaGroupId}`);
-
-      return; // Don't process yet
-    }
-
-    // Single message (not part of media group): only group with another buffered
-    // message if this one is a genuine reply chain (see getExternalReplyKey below).
+    // Forwards (albums included) are buffered by arrival time; see bufferBurst.
     if (forwardOrigin && userId) {
-      // ponytail: temporary diagnostic — confirm whether channel post→post replies
-      // carry any reply signal on forward. Remove once the grouping question is settled.
-      logger.info('[fwd-diag] ' + JSON.stringify({
-        message_id: message.message_id,
-        text: 'text' in message ? message.text?.slice(0, 40) : undefined,
-        forward_origin: forwardOrigin.type === 'channel'
-          ? { type: 'channel', chat: forwardOrigin.chat.id, msg: forwardOrigin.message_id }
-          : { type: forwardOrigin.type },
-        external_reply: message.external_reply
-          ? { chat: message.external_reply.chat?.id, msg: message.external_reply.message_id }
-          : null,
-        reply_to_message_id: message.reply_to_message?.message_id ?? null,
-        has_quote: !!message.quote,
-      }));
-
-      // If this message is a reply to one we already buffered, reuse that buffer.
-      const replyToId = message.reply_to_message?.message_id;
-      const linkedKey = replyToId !== undefined ? forwardedMsgToBufferKey.get(replyToId) : undefined;
-
-      // If this message is a comment/reply to a media group, merge both into one thread buffer.
-      if (linkedKey?.startsWith('mg:')) {
-        const mediaGroupId = linkedKey.slice(3);
-        const mgBuffer = mediaGroupBuffers.get(mediaGroupId);
-
-        if (mgBuffer) {
-          clearTimeout(mgBuffer.timeout);
-          mediaGroupBuffers.delete(mediaGroupId);
-
-          // Combined key anchored on the first media group message.
-          const combinedKey = `fwd_${userId}_${mgBuffer.messages[0].message_id}`;
-          const allMessages = [...mgBuffer.messages, message];
-
-          // Re-register all IDs so further comments join the same buffer.
-          allMessages.forEach((msg) => forwardedMsgToBufferKey.set(msg.message_id, combinedKey));
-
-          const timeout = setTimeout(() => {
-            processReplyChain(combinedKey).catch((err) => {
-              logger.error('Error processing forward batch:', err);
-            });
-          }, 1000);
-
-          replyChainBuffers.set(combinedKey, {
-            messages: allMessages,
-            timeout,
-            ctx: mgBuffer.ctx,
-            createdAt: Date.now(),
-          });
-
-          return;
-        }
-        // mgBuffer already flushed — fall through to normal reply-chain logic
-      }
-
-      // Use the linked key only when it's an actual reply-chain key; an mg: key
-      // at this point means the media group was already flushed, so start fresh.
-      // Otherwise, only merge into an existing buffer if this message is itself a
-      // reply (in the source chat) to an already-buffered message — a real reply
-      // chain. Messages merely forwarded together get their own buffer.
-      const replyTargetKey = getExternalReplyKey(message);
-      const linkedOriginBufferKey = replyTargetKey ? originKeyToBufferKey.get(replyTargetKey) : undefined;
-
-      const batchKey = linkedKey && !linkedKey.startsWith('mg:')
-        ? linkedKey
-        : linkedOriginBufferKey
-        ? linkedOriginBufferKey
-        : `fwd_${userId}_${message.message_id}`;
-
-      // Register so a later message that replies to this one (in the source chat)
-      // can find the same buffer.
-      const originKey = getForwardOriginKey(message);
-      if (originKey) originKeyToBufferKey.set(originKey, batchKey);
-
-      // Register so future bot-chat replies to this message can find the same buffer.
-      forwardedMsgToBufferKey.set(message.message_id, batchKey);
-
-      const buffer = replyChainBuffers.get(batchKey);
-
-      if (buffer) {
-        buffer.messages.push(message);
-        clearTimeout(buffer.timeout);
-        logger.info(`Reply chain: joined buffer ${batchKey} (${buffer.messages.length} messages so far)`);
-        buffer.timeout = setTimeout(() => {
-          processReplyChain(batchKey).catch((err) => {
-            logger.error('Error processing forward batch:', err);
-          });
-        }, 1000);
-      } else {
-        logger.info(`Reply chain: new buffer ${batchKey} origin=${message.forward_origin?.type ?? 'none'}`);
-        const timeout = setTimeout(() => {
-          processReplyChain(batchKey).catch((err) => {
-            logger.error('Error processing forward batch:', err);
-          });
-        }, 1000);
-        replyChainBuffers.set(batchKey, {
-          messages: [message],
-          timeout,
-          ctx,
-          createdAt: Date.now(),
-        });
-      }
-    } else {
-      // Non-forwarded message: process immediately
-      await processSingleMessage(ctx, message);
+      bufferBurst(ctx, message, userId);
+      return;
     }
+
+    const mediaGroupId = 'media_group_id' in message ? message.media_group_id : undefined;
+    if (mediaGroupId) {
+      // Non-forwarded album: wait for all its items.
+      const buffer = mediaGroupBuffers.get(mediaGroupId);
+      if (buffer) clearTimeout(buffer.timeout);
+      const timeout = setTimeout(() => {
+        processMediaGroup(mediaGroupId).catch((error) => {
+          logger.error('Error processing media group:', error);
+        });
+      }, 1000);
+      mediaGroupBuffers.set(mediaGroupId, {
+        messages: [...(buffer?.messages ?? []), message],
+        timeout,
+        ctx: buffer?.ctx ?? ctx,
+      });
+      return;
+    }
+
+    // Non-forwarded message: process immediately
+    await processSingleMessage(ctx, message);
   } catch (error) {
     logger.error('Error handling message:', error);
     await ctx.reply('❌ Error processing message. Please try again.');
@@ -605,8 +487,6 @@ async function processMediaGroup(mediaGroupId: string) {
 
   const messages = buffer.messages;
 
-  cleanupBufferLinks(messages);
-
   if (messages.length === 0) {
     return;
   }
@@ -670,36 +550,22 @@ async function processMediaGroup(mediaGroupId: string) {
   );
 }
 
-async function processReplyChain(bufferKey: string) {
-  const buffer = replyChainBuffers.get(bufferKey);
-  if (!buffer) return;
-
-  clearTimeout(buffer.timeout);
-  replyChainBuffers.delete(bufferKey);
-  cleanupBufferLinks(buffer.messages);
-
-  const { messages, ctx } = buffer;
-  if (messages.length === 0) return;
+/** Starts the flow for forwarded messages: one message, one album, or several as one thread. */
+async function processReplyChain(ctx: Context, unsorted: Message[]) {
+  if (unsorted.length === 0) return;
 
   // Sort by message_id for chronological order before any analysis
-  messages.sort((a, b) => a.message_id - b.message_id);
+  const messages = unsorted.toSorted((a, b) => a.message_id - b.message_id);
   const primaryMessage = messages[0];
 
-  // Classify the buffer contents
-  const mgIdOf = (m: Message): string | undefined =>
-    'media_group_id' in m ? (m as Message & { media_group_id?: string }).media_group_id : undefined;
+  const items = groupBurstItems(messages);
+  const itemCount = items.length;
+  const isPureAlbum = itemCount === 1 && mediaGroupIdOf(primaryMessage) !== undefined;
 
-  const uniqueMgIds = new Set(messages.map(mgIdOf).filter((id): id is string => id !== undefined));
-  const singleMessages = messages.filter((m) => !mgIdOf(m));
-  // "items" = distinct albums + standalone single messages
-  const itemCount = uniqueMgIds.size + singleMessages.length;
-
-  const isPureAlbum = uniqueMgIds.size === 1 && singleMessages.length === 0;
-
-  logger.info(`Reply chain fired: key=${bufferKey}, messages=${messages.length}, items=${itemCount}, isPureAlbum=${isPureAlbum}`);
+  logger.info(`Forward flow: primary=${primaryMessage.message_id}, messages=${messages.length}, items=${itemCount}, isPureAlbum=${isPureAlbum}`);
 
   // Single non-album message: use existing single-message flow unchanged
-  if (messages.length === 1 && !mgIdOf(primaryMessage)) {
+  if (messages.length === 1 && !mediaGroupIdOf(primaryMessage)) {
     await processSingleMessage(ctx, messages[0]);
     return;
   }
