@@ -483,7 +483,9 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
 
   await finalizePreview(c);
 
-  await ctx.reply(`↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`);
+  await ctx.reply(`↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`, {
+    reply_markup: createAddReplyKeyboard(replyPostId),
+  });
   logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
 }
 
