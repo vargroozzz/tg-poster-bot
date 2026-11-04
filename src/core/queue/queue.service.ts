@@ -28,7 +28,11 @@ export class QueueService {
     return { posts, labels, totalCount, totalPages, page };
   }
 
-  async deleteAndCascade(postId: string): Promise<{ channelId: string; deletedTime: Date } | null> {
+  // keepReplies: the caller re-points the replies waiting on this post itself (a channel move).
+  async deleteAndCascade(
+    postId: string,
+    { keepReplies = false } = {}
+  ): Promise<{ channelId: string; deletedTime: Date; keptReplies: number } | null> {
     const post = await this.repository.findById(postId);
     if (!post) return null;
 
@@ -41,9 +45,16 @@ export class QueueService {
     if (!(await this.repository.deletePending(postId))) return null;
 
     await this.repository.shiftPostsEarlier(channelId, deletedTime);
+    // The post is gone either way: a failure here must not report the delete as failed.
+    const keptReplies = keepReplies
+      ? 0
+      : await this.repository.releaseOrphanedReplies(post).catch((error: unknown) => {
+          logger.error(`Failed to release the replies of deleted post ${postId}:`, error);
+          return 0;
+        });
 
     logger.info(`Deleted post ${postId}, shifted later posts for channel ${channelId} back one slot`);
-    return { channelId, deletedTime };
+    return { channelId, deletedTime, keptReplies };
   }
 
   private async getSourceLabel(post: IScheduledPost): Promise<string> {

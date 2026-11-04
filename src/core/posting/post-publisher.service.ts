@@ -64,6 +64,31 @@ export class PostPublisherService {
   }
 
   /**
+   * Publish a post's together-reply chain in order, each entry replying to the post or to the
+   * earlier entry it names. An entry whose target didn't go out is skipped. Returns the errors.
+   */
+  async publishEmbeddedChain(
+    replies: EmbeddedReplyData[],
+    parentMessageId: number,
+    parentChannelId: string
+  ): Promise<string[]> {
+    type Sent = { messageId: number; channelId: string } | { error: string };
+    const sent = await replies.reduce<Promise<Sent[]>>(async (previous, reply, i) => {
+      const done = await previous;
+      const target: Sent | undefined =
+        reply.replyTo == null ? { messageId: parentMessageId, channelId: parentChannelId } : done[reply.replyTo];
+      if (!target || 'error' in target) return [...done, { error: `reply ${i + 1}: the message it answers wasn't sent` }];
+      try {
+        const messageId = await this.publishEmbeddedReply(reply, target.messageId, target.channelId);
+        return [...done, { messageId, channelId: reply.targetChannelId }];
+      } catch (error) {
+        return [...done, { error: `reply ${i + 1}: ${error instanceof Error ? error.message : String(error)}` }];
+      }
+    }, Promise.resolve([]));
+    return sent.flatMap((s) => ('error' in s ? [s.error] : []));
+  }
+
+  /**
    * Publish an embedded (together) reply, using the parent's message_id as reply target.
    * For 'forward' action: uses copyMessage API so reply_parameters can be attached
    * (forwardMessage does not support reply_parameters).

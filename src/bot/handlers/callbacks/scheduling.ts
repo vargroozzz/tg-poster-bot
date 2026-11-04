@@ -12,7 +12,7 @@ import {
   createAddReplyKeyboard,
   createProposalPreviewKeyboard,
 } from '../../keyboards/preview-action.keyboard.js';
-import type { EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
+import { embeddedRepliesOf, type EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
 import type { MessageContent } from '../../../types/message.types.js';
 import { nextSpoilers, spoilerSlots, withSpoilers } from '../../../core/sending/spoilers.js';
 import { sendsAsRich } from '../../../core/sending/media-sender.service.js';
@@ -307,13 +307,13 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
   } else {
     // Replies to this post point at the post being replaced, so carry them to its successor below.
     const moving = await repository.findById(editingPostId);
-    const movedEmbeddedReply = moving?.embeddedReply;
+    const movedEmbeddedReplies = moving ? embeddedRepliesOf(moving) : [];
     // If this post is itself a reply, it keeps what it answers.
     const { replyTo, parentPostId } = movedReplyFields(moving);
 
     // Moving channels is delete + reschedule, so bail if the delete found nothing pending —
     // scheduling anyway would duplicate a post the worker had already published.
-    if (!(await queueService.deleteAndCascade(editingPostId))) {
+    if (!(await queueService.deleteAndCascade(editingPostId, { keepReplies: true }))) {
       await finalizePreview(c);
       await ctx.reply('⚠️ Post was already published — it was not moved.');
       return;
@@ -342,16 +342,18 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             spoilers: spoilersFor(session),
           });
 
-    if (movedEmbeddedReply) {
+    if (movedEmbeddedReplies.length > 0) {
       // As with separated replies: one in the parent's old channel follows it.
-      await repository.attachEmbeddedReply(movedPostId, {
-        ...movedEmbeddedReply,
-        targetChannelId:
-          movedEmbeddedReply.targetChannelId === editingOriginalChannelId ? newChannelId : movedEmbeddedReply.targetChannelId,
-      });
+      await repository.appendEmbeddedReplies(
+        movedPostId,
+        movedEmbeddedReplies.map((reply) => ({
+          ...reply,
+          targetChannelId: reply.targetChannelId === editingOriginalChannelId ? newChannelId : reply.targetChannelId,
+        }))
+      );
     }
     if (parentPostId) {
-      await repository.releaseIfParentPosted(parentPostId);
+      await repository.settleRepliesOf(parentPostId);
     }
     await repository.reparentSeparatedReplies(editingPostId, movedPostId, editingOriginalChannelId, newChannelId);
 
@@ -436,20 +438,23 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
       textAbove: textAboveFor(session),
       spoilers: spoilersFor(session),
       originalForward: replyForwardInfo,
+      ...(session.replyParentChainIndex != null && { replyTo: session.replyParentChainIndex }),
     };
 
-    const attached = await repository.attachEmbeddedReply(parentPostId, replyData);
+    const before = await repository.appendEmbeddedReplies(parentPostId, [replyData]);
 
     await finalizePreview(c);
 
-    if (!attached) {
+    if (!before) {
       await ctx.reply('⚠️ Parent post was already published — reply could not be attached.');
       return;
     }
 
     const parentSlotTime = parentPost?.scheduledTime;
+    const chainIndex = embeddedRepliesOf(before).length;
     await ctx.reply(
-      `↩️ Reply scheduled with the parent post${parentSlotTime ? ` at ${formatSlotTime(parentSlotTime)}` : ''}`
+      `↩️ Reply scheduled with the parent post${parentSlotTime ? ` at ${formatSlotTime(parentSlotTime)}` : ''}`,
+      { reply_markup: createAddReplyKeyboard(parentPostId, chainIndex) }
     );
     logger.info(`Together reply attached to parent post ${parentPostId}`);
     return;
@@ -477,15 +482,21 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
           spoilers: spoilersFor(session),
         });
 
-  if (parentPostId) {
-    await repository.releaseIfParentPosted(parentPostId);
-  }
+  // The parent may have gone out, failed or been deleted while this reply was being made.
+  const settled = parentPostId ? await repository.settleRepliesOf(parentPostId) : 'released';
 
   await finalizePreview(c);
 
-  await ctx.reply(`↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`, {
-    reply_markup: createAddReplyKeyboard(replyPostId),
-  });
+  if (settled === 'failed') {
+    await ctx.reply('❌ The post this replies to failed to publish, so the reply was not scheduled.');
+    return;
+  }
+  await ctx.reply(
+    settled === 'standalone'
+      ? `⚠️ The post this replies to was deleted, so the reply will post on its own at ${formatSlotTime(replySlotTime)}. Delete it from /queue if unwanted.`
+      : `↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`,
+    { reply_markup: createAddReplyKeyboard(replyPostId) }
+  );
   logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
 }
 
@@ -630,6 +641,19 @@ const SCHEDULE_CONFIRM: Record<ScheduleRoute, (c: Confirm, route: ScheduleRoute)
   normal: (c) => confirmNew(c),
 };
 
+// A reply's slot is settled: on to its action choice.
+async function toReplyAction(
+  ctx: Context,
+  session: ISession,
+  fields: Pick<ISession, 'replyMode'> & Partial<Pick<ISession, 'selectedChannel'>>
+): Promise<void> {
+  const sessionId = session._id.toString();
+  await getSessionService().updateState(sessionId, SessionState.ACTION_SELECT, fields);
+  await promptReplyAction(ctx, sessionId, session.originalMessage, true, (text, other) =>
+    ctx.editMessageText(text, other)
+  );
+}
+
 export function registerScheduling(): void {
 
   // Handle channel selection
@@ -640,6 +664,12 @@ export function registerScheduling(): void {
       const selectedChannelId = match?.[1];
       if (!selectedChannelId) {
         await ctx.editMessageText('❌ Invalid channel selection.');
+        return null;
+      }
+
+      // A reply to an entry of a together-reply chain joins the chain: no slot to choose.
+      if (session.isReply && session.replyParentChainIndex != null) {
+        await toReplyAction(ctx, session, { selectedChannel: selectedChannelId, replyMode: 'together' });
         return null;
       }
 
@@ -1100,11 +1130,7 @@ export function registerScheduling(): void {
         return;
       }
 
-      await sessionSvc.updateState(sessionId, SessionState.ACTION_SELECT, { replyMode: mode });
-
-      await promptReplyAction(ctx, sessionId, session.originalMessage, true, (text, other) =>
-        ctx.editMessageText(text, other)
-      );
+      await toReplyAction(ctx, session, { replyMode: mode });
 
       logger.debug(`Reply slot mode "${mode}" set for session ${sessionId}`);
     } catch (error) {

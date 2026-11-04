@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const findById = vi.fn();
 const deletePending = vi.fn();
 const shiftPostsEarlier = vi.fn();
+const releaseOrphanedReplies = vi.fn();
 
 vi.mock('../../../database/repositories/scheduled-post.repository.js', () => ({
   ScheduledPostRepository: class {
     findById = findById;
     deletePending = deletePending;
     shiftPostsEarlier = shiftPostsEarlier;
+    releaseOrphanedReplies = releaseOrphanedReplies;
   },
 }));
 
@@ -23,12 +25,24 @@ describe('QueueService.deleteAndCascade', () => {
   it('deletes a pending post and shifts its successors earlier', async () => {
     findById.mockResolvedValue(post);
     deletePending.mockResolvedValue(true);
+    releaseOrphanedReplies.mockResolvedValue(2);
 
     expect(await new QueueService().deleteAndCascade('p1')).toEqual({
       channelId: '-100123',
       deletedTime: scheduledTime,
+      keptReplies: 2,
     });
     expect(shiftPostsEarlier).toHaveBeenCalledWith('-100123', scheduledTime);
+    expect(releaseOrphanedReplies).toHaveBeenCalledWith(post);
+  });
+
+  // A channel move re-points the replies to the re-created post itself.
+  it('leaves the replies to the caller on a move', async () => {
+    findById.mockResolvedValue(post);
+    deletePending.mockResolvedValue(true);
+
+    expect(await new QueueService().deleteAndCascade('p1', { keepReplies: true })).toMatchObject({ keptReplies: 0 });
+    expect(releaseOrphanedReplies).not.toHaveBeenCalled();
   });
 
   // Deleting here would erase a post that already went out and pull the rest of the queue

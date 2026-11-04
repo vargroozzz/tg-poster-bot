@@ -97,3 +97,41 @@ describe('PostPublisherService reply quotes', () => {
     }));
   });
 });
+
+describe('PostPublisherService.publishEmbeddedChain', () => {
+  const entry = (text: string, targetChannelId: string, replyTo?: number): EmbeddedReplyData => ({
+    targetChannelId,
+    content: { type: 'text', text },
+    action: 'transform',
+    originalForward: { messageId: 1, chatId: 100 },
+    ...(replyTo !== undefined && { replyTo }),
+  });
+
+  it('threads each entry to the post or to the earlier entry it names', async () => {
+    const sendMessage = vi.fn().mockResolvedValueOnce({ message_id: 10 }).mockResolvedValueOnce({ message_id: 11 });
+    const errors = await new PostPublisherService({ sendMessage } as unknown as Api).publishEmbeddedChain(
+      [entry('a', '-1001'), entry('b', '-1003', 0)],
+      99,
+      '-1002'
+    );
+    expect(errors).toEqual([]);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, '-1001', 'a', expect.objectContaining({
+      reply_parameters: { message_id: 99, chat_id: -1002 },
+    }));
+    expect(sendMessage).toHaveBeenNthCalledWith(2, '-1003', 'b', expect.objectContaining({
+      reply_parameters: { message_id: 10, chat_id: -1001 },
+    }));
+  });
+
+  it('skips an entry whose target failed, but still sends the others', async () => {
+    const sendMessage = vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ message_id: 12 });
+    const errors = await new PostPublisherService({ sendMessage } as unknown as Api).publishEmbeddedChain(
+      [entry('a', '-1001'), entry('b', '-1001', 0), entry('c', '-1001')],
+      99,
+      '-1002'
+    );
+    expect(errors).toEqual(['reply 1: boom', "reply 2: the message it answers wasn't sent"]);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenLastCalledWith('-1001', 'c', expect.anything());
+  });
+});

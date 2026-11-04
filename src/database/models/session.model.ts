@@ -29,6 +29,8 @@ export interface ISession extends Document, PostSelections {
   // attribution, promotion, and decline-notify still target the original proposer.
   proposedByUserId?: number;
   replyParentPostId?: string;
+  // Set when replying to an entry of the parent's together-reply chain: always 'together'.
+  replyParentChainIndex?: number;
   replyMode?: 'together' | 'separated';
   // A reply to a post already published in a channel (from a pasted post link), instead of
   // a queued parent.
@@ -104,6 +106,7 @@ const sessionSchema = new Schema<ISession>({
   proposalPending: { type: Boolean },
   proposedByUserId: { type: Number },
   replyParentPostId: { type: String },
+  replyParentChainIndex: { type: Number },
   replyMode: { type: String, enum: ['together', 'separated'] },
   replyQuoteSourceId: { type: Number },
   replyToChannelId: { type: String },

@@ -1,5 +1,7 @@
 import { Api } from 'grammy';
-import { ScheduledPost, WAITING_PARENT, type IScheduledPost } from '../database/models/scheduled-post.model.js';
+import { ScheduledPost, FAILED, embeddedRepliesOf, type IScheduledPost } from '../database/models/scheduled-post.model.js';
+import { ScheduledPostRepository, PARENT_FAILED } from '../database/repositories/scheduled-post.repository.js';
+import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { formatSlotTime } from '../utils/time-slots.js';
 import { PostPublisherService } from '../core/posting/post-publisher.service.js';
@@ -12,8 +14,9 @@ export class PostWorkerService {
   private intervalId: NodeJS.Timeout | null = null;
   private isProcessing = false;
   private publisher: PostPublisherService;
+  private repository = new ScheduledPostRepository();
 
-  constructor(api: Api) {
+  constructor(private api: Api) {
     this.publisher = new PostPublisherService(api);
   }
 
@@ -97,48 +100,60 @@ export class PostWorkerService {
    * Publish a single post to Telegram
    */
   private async publishPost(post: IScheduledPost) {
+    logger.info(
+      `Publishing ${post.content.type} post to ${post.targetChannelId} (scheduled for ${formatSlotTime(post.scheduledTime)})`
+    );
+
+    // Only a failed send fails the post and its replies; what follows a sent post must not.
+    const sent = await this.publisher.publish(post).catch(async (error: unknown) => {
+      logger.error(`Failed to publish post ${post._id}:`, error);
+      const message = error instanceof Error ? error.message : String(error);
+      await post.updateOne({ status: FAILED, error: message });
+      await this.failReplies(post, message);
+      return undefined;
+    });
+    if (sent === undefined) return;
+    const messageId = sent;
+
     try {
-      logger.info(
-        `Publishing ${post.content.type} post to ${post.targetChannelId} (scheduled for ${formatSlotTime(post.scheduledTime)})`
-      );
-
-      const messageId = await this.publisher.publish(post);
-
       await post.updateOne({ status: 'posted', postedAt: new Date(), telegramScheduledMessageId: messageId });
 
-      // Publish together (embedded) reply atomically in the same cycle
-      if (post.embeddedReply) {
-        try {
-          await this.publisher.publishEmbeddedReply(post.embeddedReply, messageId, post.targetChannelId);
-          logger.info(`Published embedded reply for post ${post._id}`);
-        } catch (error) {
-          logger.error(`Failed to publish embedded reply for post ${post._id}:`, error);
-          await post.updateOne({
-            embeddedReplyError: error instanceof Error ? error.message : String(error),
-          });
+      // Publish the together (embedded) reply chain in the same cycle
+      const embedded = embeddedRepliesOf(post);
+      if (embedded.length > 0) {
+        const errors = await this.publisher.publishEmbeddedChain(embedded, messageId, post.targetChannelId);
+        if (errors.length > 0) {
+          logger.error(`Failed to publish embedded replies for post ${post._id}: ${errors.join('; ')}`);
+          await post.updateOne({ embeddedReplyError: errors.join('; ') });
+        } else {
+          logger.info(`Published ${embedded.length} embedded repl${embedded.length === 1 ? 'y' : 'ies'} for post ${post._id}`);
         }
       }
 
       // Unblock separated reply posts that were waiting for this parent
       try {
-        await ScheduledPost.updateMany(
-          { parentPostId: post._id.toString(), status: WAITING_PARENT },
-          {
-            $set: {
-              replyToMessageId: messageId,
-              replyToChannelId: post.targetChannelId,
-              status: 'pending',
-            },
-          }
-        );
+        await this.repository.unblockSeparatedReplies(post._id.toString(), messageId, post.targetChannelId);
       } catch (error) {
         logger.error(`Failed to unblock separated replies for post ${post._id}:`, error);
       }
 
       logger.info(`Successfully published post ${post._id} with message_id ${messageId}`);
     } catch (error) {
-      logger.error(`Failed to publish post ${post._id}:`, error);
-      await post.updateOne({ status: 'failed', error: error instanceof Error ? error.message : String(error) });
+      logger.error(`Post ${post._id} was published as message ${messageId}, but recording it failed:`, error);
+    }
+  }
+
+  // Replies waiting on a failed post can never be sent; fail them too and tell the owner.
+  private async failReplies(post: IScheduledPost, error: string) {
+    try {
+      const failed = await this.repository.failWaitingReplies(post._id.toString(), PARENT_FAILED);
+      await this.api.sendMessage(
+        config.authorizedUserId,
+        `⚠️ A post scheduled for ${formatSlotTime(post.scheduledTime)} failed to publish: ${error}` +
+          (failed > 0 ? `\n${failed} ${failed === 1 ? 'reply' : 'replies'} waiting on it failed too.` : '')
+      );
+    } catch (notifyError) {
+      logger.error(`Failed to settle replies of failed post ${post._id}:`, notifyError);
     }
   }
 }

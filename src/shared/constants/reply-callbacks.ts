@@ -7,10 +7,11 @@ export const REPLY_FROM_QUEUE = 'queue_reply';
 /** Suffix for the ❝ Add quoted reply variant, which first sends the post to quote-reply to. */
 export const QUOTED_REPLY_SUFFIX = '_quote';
 
-export const replyCallback = (prefix: string, postId: string, quoted = false): string =>
-  `${prefix}${quoted ? QUOTED_REPLY_SUFFIX : ''}:${postId}`;
+/** chainIndex: reply to that entry of the post's together-reply chain rather than the post. */
+export const replyCallback = (prefix: string, postId: string, quoted = false, chainIndex?: number): string =>
+  `${prefix}${quoted ? QUOTED_REPLY_SUFFIX : ''}:${postId}${chainIndex === undefined ? '' : `:${chainIndex}`}`;
 
-/** Groups: [1] prefix, [2] quoted suffix (or undefined), [3] post id. */
+/** Groups: [1] prefix, [2] quoted suffix (or undefined), [3] post id, [4] chain index (or undefined). */
 export const REPLY_CALLBACK_PATTERN = new RegExp(
-  `^(${REPLY_FROM_CONFIRMATION}|${REPLY_FROM_QUEUE})(${QUOTED_REPLY_SUFFIX})?:(${OBJECT_ID_SOURCE})$`
+  `^(${REPLY_FROM_CONFIRMATION}|${REPLY_FROM_QUEUE})(${QUOTED_REPLY_SUFFIX})?:(${OBJECT_ID_SOURCE})(?::(\\d+))?$`
 );

@@ -266,6 +266,11 @@ export function registerQueue(): void {
 
       if (!result) {
         await ctx.reply('❌ Post not found — it may have already been published or deleted.');
+      } else if (result.keptReplies > 0) {
+        await ctx.reply(
+          `↩️ Kept ${result.keptReplies} ${result.keptReplies === 1 ? 'reply' : 'replies'} to it: ` +
+            'they now answer what it answered, or post on their own. Delete them from /queue if unwanted.'
+        );
       }
 
       // Refresh the queue list message (even if post was already gone, to show current state)

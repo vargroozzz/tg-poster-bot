@@ -94,14 +94,16 @@ export function createProposalPreviewKeyboard(
   return { inline_keyboard: rows };
 }
 
-export function createAddReplyKeyboard(postId: string): InlineKeyboardMarkup {
+// chainIndex: the confirmed post is that entry of postId's together-reply chain, which
+// has no queue entry of its own to edit.
+export function createAddReplyKeyboard(postId: string, chainIndex?: number): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
-        { text: '💬 Add a reply', callback_data: replyCallback(REPLY_FROM_CONFIRMATION, postId) },
-        { text: '❝ Add quoted reply', callback_data: replyCallback(REPLY_FROM_CONFIRMATION, postId, true) },
+        { text: '💬 Add a reply', callback_data: replyCallback(REPLY_FROM_CONFIRMATION, postId, false, chainIndex) },
+        { text: '❝ Add quoted reply', callback_data: replyCallback(REPLY_FROM_CONFIRMATION, postId, true, chainIndex) },
       ],
-      [{ text: '✏️ Edit', callback_data: editPostCallback(postId) }],
+      ...(chainIndex === undefined ? [[{ text: '✏️ Edit', callback_data: editPostCallback(postId) }]] : []),
     ],
   };
 }

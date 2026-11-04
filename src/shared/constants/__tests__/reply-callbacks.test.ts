@@ -10,8 +10,14 @@ const ID = '0123456789abcdef01234567';
 
 describe('reply callbacks', () => {
   it.each([REPLY_FROM_CONFIRMATION, REPLY_FROM_QUEUE])('round-trips %s, plain and quoted', (prefix) => {
-    expect(replyCallback(prefix, ID).match(REPLY_CALLBACK_PATTERN)?.slice(1)).toEqual([prefix, undefined, ID]);
-    expect(replyCallback(prefix, ID, true).match(REPLY_CALLBACK_PATTERN)?.slice(1)).toEqual([prefix, '_quote', ID]);
+    expect(replyCallback(prefix, ID).match(REPLY_CALLBACK_PATTERN)?.slice(1)).toEqual([prefix, undefined, ID, undefined]);
+    expect(replyCallback(prefix, ID, true).match(REPLY_CALLBACK_PATTERN)?.slice(1)).toEqual([prefix, '_quote', ID, undefined]);
+  });
+
+  it('carries a chain index, within the 64-byte callback limit', () => {
+    const data = replyCallback(REPLY_FROM_CONFIRMATION, ID, true, 12);
+    expect(data.match(REPLY_CALLBACK_PATTERN)?.slice(1)).toEqual([REPLY_FROM_CONFIRMATION, '_quote', ID, '12']);
+    expect(data.length).toBeLessThanOrEqual(64);
   });
 
   it('rejects a post id that is not an ObjectId', () => {

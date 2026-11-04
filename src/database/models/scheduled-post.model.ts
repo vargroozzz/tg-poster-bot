@@ -19,6 +19,8 @@ export interface EmbeddedReplyData {
   textAbove?: boolean;
   spoilers?: boolean[];
   originalForward: ForwardInfo;
+  // Index of the earlier chain entry this one answers; absent = the post itself.
+  replyTo?: number;
 }
 
 export interface IScheduledPost extends Document {
@@ -40,7 +42,9 @@ export interface IScheduledPost extends Document {
   postedAt?: Date;
   error?: string;
   retryMetadata?: RetryMetadata;
-  // Together reply — published atomically with this post
+  // Together replies — a chain published in the same cycle as this post, in order
+  embeddedReplies?: EmbeddedReplyData[];
+  // Legacy single together reply; read through embeddedRepliesOf, folded in on the next append.
   embeddedReply?: EmbeddedReplyData;
   embeddedReplyError?: string;
   // Separated reply — this post is a reply to parentPostId
@@ -163,6 +167,10 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     nextRetryAt: Date,
     lastError: String,
   },
+  embeddedReplies: {
+    type: [Schema.Types.Mixed],
+    default: undefined,
+  },
   embeddedReply: {
     type: Schema.Types.Mixed,
   },
@@ -190,7 +198,12 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
 // their parent. Anything that occupies a slot must be counted here, or slot allocation hands
 // the same slot out twice and the unique index below rejects the insert.
 export const WAITING_PARENT = 'waiting_parent' as const;
+export const POSTED = 'posted' as const;
+export const FAILED = 'failed' as const;
 export const QUEUED_STATUSES = ['pending', WAITING_PARENT] as const;
+
+export const embeddedRepliesOf = (post: Pick<IScheduledPost, 'embeddedReplies' | 'embeddedReply'>): EmbeddedReplyData[] =>
+  post.embeddedReplies ?? (post.embeddedReply ? [post.embeddedReply] : []);
 
 // Compound unique index to prevent double-booking
 scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true });

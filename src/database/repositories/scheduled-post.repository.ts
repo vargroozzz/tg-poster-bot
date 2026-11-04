@@ -1,8 +1,10 @@
 import { BaseRepository } from './base.repository.js';
-import { ScheduledPost, QUEUED_STATUSES, WAITING_PARENT, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES, WAITING_PARENT, POSTED, FAILED, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
 import type { RetryMetadata } from '../models/scheduled-post.model.js';
 import type { MessageContent, TextHandling, TransformAction } from '../../types/message.types.js';
 import { getPostInterval } from '../../utils/post-interval.js';
+
+export const PARENT_FAILED = 'The post it replies to failed to publish';
 
 /**
  * Repository for scheduled posts
@@ -193,30 +195,101 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Set embeddedReply on a parent post that still holds a slot.
-   * Returns null if the post was already published.
+   * Append together replies to the chain of a post that still holds a slot, folding a legacy
+   * single embeddedReply in first. Returns the post as it was before, or null if it was
+   * already published.
    */
-  async attachEmbeddedReply(
+  async appendEmbeddedReplies(
     parentPostId: string,
-    replyData: EmbeddedReplyData
+    replies: EmbeddedReplyData[]
   ): Promise<IScheduledPost | null> {
+    // new: false — the caller reads the chain length before this append, atomically.
     return await this.model.findOneAndUpdate(
       { _id: parentPostId, status: { $in: QUEUED_STATUSES } },
-      { $set: { embeddedReply: replyData } },
-      { new: true }
+      [
+        {
+          $set: {
+            embeddedReplies: {
+              $concatArrays: [
+                { $ifNull: ['$embeddedReplies', { $cond: [{ $ifNull: ['$embeddedReply', false] }, ['$embeddedReply'], []] }] },
+                // $literal: text starting with '$' would otherwise read as a field path.
+                { $literal: replies },
+              ],
+            },
+          },
+        },
+        { $unset: 'embeddedReply' },
+      ],
+      { new: false }
     );
   }
 
   /**
-   * Release the replies created waiting on a parent that has already published: the worker
-   * only releases replies that exist when it posts the parent. Call it after creating the
-   * reply, so a publish in between is seen here or by the worker.
-   * ponytail: a parent deleted or failed before the reply was created leaves it waiting forever.
+   * Keep the replies waiting on a deleted post: they take over what it answered (its own
+   * queued parent, or a published post), or post on their own if it answered nothing.
+   * Returns how many were kept.
    */
-  async releaseIfParentPosted(parentPostId: string): Promise<void> {
+  async releaseOrphanedReplies(
+    deleted: Pick<IScheduledPost, '_id' | 'parentPostId' | 'replyToMessageId' | 'replyToChannelId'>
+  ): Promise<number> {
+    const { parentPostId, replyToMessageId, replyToChannelId } = deleted;
+    const id = deleted._id.toString();
+    if (!replyToMessageId && !parentPostId) return await this.releaseStandalone(id);
+    const { modifiedCount } = await this.model.updateMany(
+      { parentPostId: id, status: WAITING_PARENT },
+      replyToMessageId
+        ? { $set: { replyToMessageId, replyToChannelId, status: 'pending' }, $unset: { parentPostId: 1 } }
+        : { $set: { parentPostId } }
+    );
+    if (parentPostId && !replyToMessageId) await this.settleRepliesOf(parentPostId);
+    return modifiedCount;
+  }
+
+  /** Let the replies waiting on a post that is gone post on their own. Returns how many. */
+  private async releaseStandalone(parentPostId: string): Promise<number> {
+    const { modifiedCount } = await this.model.updateMany(
+      { parentPostId, status: WAITING_PARENT },
+      { $set: { status: 'pending' }, $unset: { parentPostId: 1 } }
+    );
+    return modifiedCount;
+  }
+
+  /**
+   * Fail the replies waiting on a post that failed, and theirs in turn: none can be sent
+   * without it. Returns how many were failed.
+   */
+  async failWaitingReplies(parentPostId: string, error: string): Promise<number> {
+    const children = await this.model.find({ parentPostId, status: WAITING_PARENT }, { _id: 1 });
+    if (children.length === 0) return 0;
+    await this.model.updateMany(
+      { _id: { $in: children.map((c) => c._id) } },
+      { $set: { status: FAILED, error } }
+    );
+    const nested = await Promise.all(children.map((c) => this.failWaitingReplies(c._id.toString(), error)));
+    return nested.reduce((sum, n) => sum + n, children.length);
+  }
+
+  /**
+   * Settle the replies created waiting on a parent that is no longer queued: the worker and
+   * the delete only handle replies that exist at that moment. Call it after creating the
+   * reply, so a change in between is seen here or there. A published parent releases them, a
+   * failed one fails them, a deleted one lets them post on their own. Returns which.
+   */
+  async settleRepliesOf(parentPostId: string): Promise<'waiting' | 'released' | 'failed' | 'standalone'> {
     const parent = await this.findById(parentPostId);
-    if (parent?.status !== 'posted' || !parent.telegramScheduledMessageId) return;
-    await this.unblockSeparatedReplies(parentPostId, parent.telegramScheduledMessageId, parent.targetChannelId);
+    if (!parent) {
+      await this.releaseStandalone(parentPostId);
+      return 'standalone';
+    }
+    if (parent.status === FAILED) {
+      await this.failWaitingReplies(parentPostId, PARENT_FAILED);
+      return 'failed';
+    }
+    if (parent.status === POSTED && parent.telegramScheduledMessageId) {
+      await this.unblockSeparatedReplies(parentPostId, parent.telegramScheduledMessageId, parent.targetChannelId);
+      return 'released';
+    }
+    return 'waiting';
   }
 
   /**
