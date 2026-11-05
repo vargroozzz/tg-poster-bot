@@ -28,11 +28,14 @@ export class QueueService {
     return { posts, labels, totalCount, totalPages, page };
   }
 
-  // keepReplies: the caller re-points the replies waiting on this post itself (a channel move).
+  /**
+   * keepReplies: the caller re-points the replies waiting on this post itself (a channel move).
+   * dropSameSlot: delete the same-slot replies under it too, rather than keep them.
+   */
   async deleteAndCascade(
     postId: string,
-    { keepReplies = false } = {}
-  ): Promise<{ channelId: string; deletedTime: Date; keptReplies: number } | null> {
+    { keepReplies = false, dropSameSlot = false } = {}
+  ): Promise<{ channelId: string; deletedTime: Date; keptReplies: number; droppedReplies: number } | null> {
     const post = await this.repository.findById(postId);
     if (!post) return null;
 
@@ -44,17 +47,41 @@ export class QueueService {
     // now still reads pending — claim posts up front if that window ever bites.
     if (!(await this.repository.deletePending(postId))) return null;
 
-    await this.repository.shiftPostsEarlier(channelId, deletedTime);
-    // The post is gone either way: a failure here must not report the delete as failed.
-    const keptReplies = keepReplies
-      ? 0
-      : await this.repository.releaseOrphanedReplies(post).catch((error: unknown) => {
-          logger.error(`Failed to release the replies of deleted post ${postId}:`, error);
-          return 0;
-        });
+    if (keepReplies) {
+      if (!post.sameSlot) await this.repository.shiftPostsEarlier(channelId, deletedTime);
+      logger.info(`Deleted post ${postId} for a move`);
+      return { channelId, deletedTime, keptReplies: 0, droppedReplies: 0 };
+    }
 
-    logger.info(`Deleted post ${postId}, shifted later posts for channel ${channelId} back one slot`);
-    return { channelId, deletedTime, keptReplies };
+    // The post is gone either way: a failure from here on must not report the delete as failed.
+    const settle = async <T>(what: string, run: () => Promise<T>, fallback: T): Promise<T> =>
+      run().catch((error: unknown) => {
+        logger.error(`Failed to ${what} of deleted post ${postId}:`, error);
+        return fallback;
+      });
+
+    const dropped = dropSameSlot
+      ? await settle('delete the same-slot replies', () => this.repository.deleteSameSlotReplies(postId), [])
+      : [];
+    // A same-slot post holds no slot, and a reply that took the freed one leaves no gap. A
+    // failed promotion may have moved the heir already, so it shifts nothing either.
+    const heir =
+      post.sameSlot || dropSameSlot
+        ? null
+        : await settle('promote the same-slot replies', () => this.repository.promoteSameSlotReplies(post), undefined);
+    if (!post.sameSlot && heir !== undefined && heir?.targetChannelId !== channelId) {
+      await this.repository.shiftPostsEarlier(channelId, deletedTime);
+    }
+
+    // Separated replies to a dropped reply are kept: they post on their own. Sequential, the
+    // post first: a dropped reply's release can let go of whatever still waits on the post.
+    const keptReplies = await [post, ...dropped].reduce(
+      async (sum, p) => (await sum) + (await settle('release the replies', () => this.repository.releaseOrphanedReplies(p), 0)),
+      Promise.resolve(0)
+    );
+
+    logger.info(`Deleted post ${postId} (${keptReplies} repl${keptReplies === 1 ? 'y' : 'ies'} kept, ${dropped.length} dropped)`);
+    return { channelId, deletedTime, keptReplies, droppedReplies: dropped.length };
   }
 
   private async getSourceLabel(post: IScheduledPost): Promise<string> {

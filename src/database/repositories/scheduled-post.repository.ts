@@ -1,8 +1,9 @@
 import { BaseRepository } from './base.repository.js';
-import { ScheduledPost, QUEUED_STATUSES, WAITING_PARENT, POSTED, FAILED, type IScheduledPost, type EmbeddedReplyData } from '../models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES, WAITING_PARENT, POSTED, FAILED, HOLDS_SLOT, type IScheduledPost, type PostSlot } from '../models/scheduled-post.model.js';
 import type { RetryMetadata } from '../models/scheduled-post.model.js';
 import type { MessageContent, TextHandling, TransformAction } from '../../types/message.types.js';
 import { getPostInterval } from '../../utils/post-interval.js';
+import { findNextAvailableSlot } from '../../utils/time-slots.js';
 
 export const PARENT_FAILED = 'The post it replies to failed to publish';
 
@@ -40,15 +41,19 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Find the posts still holding a slot for a channel (pending + replies waiting on a parent).
+   * Find the posts holding a slot for a channel (pending + replies waiting on a parent),
+   * leaving out the same-slot replies that ride along with one.
    */
-  async findPendingByChannel(channelId: string): Promise<IScheduledPost[]> {
+  async findSlotHoldersByChannel(channelId: string): Promise<IScheduledPost[]> {
     return await this.model
-      .find({
-        targetChannelId: channelId,
-        status: { $in: QUEUED_STATUSES },
-      })
+      .find({ targetChannelId: channelId, status: { $in: QUEUED_STATUSES }, ...HOLDS_SLOT })
       .sort({ scheduledTime: 1 });
+  }
+
+  /** Move a slot holder to a new time, with the same-slot replies that follow it. */
+  async moveSlot(slotPostId: string, scheduledTime: Date): Promise<void> {
+    await this.model.updateOne({ _id: slotPostId }, { $set: { scheduledTime } });
+    await this.model.updateMany({ slotPostId, sameSlot: true }, { $set: { scheduledTime } });
   }
 
   /**
@@ -131,7 +136,8 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   ): Promise<IScheduledPost[]> {
     return await this.model
       .find({ targetChannelId: channelId, status: { $in: QUEUED_STATUSES } })
-      .sort({ scheduledTime: 1 })
+      // A same-slot reply lists right after the post whose slot it shares.
+      .sort({ scheduledTime: 1, sameSlot: 1, createdAt: 1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize);
   }
@@ -151,11 +157,17 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
    */
   async shiftPostsEarlier(channelId: string, afterTime: Date): Promise<void> {
     const intervalMinutes = await getPostInterval(channelId);
+    const shift = [{ $set: { scheduledTime: { $subtract: ['$scheduledTime', intervalMinutes * 60 * 1000] } } }];
 
-    await this.model.updateMany(
-      { targetChannelId: channelId, status: { $in: QUEUED_STATUSES }, scheduledTime: { $gt: afterTime } },
-      [{ $set: { scheduledTime: { $subtract: ['$scheduledTime', intervalMinutes * 60 * 1000] } } }]
+    const holders = await this.model.find(
+      { targetChannelId: channelId, status: { $in: QUEUED_STATUSES }, scheduledTime: { $gt: afterTime }, ...HOLDS_SLOT },
+      { _id: 1 }
     );
+    if (holders.length === 0) return;
+    const ids = holders.map((h) => h._id);
+    await this.model.updateMany({ _id: { $in: ids } }, shift);
+    // Their same-slot replies, in whatever channel, keep the time of the post they follow.
+    await this.model.updateMany({ sameSlot: true, slotPostId: { $in: ids.map(String) } }, shift);
   }
 
   /**
@@ -191,36 +203,6 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
       },
       { new: true }
-    );
-  }
-
-  /**
-   * Append together replies to the chain of a post that still holds a slot, folding a legacy
-   * single embeddedReply in first. Returns the post as it was before, or null if it was
-   * already published.
-   */
-  async appendEmbeddedReplies(
-    parentPostId: string,
-    replies: EmbeddedReplyData[]
-  ): Promise<IScheduledPost | null> {
-    // new: false — the caller reads the chain length before this append, atomically.
-    return await this.model.findOneAndUpdate(
-      { _id: parentPostId, status: { $in: QUEUED_STATUSES } },
-      [
-        {
-          $set: {
-            embeddedReplies: {
-              $concatArrays: [
-                { $ifNull: ['$embeddedReplies', { $cond: [{ $ifNull: ['$embeddedReply', false] }, ['$embeddedReply'], []] }] },
-                // $literal: text starting with '$' would otherwise read as a field path.
-                { $literal: replies },
-              ],
-            },
-          },
-        },
-        { $unset: 'embeddedReply' },
-      ],
-      { new: false }
     );
   }
 
@@ -316,13 +298,15 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
    * Re-point replies at a parent that was re-created under a new id (channel move).
    * A reply in the parent's old channel follows it; one moved to another channel stays there
    * (reply_parameters names the parent's chat, so it may live elsewhere).
-   * ponytail: keeps each reply's own slot, which can collide with the new channel's queue.
+   * Same-slot replies that followed its slot follow the new one.
+   * ponytail: keeps a separated reply's own slot, which can collide with the new channel's queue.
    */
   async reparentSeparatedReplies(
     oldParentPostId: string,
     newParentPostId: string,
     oldChannelId: string,
-    newChannelId: string
+    newChannelId: string,
+    newSlot: PostSlot
   ): Promise<void> {
     await this.model.updateMany({ parentPostId: oldParentPostId, status: WAITING_PARENT }, [
       {
@@ -332,5 +316,78 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
         },
       },
     ]);
+    await this.model.updateMany(
+      { slotPostId: oldParentPostId, sameSlot: true },
+      { $set: { slotPostId: newSlot.slotPostId, scheduledTime: newSlot.scheduledTime } }
+    );
+  }
+
+  /** The same-slot replies released by their published parent, in the order they were added. */
+  async findDueSameSlotReplies(parentPostId: string): Promise<IScheduledPost[]> {
+    return await this.model
+      .find({ parentPostId, sameSlot: true, status: 'pending', scheduledTime: { $lte: new Date() } })
+      .sort({ createdAt: 1 });
+  }
+
+  /** The same-slot replies under a post and theirs in turn, parents before their replies. */
+  async findSameSlotSubtree(parentPostId: string): Promise<IScheduledPost[]> {
+    const children = await this.model.find({ parentPostId, sameSlot: true, status: WAITING_PARENT }).sort({ createdAt: 1 });
+    const nested = await Promise.all(children.map((c) => this.findSameSlotSubtree(c._id.toString())));
+    return [...children, ...nested.flat()];
+  }
+
+  /** Delete the same-slot replies under a post, theirs in turn. Returns the deleted posts. */
+  async deleteSameSlotReplies(parentPostId: string): Promise<IScheduledPost[]> {
+    const subtree = await this.findSameSlotSubtree(parentPostId);
+    if (subtree.length > 0) {
+      await this.model.deleteMany({ _id: { $in: subtree.map((p) => p._id) }, status: WAITING_PARENT });
+    }
+    return subtree;
+  }
+
+  /**
+   * A deleted slot holder's same-slot replies each need a slot of their own: the first one in
+   * its channel takes the freed slot, the others the next free slot in their channel, never
+   * before it. Returns the reply that took the freed slot, or null.
+   */
+  async promoteSameSlotReplies(
+    deleted: Pick<IScheduledPost, '_id' | 'targetChannelId' | 'scheduledTime'>
+  ): Promise<IScheduledPost | null> {
+    const children = await this.model
+      .find({ parentPostId: deleted._id.toString(), sameSlot: true, status: WAITING_PARENT })
+      .sort({ createdAt: 1 });
+    const heir = children.find((c) => c.targetChannelId === deleted.targetChannelId);
+    const others = children.filter((c) => c !== heir);
+    // Sequential, heir first: each next free slot is found after the ones taken before it.
+    if (heir) await this.takeOwnSlot(heir._id.toString(), heir.targetChannelId, { at: deleted.scheduledTime });
+    await others.reduce(
+      (previous, child) =>
+        previous.then(async () => {
+          await this.takeOwnSlot(child._id.toString(), child.targetChannelId, { notBefore: deleted.scheduledTime });
+        }),
+      Promise.resolve()
+    );
+    return heir ?? null;
+  }
+
+  /**
+   * Make a same-slot reply hold a slot of its own: `at`, or the next free one not before
+   * `notBefore`. The same-slot replies under it follow it. Returns its time.
+   */
+  async takeOwnSlot(
+    postId: string,
+    targetChannelId: string,
+    { at, notBefore }: { at?: Date; notBefore?: Date }
+  ): Promise<Date> {
+    const scheduledTime = at ?? (await findNextAvailableSlot(targetChannelId, notBefore));
+    await this.model.updateOne({ _id: postId }, { $set: { sameSlot: false, scheduledTime }, $unset: { slotPostId: 1 } });
+    const followers = await this.findSameSlotSubtree(postId);
+    if (followers.length > 0) {
+      await this.model.updateMany(
+        { _id: { $in: followers.map((f) => f._id) } },
+        { $set: { slotPostId: postId, scheduledTime } }
+      );
+    }
+    return scheduledTime;
   }
 }

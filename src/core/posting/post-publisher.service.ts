@@ -1,5 +1,5 @@
 import { Api } from 'grammy';
-import type { IScheduledPost, EmbeddedReplyData } from '../../database/models/scheduled-post.model.js';
+import type { IScheduledPost } from '../../database/models/scheduled-post.model.js';
 import { MediaSenderService, toReplyParameters } from '../sending/media-sender.service.js';
 import { withSpoilers } from '../sending/spoilers.js';
 import { logger } from '../../utils/logger.js';
@@ -60,77 +60,6 @@ export class PostPublisherService {
       withSpoilers(post.content, post.spoilers),
       replyParams,
       post.textAbove
-    );
-  }
-
-  /**
-   * Publish a post's together-reply chain in order, each entry replying to the post or to the
-   * earlier entry it names. An entry whose target didn't go out is skipped. Returns the errors.
-   */
-  async publishEmbeddedChain(
-    replies: EmbeddedReplyData[],
-    parentMessageId: number,
-    parentChannelId: string
-  ): Promise<string[]> {
-    type Sent = { messageId: number; channelId: string } | { error: string };
-    const sent = await replies.reduce<Promise<Sent[]>>(async (previous, reply, i) => {
-      const done = await previous;
-      const target: Sent | undefined =
-        reply.replyTo == null ? { messageId: parentMessageId, channelId: parentChannelId } : done[reply.replyTo];
-      if (!target || 'error' in target) return [...done, { error: `reply ${i + 1}: the message it answers wasn't sent` }];
-      try {
-        const messageId = await this.publishEmbeddedReply(reply, target.messageId, target.channelId);
-        return [...done, { messageId, channelId: reply.targetChannelId }];
-      } catch (error) {
-        return [...done, { error: `reply ${i + 1}: ${error instanceof Error ? error.message : String(error)}` }];
-      }
-    }, Promise.resolve([]));
-    return sent.flatMap((s) => ('error' in s ? [s.error] : []));
-  }
-
-  /**
-   * Publish an embedded (together) reply, using the parent's message_id as reply target.
-   * For 'forward' action: uses copyMessage API so reply_parameters can be attached
-   * (forwardMessage does not support reply_parameters).
-   */
-  async publishEmbeddedReply(
-    reply: EmbeddedReplyData,
-    parentMessageId: number,
-    parentChannelId: string
-  ): Promise<number> {
-    return this.withQuoteFallback(!!reply.originalForward.replyQuote, (quoted) =>
-      this.publishEmbeddedReplyOnce(reply, parentMessageId, parentChannelId, quoted)
-    );
-  }
-
-  private async publishEmbeddedReplyOnce(
-    reply: EmbeddedReplyData,
-    parentMessageId: number,
-    parentChannelId: string,
-    quoted: boolean
-  ): Promise<number> {
-    const parentChatId = parseInt(parentChannelId, 10);
-    const replyParams = {
-      messageId: parentMessageId,
-      chatId: parentChatId,
-      quote: quoted ? reply.originalForward.replyQuote : undefined,
-    };
-
-    if (reply.action === 'forward') {
-      const result = await this.api.copyMessage(
-        reply.targetChannelId,
-        reply.originalForward.chatId,
-        reply.originalForward.messageId,
-        { reply_parameters: toReplyParameters(replyParams) }
-      );
-      return result.message_id;
-    }
-
-    return await this.mediaSender.sendMessage(
-      reply.targetChannelId,
-      withSpoilers(reply.content, reply.spoilers),
-      replyParams,
-      reply.textAbove
     );
   }
 

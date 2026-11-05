@@ -1,6 +1,6 @@
 import { addMinutes } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
-import { ScheduledPost, QUEUED_STATUSES } from '../../database/models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES, HOLDS_SLOT } from '../../database/models/scheduled-post.model.js';
 import { ScheduledPostRepository } from '../../database/repositories/scheduled-post.repository.js';
 import { getPostInterval } from '../../utils/post-interval.js';
 import { getSleepWindow, skipSleepWindow, type SleepWindow } from '../../utils/sleep-window.js';
@@ -37,6 +37,7 @@ export class QueueRepackService {
   async repackAll(): Promise<{ totalPosts: number; channelCount: number }> {
     const channelIds = (await ScheduledPost.distinct('targetChannelId', {
       status: { $in: QUEUED_STATUSES },
+      ...HOLDS_SLOT,
     })) as string[];
 
     const counts = await Promise.all(
@@ -49,7 +50,7 @@ export class QueueRepackService {
 
   async repackChannel(channelId: string): Promise<number> {
     const [posts, intervalMinutes, sleepWindow] = await Promise.all([
-      this.repository.findPendingByChannel(channelId),
+      this.repository.findSlotHoldersByChannel(channelId),
       getPostInterval(channelId),
       getSleepWindow(),
     ]);
@@ -74,7 +75,7 @@ export class QueueRepackService {
     const orderedIndices = expanding ? [...indices].reverse() : indices;
 
     for (const i of orderedIndices) {
-      await posts[i].updateOne({ $set: { scheduledTime: newTimes[i] } });
+      await this.repository.moveSlot(posts[i]._id.toString(), newTimes[i]);
     }
 
     logger.info(

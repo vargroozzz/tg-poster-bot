@@ -1,5 +1,5 @@
 // src/bot/handlers/callbacks/edit-entry.ts
-import { QUEUED_STATUSES, WAITING_PARENT, type IScheduledPost } from '../../../database/models/scheduled-post.model.js';
+import { QUEUED_STATUSES, WAITING_PARENT, slotOf, type IScheduledPost } from '../../../database/models/scheduled-post.model.js';
 
 /**
  * What a reply keeps when an edit moves it to another channel: the published message it
@@ -7,13 +7,18 @@ import { QUEUED_STATUSES, WAITING_PARENT, type IScheduledPost } from '../../../d
  * another channel, as at creation.
  */
 export const movedReplyFields = (
-  post: Pick<IScheduledPost, 'status' | 'parentPostId' | 'replyToChannelId' | 'replyToMessageId'> | null
+  post: Pick<
+    IScheduledPost,
+    '_id' | 'scheduledTime' | 'status' | 'sameSlot' | 'slotPostId' | 'parentPostId' | 'replyToChannelId' | 'replyToMessageId'
+  > | null
 ) => ({
   replyTo:
     post?.replyToChannelId && post.replyToMessageId
       ? { replyToChannelId: post.replyToChannelId, replyToMessageId: post.replyToMessageId }
       : undefined,
   parentPostId: post?.status === WAITING_PARENT ? post.parentPostId : undefined,
+  // A same-slot reply keeps going out with its parent; once that went out, it takes a slot.
+  sameSlot: post?.sameSlot && post.status === WAITING_PARENT ? slotOf(post) : undefined,
 });
 
 /** Why an edit of this post can't start (✏️ Edit) or restart (preview Back); undefined when it can. */

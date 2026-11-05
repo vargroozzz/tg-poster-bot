@@ -4,7 +4,16 @@ import { InlineKeyboard } from 'grammy';
 import { bot } from '../../bot.js';
 import { ErrorMessages } from '../../../shared/constants/error-messages.js';
 import { EDIT_POST_PATTERN, editStepPattern } from '../../../shared/constants/edit-callbacks.js';
-import { QUEUE_BACK, QUEUE_DELETE_PATTERN } from '../../../shared/constants/queue-callbacks.js';
+import {
+  QUEUE_BACK,
+  QUEUE_DELETE_PATTERN,
+  DELETE_CANCEL,
+  DELETE_WITH_REPLIES,
+} from '../../../shared/constants/queue-callbacks.js';
+import {
+  createDeleteRepliesKeyboard,
+  createQueuePreviewActionKeyboard,
+} from '../../keyboards/queue-preview-action.keyboard.js';
 import { logger } from '../../../utils/logger.js';
 import { SessionState } from '../../../shared/constants/flow-states.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
@@ -98,7 +107,8 @@ async function renderQueuePage(
   const postLines = posts
     .map((post, i) => {
       const time = formatSlotTime(post.scheduledTime);
-      return `${(clampedPage - 1) * 5 + i + 1}. ${time} — ${labels[i]}`;
+      // ↳ a same-slot reply: it goes out right after the post it answers.
+      return `${(clampedPage - 1) * 5 + i + 1}. ${time} — ${post.sameSlot ? '↳ ' : ''}${labels[i]}`;
     })
     .join('\n');
 
@@ -242,19 +252,32 @@ export function registerQueue(): void {
     }
   });
 
-  // queue:del:{postId} — delete post, cascade reschedule, refresh queue
+  // queue:del:{postId}[:choice] — delete post, cascade reschedule, refresh queue.
+  // A post with same-slot replies first asks whether they go too.
   bot.callbackQuery(QUEUE_DELETE_PATTERN, async (ctx: Context) => {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
-      const postId = (ctx.match as RegExpExecArray)[1];
+      const [, postId, choice] = ctx.match as RegExpExecArray;
       const userId = ctx.from?.id;
       const controlMessageId = ctx.callbackQuery?.message?.message_id;
       if (!userId || !controlMessageId) return;
 
+      if (choice === DELETE_CANCEL) {
+        await ctx.editMessageReplyMarkup({ reply_markup: createQueuePreviewActionKeyboard(postId) });
+        return;
+      }
+      // The whole same-slot subtree: deleting with them deletes the replies to them too.
+      const sameSlotReplies = choice ? 0 : (await new ScheduledPostRepository().findSameSlotSubtree(postId)).length;
+      if (sameSlotReplies > 0) {
+        await ctx.editMessageReplyMarkup({ reply_markup: createDeleteRepliesKeyboard(postId, sameSlotReplies) });
+        return;
+      }
+
       // Taken up front so a second tap finds no preview; put back if the delete throws, so
       // Delete or Back on it can still clean it up. Missing (bot restarted), the delete still runs.
       const state = takeQueuePreview(userId, controlMessageId);
-      const result = await queueService.deleteAndCascade(postId).catch((error: unknown) => {
+      const dropSameSlot = choice === DELETE_WITH_REPLIES;
+      const result = await queueService.deleteAndCascade(postId, { dropSameSlot }).catch((error: unknown) => {
         if (state) saveQueuePreview(userId, state);
         throw error;
       });
@@ -266,11 +289,18 @@ export function registerQueue(): void {
 
       if (!result) {
         await ctx.reply('❌ Post not found — it may have already been published or deleted.');
-      } else if (result.keptReplies > 0) {
-        await ctx.reply(
-          `↩️ Kept ${result.keptReplies} ${result.keptReplies === 1 ? 'reply' : 'replies'} to it: ` +
-            'they now answer what it answered, or post on their own. Delete them from /queue if unwanted.'
-        );
+      } else {
+        const { keptReplies: kept, droppedReplies: dropped } = result;
+        const notes = [
+          ...(dropped > 0 ? [`🗑 Deleted ${dropped} ${dropped === 1 ? 'reply' : 'replies'} sent with it.`] : []),
+          ...(kept > 0
+            ? [
+                `↩️ Kept ${kept} ${kept === 1 ? 'reply' : 'replies'} to it: ` +
+                  'they now answer what it answered, or post on their own. Delete them from /queue if unwanted.',
+              ]
+            : []),
+        ];
+        if (notes.length > 0) await ctx.reply(notes.join('\n'));
       }
 
       // Refresh the queue list message (even if post was already gone, to show current state)

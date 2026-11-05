@@ -1,6 +1,6 @@
-import { addMinutes, setMinutes, setSeconds, setMilliseconds } from 'date-fns';
+import { addMinutes, max, setMinutes, setSeconds, setMilliseconds } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
-import { ScheduledPost, QUEUED_STATUSES } from '../database/models/scheduled-post.model.js';
+import { ScheduledPost, QUEUED_STATUSES, HOLDS_SLOT } from '../database/models/scheduled-post.model.js';
 import { config } from '../config/index.js';
 import { logger } from './logger.js';
 import { getSleepWindow, skipSleepWindow } from './sleep-window.js';
@@ -10,22 +10,27 @@ const TIMEZONE = config.timezone;
 
 /**
  * Find the next available time slot in Europe/Kyiv timezone.
+ * notBefore: no slot earlier than this (a reply's parent time); the first one at or after it.
  * Returns UTC Date.
  */
-export async function findNextAvailableSlot(targetChannelId: string): Promise<Date> {
+export async function findNextAvailableSlot(targetChannelId: string, notBefore?: Date): Promise<Date> {
   const [sleepWindow, intervalMinutes] = await Promise.all([
     getSleepWindow(),
     getPostInterval(targetChannelId),
   ]);
 
   const rawNextSlot = fromZonedTime(
-    calculateNextSlotForInterval(toZonedTime(new Date(), TIMEZONE), intervalMinutes),
+    // A minute back from notBefore, as the next slot is strictly after the minute given.
+    calculateNextSlotForInterval(
+      toZonedTime(notBefore ? max([new Date(), addMinutes(notBefore, -1)]) : new Date(), TIMEZONE),
+      intervalMinutes
+    ),
     TIMEZONE
   );
   const nextSlotAfterNow = sleepWindow ? skipSleepWindow(rawNextSlot, sleepWindow) : rawNextSlot;
 
   const latestPending = await ScheduledPost
-    .findOne({ targetChannelId, status: { $in: QUEUED_STATUSES } })
+    .findOne({ targetChannelId, status: { $in: QUEUED_STATUSES }, ...HOLDS_SLOT })
     .sort({ scheduledTime: -1 });
 
   if (latestPending && latestPending.scheduledTime >= nextSlotAfterNow) {

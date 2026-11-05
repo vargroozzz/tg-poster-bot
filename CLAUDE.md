@@ -208,6 +208,35 @@ For messages with text/caption, users can choose:
 - `src/bot/keyboards/text-handling.keyboard.ts` - Text options UI
 - `src/types/message.types.ts` - TextHandling type
 
+### Replies to Queued Posts
+
+Every reply is a `ScheduledPost` of its own. A reply to a queued post waits for it
+(`parentPostId`, `status: 'waiting_parent'`); when the parent publishes, the worker fills in
+`replyToChannelId`/`replyToMessageId` and flips it to `pending`. A parent that fails fails its
+waiting replies, recursively.
+
+When the reply is made, the owner picks its slot:
+- **📎 Same slot as parent** (`sameSlot: true`): the reply holds no slot. It goes out right after
+  its parent, in the same worker cycle (`findDueSameSlotReplies`). `slotPostId` names the
+  nearest ancestor that holds a slot, and the reply mirrors that post's `scheduledTime`.
+  The unique slot index `{scheduledTime, targetChannelId}` is partial on `sameSlot: false`,
+  so slot holders must store `sameSlot: false`. Queries that allocate or move slots
+  (`findNextAvailableSlot`, shift, repack) filter on `HOLDS_SLOT`, and move followers through
+  `slotPostId` (`moveSlot`).
+- **⏭ Next available slot**: a slot of its own in its channel, never before its parent
+  (`notBefore`).
+
+Deleting a post with same-slot replies asks "keep them" (the default) or "delete them too".
+- A kept reply takes the freed slot: the first one in the post's channel, or else the first
+  one takes the next free slot in its own channel. It answers what the deleted post answered.
+- Separated replies keep the earlier rules (`releaseOrphanedReplies`).
+
+Migration `003-same-slot-replies` backfills `sameSlot`, swaps the index, and converts the old
+embedded together-replies into posts. It is idempotent and runs on every startup.
+
+**Files:** `src/database/repositories/scheduled-post.repository.ts`,
+`src/core/queue/queue.service.ts` (`deleteAndCascade`), `src/services/post-worker.service.ts`
+
 ### Replies to Published Posts
 
 A queued post gets replies via 💬 Add reply (the reply waits for its parent, or rides along
@@ -1067,7 +1096,7 @@ Currently no automated tests. Future improvement: add Jest tests for:
 - [x] DI container wiring all services (src/shared/di/container.ts)
 - [x] cron-job.org integration (keeps Render free tier awake for scheduled posts)
 - [x] Command hints (descriptions appear when typing "/" in Telegram)
-- [x] Replies to queued posts (💬 Add reply / ❝ Add quoted reply on the confirmation and queue preview)
+- [x] Replies to queued posts (💬 Add reply / ❝ Add quoted reply on the confirmation and queue preview), in the parent's slot or their own
 - [x] Replies to already-published posts (send the post link, then the content)
 - [x] Rich posts: rich source posts can be transformed; text above media keeps the attribution below (sent as a rich message)
 - [x] `date_time` entities survive transform as `<tg-time>` (each reader sees their local time)

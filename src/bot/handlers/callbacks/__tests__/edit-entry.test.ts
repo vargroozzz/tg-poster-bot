@@ -34,6 +34,13 @@ describe('movedReplyFields', () => {
     });
   });
 
+  it('keeps a waiting same-slot reply in its slot, and lets one whose parent went out take its own', () => {
+    const scheduledTime = new Date('2026-01-15T12:00:01Z');
+    const sameSlot = { _id: 'r', scheduledTime, sameSlot: true, slotPostId: 'root', parentPostId: 'p' };
+    expect(movedReplyFields({ ...sameSlot, status: 'waiting_parent' }).sameSlot).toEqual({ slotPostId: 'root', scheduledTime });
+    expect(movedReplyFields({ ...sameSlot, status: 'pending' }).sameSlot).toBeUndefined();
+  });
+
   it('has nothing for a plain post', () => {
     expect(movedReplyFields({ status: 'pending' })).toEqual({ replyTo: undefined, parentPostId: undefined });
   });

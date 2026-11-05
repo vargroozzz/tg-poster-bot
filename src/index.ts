@@ -3,6 +3,7 @@ import { webhookCallback } from 'grammy';
 import { logger } from './utils/logger.js';
 import { config } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './database/connection.js';
+import { migrateSameSlotReplies } from './database/migrations/003-same-slot-replies.js';
 import { initBot, bot } from './bot/bot.js';
 import { PostWorkerService } from './services/post-worker.service.js';
 import { DIContainer } from './shared/di/container.js';
@@ -23,6 +24,8 @@ async function main() {
 
     // Connect to MongoDB
     await connectDatabase();
+    // Before the worker starts: it publishes same-slot replies only as posts of their own.
+    await migrateSameSlotReplies();
 
     // Initialize the bot
     await initBot();

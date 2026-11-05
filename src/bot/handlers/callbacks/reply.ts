@@ -8,7 +8,7 @@ import { REPLY_CALLBACK_PATTERN, REPLY_FROM_QUEUE } from '../../../shared/consta
 import { getSessionService } from './shared.js';
 import { getQueuePreview } from './queue-preview-state.js';
 import { ScheduledPostRepository } from '../../../database/repositories/scheduled-post.repository.js';
-import { embeddedRepliesOf, FAILED, QUEUED_STATUSES, type IScheduledPost } from '../../../database/models/scheduled-post.model.js';
+import { FAILED, type IScheduledPost } from '../../../database/models/scheduled-post.model.js';
 import { MediaSenderService } from '../../../core/sending/media-sender.service.js';
 import { withSpoilers } from '../../../core/sending/spoilers.js';
 import { getActivePostingChannels } from '../../../database/models/posting-channel.model.js';
@@ -148,34 +148,25 @@ export function registerReply(): void {
     try {
       await ctx.answerCallbackQuery().catch(() => {});
 
-      const [, source, quoted, parentPostId, chainIndexText] = ctx.match ?? [];
-      const chainIndex = chainIndexText === undefined ? undefined : Number(chainIndexText);
+      const [, source, quoted, parentPostId] = ctx.match ?? [];
       const fromId = ctx.from?.id;
       if (!parentPostId || !fromId) return;
 
       const updateId = ctx.update.update_id;
       if (await getSessionService().replyStartedBy(fromId, updateId)) return; // redelivered tap
 
-      const post = await new ScheduledPostRepository().findById(parentPostId);
-      // What is replied to: the post, or an entry of its together-reply chain.
-      const parent = post && chainIndex !== undefined ? embeddedRepliesOf(post)[chainIndex] : post;
-      if (!post || !parent) {
+      const parent = await new ScheduledPostRepository().findById(parentPostId);
+      if (!parent) {
         await ctx.reply('❌ Post not found — it may have already been published or deleted.');
         return;
       }
-      if (post.status === FAILED) {
+      if (parent.status === FAILED) {
         await ctx.reply('❌ This post failed to publish, so it can’t be replied to.');
-        return;
-      }
-      // A chain entry holds no message id once out, so only a queued post's chain takes replies.
-      if (chainIndex !== undefined && !(QUEUED_STATUSES as readonly string[]).includes(post.status)) {
-        await ctx.reply('❌ This reply was already published with its post. Send its link to reply to it.');
         return;
       }
 
       const session = await getSessionService().createForReply(fromId, {
         replyParentPostId: parentPostId,
-        replyParentChainIndex: chainIndex,
         replyTriggerUpdateId: updateId,
       });
       await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
@@ -197,7 +188,7 @@ export function registerReply(): void {
       await ctx.reply(PROMPTS[offer]);
 
       logger.debug(
-        `Reply session created for user ${fromId}, parent post ${parentPostId}${chainIndex === undefined ? '' : ` chain entry ${chainIndex}`}, quote: ${offer}`
+        `Reply session created for user ${fromId}, parent post ${parentPostId}, quote: ${offer}`
       );
     } catch (error) {
       await ErrorMessages.catchAndReply(

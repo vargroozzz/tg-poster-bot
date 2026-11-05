@@ -95,7 +95,7 @@ export class SessionService {
     userId: number,
     target: Pick<
       ISession,
-      'replyParentPostId' | 'replyParentChainIndex' | 'replyToChannelId' | 'replyToMessageId' | 'replyQuoteSourceId' | 'replyTriggerUpdateId'
+      'replyParentPostId' | 'replyToChannelId' | 'replyToMessageId' | 'replyQuoteSourceId' | 'replyTriggerUpdateId'
     >
   ): Promise<ISession> {
     const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);

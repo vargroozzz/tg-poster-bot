@@ -1,5 +1,5 @@
 import { Api } from 'grammy';
-import { ScheduledPost, FAILED, embeddedRepliesOf, type IScheduledPost } from '../database/models/scheduled-post.model.js';
+import { ScheduledPost, FAILED, type IScheduledPost } from '../database/models/scheduled-post.model.js';
 import { ScheduledPostRepository, PARENT_FAILED } from '../database/repositories/scheduled-post.repository.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -117,29 +117,19 @@ export class PostWorkerService {
 
     try {
       await post.updateOne({ status: 'posted', postedAt: new Date(), telegramScheduledMessageId: messageId });
-
-      // Publish the together (embedded) reply chain in the same cycle
-      const embedded = embeddedRepliesOf(post);
-      if (embedded.length > 0) {
-        const errors = await this.publisher.publishEmbeddedChain(embedded, messageId, post.targetChannelId);
-        if (errors.length > 0) {
-          logger.error(`Failed to publish embedded replies for post ${post._id}: ${errors.join('; ')}`);
-          await post.updateOne({ embeddedReplyError: errors.join('; ') });
-        } else {
-          logger.info(`Published ${embedded.length} embedded repl${embedded.length === 1 ? 'y' : 'ies'} for post ${post._id}`);
-        }
-      }
-
-      // Unblock separated reply posts that were waiting for this parent
-      try {
-        await this.repository.unblockSeparatedReplies(post._id.toString(), messageId, post.targetChannelId);
-      } catch (error) {
-        logger.error(`Failed to unblock separated replies for post ${post._id}:`, error);
-      }
-
       logger.info(`Successfully published post ${post._id} with message_id ${messageId}`);
     } catch (error) {
       logger.error(`Post ${post._id} was published as message ${messageId}, but recording it failed:`, error);
+      return;
+    }
+
+    try {
+      // Release the replies waiting for this post; the same-slot ones go out right after it.
+      await this.repository.unblockSeparatedReplies(post._id.toString(), messageId, post.targetChannelId);
+      const sameSlot = await this.repository.findDueSameSlotReplies(post._id.toString());
+      await sameSlot.reduce((previous, reply) => previous.then(() => this.publishPost(reply)), Promise.resolve());
+    } catch (error) {
+      logger.error(`Failed to release the replies of post ${post._id}:`, error);
     }
   }
 

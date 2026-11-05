@@ -12,7 +12,7 @@ import {
   createAddReplyKeyboard,
   createProposalPreviewKeyboard,
 } from '../../keyboards/preview-action.keyboard.js';
-import { embeddedRepliesOf, type EmbeddedReplyData } from '../../../database/models/scheduled-post.model.js';
+import { QUEUED_STATUSES, slotOf } from '../../../database/models/scheduled-post.model.js';
 import type { MessageContent } from '../../../types/message.types.js';
 import { nextSpoilers, spoilerSlots, withSpoilers } from '../../../core/sending/spoilers.js';
 import { sendsAsRich } from '../../../core/sending/media-sender.service.js';
@@ -307,9 +307,8 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
   } else {
     // Replies to this post point at the post being replaced, so carry them to its successor below.
     const moving = await repository.findById(editingPostId);
-    const movedEmbeddedReplies = moving ? embeddedRepliesOf(moving) : [];
-    // If this post is itself a reply, it keeps what it answers.
-    const { replyTo, parentPostId } = movedReplyFields(moving);
+    // If this post is itself a reply, it keeps what it answers, and a same-slot one its slot.
+    const { replyTo, parentPostId, sameSlot } = movedReplyFields(moving);
 
     // Moving channels is delete + reschedule, so bail if the delete found nothing pending —
     // scheduling anyway would duplicate a post the worker had already published.
@@ -328,6 +327,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             content: editingRawContent,
             replyTo,
             parentPostId,
+            sameSlot,
           })
         : await postScheduler.scheduleTransformPost({
             targetChannelId: newChannelId,
@@ -335,6 +335,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             content: editingRawContent,
             replyTo,
             parentPostId,
+            sameSlot,
             textHandling: session.textHandling ?? 'keep',
             selectedUserId: session.selectedUserId,
             customText: session.customText,
@@ -342,20 +343,13 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
             spoilers: spoilersFor(session),
           });
 
-    if (movedEmbeddedReplies.length > 0) {
-      // As with separated replies: one in the parent's old channel follows it.
-      await repository.appendEmbeddedReplies(
-        movedPostId,
-        movedEmbeddedReplies.map((reply) => ({
-          ...reply,
-          targetChannelId: reply.targetChannelId === editingOriginalChannelId ? newChannelId : reply.targetChannelId,
-        }))
-      );
-    }
     if (parentPostId) {
       await repository.settleRepliesOf(parentPostId);
     }
-    await repository.reparentSeparatedReplies(editingPostId, movedPostId, editingOriginalChannelId, newChannelId);
+    await repository.reparentSeparatedReplies(editingPostId, movedPostId, editingOriginalChannelId, newChannelId, {
+      slotPostId: sameSlot?.slotPostId ?? movedPostId,
+      scheduledTime,
+    });
 
     await finalizePreview(c);
 
@@ -413,54 +407,15 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
     selectedAction: replyAction = 'transform',
   } = session;
 
-  if (route === 'reply-together' && parentPostId) {
-    const replyNickname = replyUserId ? await findNicknameByUserId(replyUserId) : null;
-    const transformedReplyContent =
-      replyAction === 'transform'
-        ? await transformerService.transformContent(
-            replyContent,
-            replyForwardInfo,
-            'transform',
-            replyTextHandling,
-            replyNickname,
-            replyCustomText
-          )
-        : { ...replyContent, text: replyContent.text ?? '' };
-
-    const replyData: EmbeddedReplyData = {
-      targetChannelId: replySelectedChannel,
-      content: transformedReplyContent,
-      rawContent: replyContent,
-      action: replyAction,
-      textHandling: replyTextHandling,
-      selectedUserId: replyUserId ?? null,
-      customText: replyCustomText,
-      textAbove: textAboveFor(session),
-      spoilers: spoilersFor(session),
-      originalForward: replyForwardInfo,
-      ...(session.replyParentChainIndex != null && { replyTo: session.replyParentChainIndex }),
-    };
-
-    const before = await repository.appendEmbeddedReplies(parentPostId, [replyData]);
-
+  // Together rides on the parent's slot and holds none; separated takes a slot of its own,
+  // never before the parent goes out.
+  const together = route === 'reply-together';
+  if (together && !(parentPost && QUEUED_STATUSES.some((s) => s === parentPost.status))) {
     await finalizePreview(c);
-
-    if (!before) {
-      await ctx.reply('⚠️ Parent post was already published — reply could not be attached.');
-      return;
-    }
-
-    const parentSlotTime = parentPost?.scheduledTime;
-    const chainIndex = embeddedRepliesOf(before).length;
-    await ctx.reply(
-      `↩️ Reply scheduled with the parent post${parentSlotTime ? ` at ${formatSlotTime(parentSlotTime)}` : ''}`,
-      { reply_markup: createAddReplyKeyboard(parentPostId, chainIndex) }
-    );
-    logger.info(`Together reply attached to parent post ${parentPostId}`);
+    await ctx.reply('⚠️ Parent post was already published — reply could not be scheduled with it.');
     return;
   }
 
-  // Separated reply: created waiting for its queued parent, or straight away for a published one
   const baseReplyParams = {
     targetChannelId: replySelectedChannel,
     originalMessage: replyOriginalMessage,
@@ -468,9 +423,10 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
     content: replyContent,
     replyTo: publishedParent,
     parentPostId,
+    ...(together && parentPost ? { sameSlot: slotOf(parentPost) } : { notBefore: parentPost?.scheduledTime }),
   };
 
-  const { scheduledTime: replySlotTime, postId: replyPostId } =
+  const { scheduledTime: scheduledReplyTime, postId: replyPostId } =
     replyAction === 'forward'
       ? await postScheduler.scheduleForwardPost(baseReplyParams)
       : await postScheduler.scheduleTransformPost({
@@ -484,6 +440,11 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
 
   // The parent may have gone out, failed or been deleted while this reply was being made.
   const settled = parentPostId ? await repository.settleRepliesOf(parentPostId) : 'released';
+  // A same-slot reply whose parent was deleted has no slot to ride on: it takes its own.
+  const replySlotTime =
+    together && settled === 'standalone'
+      ? await repository.takeOwnSlot(replyPostId, replySelectedChannel, {})
+      : scheduledReplyTime;
 
   await finalizePreview(c);
 
@@ -494,10 +455,12 @@ async function confirmReply(c: Confirm, route: ScheduleRoute): Promise<void> {
   await ctx.reply(
     settled === 'standalone'
       ? `⚠️ The post this replies to was deleted, so the reply will post on its own at ${formatSlotTime(replySlotTime)}. Delete it from /queue if unwanted.`
-      : `↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`,
+      : together
+        ? `↩️ Reply scheduled with the parent post at ${formatSlotTime(replySlotTime)}`
+        : `↩️ Reply scheduled for ${formatSlotTime(replySlotTime)}`,
     { reply_markup: createAddReplyKeyboard(replyPostId) }
   );
-  logger.info(`Separated reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
+  logger.info(`${together ? 'Same-slot' : 'Separated'} reply scheduled at ${formatSlotTime(replySlotTime)}, post ${replyPostId}`);
 }
 
 // A non-owner confirming their preview does not schedule — it hands the assembled post to
@@ -664,12 +627,6 @@ export function registerScheduling(): void {
       const selectedChannelId = match?.[1];
       if (!selectedChannelId) {
         await ctx.editMessageText('❌ Invalid channel selection.');
-        return null;
-      }
-
-      // A reply to an entry of a together-reply chain joins the chain: no slot to choose.
-      if (session.isReply && session.replyParentChainIndex != null) {
-        await toReplyAction(ctx, session, { selectedChannel: selectedChannelId, replyMode: 'together' });
         return null;
       }
 

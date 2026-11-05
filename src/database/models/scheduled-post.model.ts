@@ -8,21 +8,6 @@ export interface RetryMetadata {
   lastError?: string;
 }
 
-export interface EmbeddedReplyData {
-  targetChannelId: string;
-  content: MessageContent;
-  rawContent?: MessageContent;
-  action: TransformAction;
-  textHandling?: TextHandling;
-  selectedUserId?: number | null;
-  customText?: string;
-  textAbove?: boolean;
-  spoilers?: boolean[];
-  originalForward: ForwardInfo;
-  // Index of the earlier chain entry this one answers; absent = the post itself.
-  replyTo?: number;
-}
-
 export interface IScheduledPost extends Document {
   scheduledTime: Date;
   targetChannelId: string;
@@ -42,13 +27,12 @@ export interface IScheduledPost extends Document {
   postedAt?: Date;
   error?: string;
   retryMetadata?: RetryMetadata;
-  // Together replies — a chain published in the same cycle as this post, in order
-  embeddedReplies?: EmbeddedReplyData[];
-  // Legacy single together reply; read through embeddedRepliesOf, folded in on the next append.
-  embeddedReply?: EmbeddedReplyData;
-  embeddedReplyError?: string;
-  // Separated reply — this post is a reply to parentPostId
+  // A reply — this post is a reply to parentPostId, and waits for it to publish
   parentPostId?: string;
+  // A same-slot reply: holds no slot of its own and goes out right after its parent. It
+  // rides on slotPostId's slot (the nearest ancestor that holds one) and mirrors its time.
+  sameSlot: boolean;
+  slotPostId?: string;
   replyToMessageId?: number;
   replyToChannelId?: string;
   createdAt: Date;
@@ -167,15 +151,14 @@ const scheduledPostSchema = new Schema<IScheduledPost>({
     nextRetryAt: Date,
     lastError: String,
   },
-  embeddedReplies: {
-    type: [Schema.Types.Mixed],
-    default: undefined,
+  sameSlot: {
+    type: Boolean,
+    default: false,
   },
-  embeddedReply: {
-    type: Schema.Types.Mixed,
-  },
-  embeddedReplyError: {
+  slotPostId: {
     type: String,
+    index: true,
+    sparse: true,
   },
   parentPostId: {
     type: String,
@@ -202,11 +185,28 @@ export const POSTED = 'posted' as const;
 export const FAILED = 'failed' as const;
 export const QUEUED_STATUSES = ['pending', WAITING_PARENT] as const;
 
-export const embeddedRepliesOf = (post: Pick<IScheduledPost, 'embeddedReplies' | 'embeddedReply'>): EmbeddedReplyData[] =>
-  post.embeddedReplies ?? (post.embeddedReply ? [post.embeddedReply] : []);
+// Compound unique index to prevent double-booking a slot. Same-slot replies hold none, so
+// they're left out (a partial filter can only match on equality, hence sameSlot: false
+// stored on every slot holder — migration 003 backfilled the older ones).
+export const SLOT_INDEX_NAME = 'slot_unique';
+scheduledPostSchema.index(
+  { scheduledTime: 1, targetChannelId: 1 },
+  { unique: true, partialFilterExpression: { sameSlot: false }, name: SLOT_INDEX_NAME }
+);
 
-// Compound unique index to prevent double-booking
-scheduledPostSchema.index({ scheduledTime: 1, targetChannelId: 1 }, { unique: true });
+/** Filter for the posts that hold a slot in their channel's queue. */
+export const HOLDS_SLOT = { sameSlot: { $ne: true } } as const;
+
+/** The slot a post goes out in: the post holding it, and its time. */
+export interface PostSlot {
+  slotPostId: string;
+  scheduledTime: Date;
+}
+
+export const slotOf = (post: Pick<IScheduledPost, '_id' | 'scheduledTime' | 'sameSlot' | 'slotPostId'>): PostSlot => ({
+  slotPostId: post.sameSlot && post.slotPostId ? post.slotPostId : post._id.toString(),
+  scheduledTime: post.scheduledTime,
+});
 
 // Sparse index for usage-count aggregation in nickname keyboard
 scheduledPostSchema.index({ selectedUserId: 1 }, { sparse: true });
