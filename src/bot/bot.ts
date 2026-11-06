@@ -2,8 +2,12 @@ import { Bot } from 'grammy';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { parseCommandName, NON_OWNER_COMMANDS } from '../core/proposals/proposal.js';
+import { retryDeletesOnNetworkError } from './retry-deletes.js';
 
 export const bot = new Bot(config.botToken);
+
+// A dropped delete otherwise leaves a stray preview message in the chat.
+bot.api.config.use(retryDeletesOnNetworkError);
 
 // Auth middleware. The owner may do anything. Non-owners (proposers) may send content
 // to propose and use only the allowlisted commands; every other command is owner-only.
