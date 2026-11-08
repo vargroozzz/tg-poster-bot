@@ -1,10 +1,16 @@
+import { Agent } from 'node:https';
 import { Bot } from 'grammy';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { parseCommandName, NON_OWNER_COMMANDS } from '../core/proposals/proposal.js';
 import { retryDeletesOnNetworkError } from './retry-deletes.js';
 
-export const bot = new Bot(config.botToken);
+// grammy's default keep-alive agent holds idle sockets forever; Telegram closes them in the
+// quiet stretch between slots, and the next send fails instantly on the dead socket. Drop
+// idle sockets after 5s, as Node's own global agent does.
+export const bot = new Bot(config.botToken, {
+  client: { baseFetchConfig: { agent: new Agent({ keepAlive: true, timeout: 5_000 }) } },
+});
 
 // A dropped delete otherwise leaves a stray preview message in the chat.
 bot.api.config.use(retryDeletesOnNetworkError);

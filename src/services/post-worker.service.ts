@@ -1,4 +1,4 @@
-import { Api } from 'grammy';
+import { Api, HttpError } from 'grammy';
 import { ScheduledPost, FAILED, type IScheduledPost } from '../database/models/scheduled-post.model.js';
 import { ScheduledPostRepository, PARENT_FAILED } from '../database/repositories/scheduled-post.repository.js';
 import { config } from '../config/index.js';
@@ -106,8 +106,12 @@ export class PostWorkerService {
 
     // Only a failed send fails the post and its replies; what follows a sent post must not.
     const sent = await this.publisher.publish(post).catch(async (error: unknown) => {
-      logger.error(`Failed to publish post ${post._id}:`, error);
-      const message = error instanceof Error ? error.message : String(error);
+      // grammy hides the network cause inside HttpError.error. Only its code: the cause's message
+      // holds the request URL, which carries the bot token.
+      const inner = error instanceof HttpError ? error.error : undefined;
+      const cause = inner instanceof Error ? ` (${'code' in inner ? String(inner.code) : inner.name})` : '';
+      logger.error(`Failed to publish post ${post._id}${cause}:`, error);
+      const message = (error instanceof Error ? error.message : String(error)) + cause;
       await post.updateOne({ status: FAILED, error: message });
       await this.failReplies(post, message);
       return undefined;
