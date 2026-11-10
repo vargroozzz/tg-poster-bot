@@ -5,8 +5,9 @@ import { withSpoilers } from '../sending/spoilers.js';
 import { logger } from '../../utils/logger.js';
 
 // Telegram rejects a quote it can't find in the replied-to message (e.g. the parent was edited
-// after the reply was queued). Post without the quote rather than failing the post.
-const QUOTE_ERROR = /QUOTE/;
+// after the reply was queued), or rich quote texts it won't take. Post without the quote rather
+// than failing the post.
+const QUOTE_ERROR = /QUOTE|RICH_TEXT|rich text/i;
 
 /**
  * Service for publishing posts to Telegram

@@ -1,20 +1,30 @@
 import { Api } from 'grammy';
-import type { InputRichBlock, ReplyParameters } from 'grammy/types';
-import type { MessageContent, MediaGroupItem, ReplyQuote } from '../../types/message.types.js';
+import type { InputRichBlock } from 'grammy/types';
+import type {
+  MessageContent,
+  MediaGroupItem,
+  ReplyQuote,
+  RichQuoteReplyParameters,
+} from '../../types/message.types.js';
 import { htmlToRichBlocks, mediaBlock, collageBlock } from './rich.js';
 
 export type ReplyParams = { chatId: number; messageId: number; quote?: ReplyQuote };
 
-export const toReplyParameters = ({ chatId, messageId, quote }: ReplyParams): ReplyParameters => ({
+// quote_rich_texts overrides quote/quote_entities; the plain text still goes along (when a rich
+// quote has any) in case the parent ends up published as a plain message.
+const quoteFields = ({ text, entities, richTexts }: ReplyQuote) => ({
+  ...(text ? { quote: text, ...(entities ? { quote_entities: entities } : {}) } : {}),
+  ...(richTexts ? { quote_rich_texts: richTexts } : {}),
+});
+
+export const toReplyParameters = ({
+  chatId,
+  messageId,
+  quote,
+}: ReplyParams): RichQuoteReplyParameters => ({
   message_id: messageId,
   chat_id: chatId,
-  ...(quote
-    ? {
-        quote: quote.text,
-        quote_position: quote.position,
-        ...(quote.entities ? { quote_entities: quote.entities } : {}),
-      }
-    : {}),
+  ...(quote ? { ...quoteFields(quote), quote_position: quote.position } : {}),
 });
 
 const replyOpts = (replyParameters?: ReplyParams) =>

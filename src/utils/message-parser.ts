@@ -1,11 +1,12 @@
-import type { Message, TextQuote } from 'grammy/types';
-import type { ForwardInfo, ReplyQuote } from '../types/message.types.js';
+import type { Message } from 'grammy/types';
+import type { ForwardInfo, ReplyQuote, RichTextQuote } from '../types/message.types.js';
 import { logger } from './logger.js';
 
-const toReplyQuote = ({ text, position, entities }: TextQuote): ReplyQuote => ({
+const toReplyQuote = ({ text, position, entities, rich_texts }: RichTextQuote): ReplyQuote => ({
   text,
   position,
   ...(entities ? { entities } : {}),
+  ...(rich_texts?.length ? { richTexts: rich_texts } : {}),
 });
 
 /** Extract reply-to parameters (and the quoted fragment, if any) from external_reply. */

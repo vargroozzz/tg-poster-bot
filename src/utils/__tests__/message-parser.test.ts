@@ -153,3 +153,34 @@ describe('parseForwardInfo — quotes', () => {
     expect(result.replyParameters).toBeUndefined();
   });
 });
+
+describe('parseForwardInfo — quotes from rich messages', () => {
+  it('keeps rich_texts as richTexts', () => {
+    const richTexts = ['a ', { type: 'bold' as const, text: 'rich' }];
+    const msg = makeBase({
+      reply_to_message: makeBase({ message_id: 5 }) as Message['reply_to_message'],
+      quote: { text: '', position: 0, rich_texts: richTexts } as Message['quote'],
+    });
+    expect(parseForwardInfo(msg).replyQuote).toEqual({ text: '', position: 0, richTexts });
+  });
+});
+
+describe('parseForwardInfo — rich quote of an external_reply', () => {
+  it('keeps rich_texts in replyParameters.quote', () => {
+    const channel = { id: -1001, type: 'channel' as const, title: 'Test Chan' };
+    const richTexts = [{ type: 'italic' as const, text: 'rich' }];
+    const msg = makeBase({
+      external_reply: {
+        origin: { type: 'channel', date: 0, chat: channel, message_id: 42 },
+        chat: channel,
+        message_id: 42,
+      },
+      quote: { text: 'rich', position: 2, rich_texts: richTexts } as Message['quote'],
+    });
+    expect(parseForwardInfo(msg).replyParameters).toEqual({
+      chatId: -1001,
+      messageId: 42,
+      quote: { text: 'rich', position: 2, richTexts },
+    });
+  });
+});

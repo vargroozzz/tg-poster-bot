@@ -19,7 +19,7 @@ import { config } from '../../../config/index.js';
 const REPLY_PROMPT = '💬 Send the content for this reply. You can forward a message or send any media/text.';
 
 // Content types whose text is actually shown in the channel (stickers, dice, polls… aren't).
-const QUOTABLE_TYPES = ['text', 'photo', 'video', 'document', 'animation', 'voice', 'audio', 'media_group'];
+const QUOTABLE_TYPES = ['text', 'photo', 'video', 'document', 'animation', 'voice', 'audio', 'media_group', 'rich'];
 
 // Telegram's forwardMessage errors for a post id that doesn't exist, and for a post in a
 // channel with protected content (which can still be replied to, just not shown).
@@ -47,7 +47,9 @@ async function offerPostToQuote(
   parent: Pick<IScheduledPost, 'content' | 'spoilers' | 'textAbove' | 'action' | 'originalForward'>,
   previewId: number | undefined
 ): Promise<QuoteOffer> {
-  if (!parent.content.text || !QUOTABLE_TYPES.includes(parent.content.type)) return 'no_text';
+  // A rich post's text lives in its blocks, so it is quotable even without custom text.
+  const hasText = !!parent.content.text || parent.content.type === 'rich';
+  if (!hasText || !QUOTABLE_TYPES.includes(parent.content.type)) return 'no_text';
 
   const { action, originalForward: origin } = parent;
   // A forwarded album/thread is replied to via its first message, which may not hold the text.

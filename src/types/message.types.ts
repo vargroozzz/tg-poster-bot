@@ -1,10 +1,23 @@
-import type { InputRichBlock, Message, MessageEntity } from 'grammy/types';
+import type {
+  InputRichBlock,
+  Message,
+  MessageEntity,
+  ReplyParameters,
+  RichText,
+  TextQuote,
+} from 'grammy/types';
+
+// shortcut: Bot API 10.4 rich-quote fields grammy 1.46 doesn't type yet; drop once grammy has them.
+export type RichTextQuote = TextQuote & { rich_texts?: RichText[] };
+export type RichQuoteReplyParameters = ReplyParameters & { quote_rich_texts?: RichText[] };
 
 /** A highlighted fragment of the replied-to message (Telegram's quote-reply). */
 export interface ReplyQuote {
   text: string;
   position: number;
   entities?: MessageEntity[];
+  /** Set when the quote was taken from a rich message (Bot API 10.4); `text` may then be empty. */
+  richTexts?: RichText[];
 }
 
 export interface ForwardInfo {
