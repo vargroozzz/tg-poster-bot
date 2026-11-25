@@ -1,10 +1,17 @@
-import { Api, HttpError } from 'grammy';
+import { Api, GrammyError, HttpError } from 'grammy';
 import { ScheduledPost, FAILED, type IScheduledPost } from '../database/models/scheduled-post.model.js';
 import { ScheduledPostRepository, PARENT_FAILED } from '../database/repositories/scheduled-post.repository.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { formatSlotTime } from '../utils/time-slots.js';
 import { PostPublisherService } from '../core/posting/post-publisher.service.js';
+
+// 20 worker cycles of 30s: rides out a ~10 minute network outage before giving up.
+export const MAX_PUBLISH_ATTEMPTS = 20;
+
+// A network failure (HttpError) or a rate limit; anything else Telegram rejected for good.
+export const isTransient = (error: unknown): boolean =>
+  error instanceof HttpError || (error instanceof GrammyError && error.error_code === 429);
 
 /**
  * Background worker service for processing scheduled posts
@@ -110,8 +117,15 @@ export class PostWorkerService {
       // holds the request URL, which carries the bot token.
       const inner = error instanceof HttpError ? error.error : undefined;
       const cause = inner instanceof Error ? ` (${'code' in inner ? String(inner.code) : inner.name})` : '';
-      logger.error(`Failed to publish post ${post._id}${cause}:`, error);
       const message = (error instanceof Error ? error.message : String(error)) + cause;
+      const attemptCount = (post.retryMetadata?.attemptCount ?? 0) + 1;
+      if (isTransient(error) && attemptCount < MAX_PUBLISH_ATTEMPTS) {
+        // Stays pending: the next worker cycle (30s) tries again.
+        logger.warn(`Post ${post._id} hit a transient error (attempt ${attemptCount}), retrying: ${message}`);
+        await post.updateOne({ retryMetadata: { attemptCount, lastAttemptAt: new Date(), lastError: message } });
+        return undefined;
+      }
+      logger.error(`Failed to publish post ${post._id}${cause} after ${attemptCount} attempt(s):`, error);
       await post.updateOne({ status: FAILED, error: message });
       await this.failReplies(post, message);
       return undefined;
