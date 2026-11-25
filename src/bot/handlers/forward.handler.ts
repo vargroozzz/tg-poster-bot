@@ -1,6 +1,6 @@
 import { Context, NextFunction } from 'grammy';
 import type { InlineKeyboardMarkup, Message } from 'grammy/types';
-import { parseForwardInfo } from '../../utils/message-parser.js';
+import { parseForwardInfo, isOwnCommand } from '../../utils/message-parser.js';
 import { transformerService } from '../../services/transformer.service.js';
 import { createChannelSelectKeyboard } from '../keyboards/channel-select.keyboard.js';
 import { logger } from '../../utils/logger.js';
@@ -233,11 +233,15 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
+// Content handlers only: a command passes through to the command handlers, whichever of the two
+// files registered first (import order decides that, and it isn't stable).
+const content = bot.drop((ctx) => isOwnCommand(ctx.message));
+
 // Handle text messages when waiting for custom text input.
 // Only match messages that are replies but NOT external_reply — external_reply means the user is
 // replying to a message in a different chat (cross-chat reply), which is content to schedule, not
 // custom text input. Those fall through to the main handler registered on 'message:text' below.
-bot.on('message:text').filter(
+content.on('message:text').filter(
   (ctx) => !!ctx.message?.reply_to_message && !ctx.message?.external_reply,
   async (ctx: Context, next: NextFunction) => {
   try {
@@ -325,7 +329,7 @@ bot.on('message:text').filter(
 });
 
 // Handle both forwarded and non-forwarded messages
-bot.on([
+content.on([
   'message:forward_origin', 'message:photo', 'message:video', 'message:document', 'message:animation',
   'message:voice', 'message:audio', 'message:video_note', 'message:sticker', 'message:dice',
   'message:contact', 'message:location', 'message:venue', 'message:text', 'message:poll',

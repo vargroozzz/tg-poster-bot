@@ -93,3 +93,7 @@ export function parseForwardInfo(message: Message): ForwardInfo {
   logger.debug('Parsed hidden user forward');
   return { ...base, ...(replyParameters ? { replyParameters } : {}) };
 }
+
+/** A command the user typed (`/queue`), not content: a forwarded message that starts with one is content. */
+export const isOwnCommand = (message: Message | undefined): boolean =>
+  !!message && !message.forward_origin && message.entities?.[0]?.type === 'bot_command' && message.entities[0].offset === 0;

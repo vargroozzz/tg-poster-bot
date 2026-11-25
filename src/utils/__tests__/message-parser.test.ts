@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseForwardInfo } from '../message-parser.js';
+import { parseForwardInfo, isOwnCommand } from '../message-parser.js';
 import type { Message } from 'grammy/types';
 
 function makeBase(extra: Partial<Message> = {}): Message {
@@ -182,5 +182,20 @@ describe('parseForwardInfo — rich quote of an external_reply', () => {
       messageId: 42,
       quote: { text: 'rich', position: 2, richTexts },
     });
+  });
+});
+
+describe('isOwnCommand', () => {
+  const command = { text: '/queue', entities: [{ type: 'bot_command' as const, offset: 0, length: 6 }] };
+
+  it('recognises a command the user typed', () => {
+    expect(isOwnCommand(makeBase(command))).toBe(true);
+  });
+
+  it('treats a forwarded command, a mid-text command and plain text as content', () => {
+    const forward_origin = { type: 'hidden_user' as const, sender_user_name: 'x', date: 0 };
+    expect(isOwnCommand(makeBase({ ...command, forward_origin }))).toBe(false);
+    expect(isOwnCommand(makeBase({ text: 'see /queue', entities: [{ type: 'bot_command', offset: 4, length: 6 }] }))).toBe(false);
+    expect(isOwnCommand(makeBase({ text: 'hello' }))).toBe(false);
   });
 });
