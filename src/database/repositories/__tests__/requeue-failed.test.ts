@@ -45,3 +45,15 @@ describe('ScheduledPostRepository.requeueIfFailed', () => {
     expect(model.updateMany).not.toHaveBeenCalled();
   });
 });
+
+describe('ScheduledPostRepository.deleteIfFailed', () => {
+  it('deletes only a failed post', async () => {
+    const repo = new ScheduledPostRepository();
+    const findOneAndDelete = vi.fn().mockResolvedValueOnce({ _id: 'p1' }).mockResolvedValueOnce(null);
+    Reflect.set(repo, 'model', { findOneAndDelete });
+
+    expect(await repo.deleteIfFailed('p1')).toBe(true);
+    expect(await repo.deleteIfFailed('p2')).toBe(false);
+    expect(findOneAndDelete).toHaveBeenCalledWith({ _id: 'p1', status: 'failed' });
+  });
+});

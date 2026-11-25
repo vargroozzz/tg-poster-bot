@@ -59,6 +59,11 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   /**
    * Mark a post as successfully posted
    */
+  /** Delete a post only if it failed: ❌ Cancel on its /failed preview drops it. */
+  async deleteIfFailed(postId: string): Promise<boolean> {
+    return (await this.model.findOneAndDelete({ _id: postId, status: FAILED })) !== null;
+  }
+
   /**
    * Delete a post only while it still holds a slot. Returns false once the worker has
    * published it, so a delete can't erase a post that already went out.

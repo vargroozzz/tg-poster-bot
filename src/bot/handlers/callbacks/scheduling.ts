@@ -884,10 +884,11 @@ export function registerScheduling(): void {
 
       await teardownPreviewMessages(c);
 
-      // Edit sessions: original post stays untouched
+      // Edit sessions: a queued post stays untouched; a failed one (/failed) is dropped.
       if (session.editingPostId) {
         await sessionSvc.complete(sessionKey);
-        await ctx.reply('Edit cancelled.');
+        const dropped = await new ScheduledPostRepository().deleteIfFailed(session.editingPostId);
+        await ctx.reply(dropped ? '🗑 Failed post dropped.' : 'Edit cancelled.');
         logger.info(`Edit cancelled for session ${sessionKey}`);
         return;
       }
