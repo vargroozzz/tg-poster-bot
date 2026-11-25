@@ -16,6 +16,19 @@ export class QueuePreviewSenderService {
     userId: number,
     post: IScheduledPost
   ): Promise<{ previewMessageIds: number[]; controlMessageId: number }> {
+    const previewMessageIds = await this.sendContent(userId, post);
+
+    const keyboard = createQueuePreviewActionKeyboard(post._id.toString());
+    const controlMsg = await this.api.sendMessage(userId, 'Previewing scheduled post:', {
+      reply_markup: keyboard,
+    });
+
+    logger.debug(`Queue preview sent to user ${userId}, control msg: ${controlMsg.message_id}`);
+    return { previewMessageIds, controlMessageId: controlMsg.message_id };
+  }
+
+  /** Sends the post's content to the user as it would go out; returns the sent message ids. */
+  async sendContent(userId: number, post: IScheduledPost): Promise<number[]> {
     const previewMessageIds: number[] = [];
 
     if (post.action === 'forward') {
@@ -53,12 +66,6 @@ export class QueuePreviewSenderService {
       previewMessageIds.push(...(await this.mediaSender.sendAll(userId, content, undefined, post.textAbove)));
     }
 
-    const keyboard = createQueuePreviewActionKeyboard(post._id.toString());
-    const controlMsg = await this.api.sendMessage(userId, 'Previewing scheduled post:', {
-      reply_markup: keyboard,
-    });
-
-    logger.debug(`Queue preview sent to user ${userId}, control msg: ${controlMsg.message_id}`);
-    return { previewMessageIds, controlMessageId: controlMsg.message_id };
+    return previewMessageIds;
   }
 }

@@ -29,6 +29,9 @@ import { getSleepWindow } from '../../utils/sleep-window.js';
 import { createSleepStatusKeyboard } from '../keyboards/sleep.keyboard.js';
 import { getPostInterval } from '../../utils/post-interval.js';
 import { createChannelIntervalListKeyboard } from '../keyboards/interval.keyboard.js';
+import { ScheduledPost, FAILED } from '../../database/models/scheduled-post.model.js';
+import { PARENT_FAILED } from '../../database/repositories/scheduled-post.repository.js';
+import { QueuePreviewSenderService } from '../../core/queue/queue-preview-sender.service.js';
 
 const schedulerService = new SchedulerService(bot.api);
 const channelListRepo = new ChannelListRepository();
@@ -70,6 +73,7 @@ bot.command('help', async (ctx: Context) => {
 
 📊 Status:
 /status - Show pending scheduled posts count and next 5 posts
+/failed - Resend me the posts a network error skipped
 
 🎨 Attribution Control:
 /addgreen <channel_id> - Add channel to green list (forwards as-is automatically)
@@ -692,3 +696,35 @@ bot.command('interval', async (ctx: Context) => {
   }
 });
 
+
+// Failures a network glitch or rate limit caused (and the replies that failed with them):
+// the post itself was fine, so it's worth sending back to the owner to reschedule.
+const SKIPPED_BY_NETWORK = [{ error: /Network request|\b429\b/ }, { error: PARENT_FAILED }];
+
+bot.command('failed', async (ctx: Context) => {
+  try {
+    const posts = await ScheduledPost.find({ status: FAILED, $or: SKIPPED_BY_NETWORK }).sort({ scheduledTime: 1 });
+    if (posts.length === 0) {
+      await ctx.reply('✅ No posts were skipped by network errors.');
+      return;
+    }
+
+    await ctx.reply(`📤 ${posts.length} post(s) were skipped by network errors. Forward any of them back to me to reschedule.`);
+    const sender = new QueuePreviewSenderService(ctx.api);
+    const chatId = ctx.chat!.id;
+    await posts.reduce(
+      (previous, post) =>
+        previous.then(async () => {
+          await ctx.reply(`⚠️ Scheduled for ${formatSlotTime(post.scheduledTime)} in ${post.targetChannelId}: ${post.error}`);
+          await sender.sendContent(chatId, post).catch(async (error: unknown) => {
+            logger.error(`Failed to resend failed post ${post._id}:`, error);
+            await ctx.reply('❌ Couldn’t resend this one.');
+          });
+        }),
+      Promise.resolve()
+    );
+  } catch (error) {
+    logger.error('Error in /failed command:', error);
+    await ctx.reply('❌ Error loading failed posts. Please try again.');
+  }
+});

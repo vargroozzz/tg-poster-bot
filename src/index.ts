@@ -40,6 +40,7 @@ async function main() {
       { command: 'listchannels', description: 'List all configured channels' },
       { command: 'status', description: 'View scheduled posts' },
       { command: 'queue', description: 'View and manage the post queue' },
+      { command: 'failed', description: 'Resend posts a network error skipped' },
       { command: 'sleep', description: 'Configure sleep hours (no posts during window)' },
       { command: 'interval', description: 'Set post interval (15 / 30 / 60 min)' },
       { command: 'addgreen', description: 'Add channel to green list (reply to message)' },
