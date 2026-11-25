@@ -19,3 +19,11 @@ export const QUEUE_DELETE_PATTERN = new RegExp(
 
 /** Callback data for ⬅ Back to queue on the queue preview. */
 export const QUEUE_BACK = 'queue:back';
+
+/** Callback prefix for 📅 Requeue on a failed post that /failed resends. */
+export const REQUEUE_FAILED = 'failed:requeue';
+
+export const requeueFailedCallback = (postId: string): string => `${REQUEUE_FAILED}:${postId}`;
+
+/** Group [1]: the post id. */
+export const REQUEUE_FAILED_PATTERN = new RegExp(`^${REQUEUE_FAILED}:(${OBJECT_ID_SOURCE})$`);

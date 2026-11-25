@@ -252,6 +252,36 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
+   * Put a failed post back in the queue at scheduledTime, holding a slot of its own, and the
+   * replies that failed with it back to waiting on it. Returns how many replies came back, or
+   * null when the post isn't failed (already requeued, or gone).
+   */
+  async requeueFailed(postId: string, scheduledTime: Date): Promise<number | null> {
+    const requeued = await this.model.findOneAndUpdate(
+      { _id: postId, status: FAILED },
+      {
+        $set: { status: 'pending', scheduledTime, sameSlot: false },
+        $unset: { error: '', retryMetadata: '', slotPostId: '' },
+      }
+    );
+    if (!requeued) return null;
+    await this.model.updateMany({ slotPostId: postId, sameSlot: true }, { $set: { scheduledTime } });
+    return this.restoreFailedReplies(postId);
+  }
+
+  // The inverse of failWaitingReplies.
+  private async restoreFailedReplies(parentPostId: string): Promise<number> {
+    const children = await this.model.find({ parentPostId, status: FAILED, error: PARENT_FAILED }, { _id: 1 });
+    if (children.length === 0) return 0;
+    await this.model.updateMany(
+      { _id: { $in: children.map((c) => c._id) } },
+      { $set: { status: WAITING_PARENT }, $unset: { error: '' } }
+    );
+    const nested = await Promise.all(children.map((c) => this.restoreFailedReplies(c._id.toString())));
+    return nested.reduce((sum, n) => sum + n, children.length);
+  }
+
+  /**
    * Settle the replies created waiting on a parent that is no longer queued: the worker and
    * the delete only handle replies that exist at that moment. Call it after creating the
    * reply, so a change in between is seen here or there. A published parent releases them, a

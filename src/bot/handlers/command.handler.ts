@@ -1,4 +1,4 @@
-import { Context } from 'grammy';
+import { Context, InlineKeyboard } from 'grammy';
 import { ChannelListRepository } from '../../database/repositories/channel-list.repository.js';
 import { SchedulerService } from '../../services/scheduler.service.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
@@ -30,7 +30,9 @@ import { createSleepStatusKeyboard } from '../keyboards/sleep.keyboard.js';
 import { getPostInterval } from '../../utils/post-interval.js';
 import { createChannelIntervalListKeyboard } from '../keyboards/interval.keyboard.js';
 import { ScheduledPost, FAILED } from '../../database/models/scheduled-post.model.js';
-import { PARENT_FAILED } from '../../database/repositories/scheduled-post.repository.js';
+import { PostingChannel } from '../../database/models/posting-channel.model.js';
+import { channelLabel } from '../../shared/helpers/channel.helper.js';
+import { requeueFailedCallback } from '../../shared/constants/queue-callbacks.js';
 import { QueuePreviewSenderService } from '../../core/queue/queue-preview-sender.service.js';
 
 const schedulerService = new SchedulerService(bot.api);
@@ -73,7 +75,7 @@ bot.command('help', async (ctx: Context) => {
 
 📊 Status:
 /status - Show pending scheduled posts count and next 5 posts
-/failed - Resend me the posts a network error skipped
+/failed - Resend me the posts a network error skipped, to requeue
 
 🎨 Attribution Control:
 /addgreen <channel_id> - Add channel to green list (forwards as-is automatically)
@@ -697,29 +699,36 @@ bot.command('interval', async (ctx: Context) => {
 });
 
 
-// Failures a network glitch or rate limit caused (and the replies that failed with them):
-// the post itself was fine, so it's worth sending back to the owner to reschedule.
-const SKIPPED_BY_NETWORK = [{ error: /Network request|\b429\b/ }, { error: PARENT_FAILED }];
+// Failures a network glitch or rate limit caused: the post itself was fine, so it's worth
+// sending back to the owner to requeue. Replies that failed with one come back with it.
+const SKIPPED_BY_NETWORK = /Network request|\b429\b/;
 
 bot.command('failed', async (ctx: Context) => {
   try {
-    const posts = await ScheduledPost.find({ status: FAILED, $or: SKIPPED_BY_NETWORK }).sort({ scheduledTime: 1 });
+    const posts = await ScheduledPost.find({ status: FAILED, error: SKIPPED_BY_NETWORK }).sort({ scheduledTime: 1 });
     if (posts.length === 0) {
       await ctx.reply('✅ No posts were skipped by network errors.');
       return;
     }
 
-    await ctx.reply(`📤 ${posts.length} post(s) were skipped by network errors. Forward any of them back to me to reschedule.`);
+    await ctx.reply(`📤 ${posts.length} post(s) were skipped by network errors. Tap 📅 Requeue under one to queue it again.`);
     const sender = new QueuePreviewSenderService(ctx.api);
     const chatId = ctx.chat!.id;
     await posts.reduce(
       (previous, post) =>
         previous.then(async () => {
-          await ctx.reply(`⚠️ Scheduled for ${formatSlotTime(post.scheduledTime)} in ${post.targetChannelId}: ${post.error}`);
-          await sender.sendContent(chatId, post).catch(async (error: unknown) => {
-            logger.error(`Failed to resend failed post ${post._id}:`, error);
-            await ctx.reply('❌ Couldn’t resend this one.');
-          });
+          const shown = await sender
+            .sendContent(chatId, post)
+            .then(() => true)
+            .catch((error: unknown) => {
+              logger.error(`Failed to resend failed post ${post._id}:`, error);
+              return false;
+            });
+          const channel = await PostingChannel.findOne({ channelId: post.targetChannelId }).lean();
+          await ctx.reply(
+            `${shown ? '⬆️' : '❌ Couldn’t show this one.'} Was due ${formatSlotTime(post.scheduledTime)} in ${channelLabel(channel ?? { channelId: post.targetChannelId })}: ${post.error}`,
+            { reply_markup: new InlineKeyboard().text('📅 Requeue', requeueFailedCallback(post._id.toString())) }
+          );
         }),
       Promise.resolve()
     );

@@ -9,6 +9,7 @@ import {
   QUEUE_DELETE_PATTERN,
   DELETE_CANCEL,
   DELETE_WITH_REPLIES,
+  REQUEUE_FAILED_PATTERN,
 } from '../../../shared/constants/queue-callbacks.js';
 import {
   createDeleteRepliesKeyboard,
@@ -32,7 +33,7 @@ import { createChannelSelectKeyboard } from '../../keyboards/channel-select.keyb
 import { createForwardActionKeyboard } from '../../keyboards/forward-action.keyboard.js';
 import { flowCallbacks } from '../../keyboards/flow-callbacks.js';
 import type { TextHandling } from '../../../types/message.types.js';
-import { formatSlotTime } from '../../../utils/time-slots.js';
+import { formatSlotTime, findNextAvailableSlot } from '../../../utils/time-slots.js';
 import { editEntryBlocker } from './edit-entry.js';
 import {
   type QueuePreviewState,
@@ -332,6 +333,40 @@ export function registerQueue(): void {
   });
 
   // ── Queue edit callbacks ──────────────────────────────────────────────────────
+
+  // failed:requeue:{postId} — 📅 Requeue on a post /failed resent: back in the queue at its
+  // channel's next free slot, then the edit preview, to change anything before it goes out.
+  bot.callbackQuery(REQUEUE_FAILED_PATTERN, async (ctx: Context) => {
+    try {
+      const postId = (ctx.match as RegExpExecArray)[1];
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const repository = new ScheduledPostRepository();
+      const post = await repository.findById(postId);
+      if (!post) {
+        await ctx.answerCallbackQuery({ text: '❌ Post not found', show_alert: true }).catch(() => {});
+        return;
+      }
+      const slot = await findNextAvailableSlot(post.targetChannelId);
+      const replies = await repository.requeueFailed(postId, slot);
+      if (replies === null) {
+        await ctx.answerCallbackQuery({ text: '❌ Post is no longer failed (already requeued?)', show_alert: true }).catch(() => {});
+        return;
+      }
+      await ctx.answerCallbackQuery().catch(() => {});
+
+      const requeued = await repository.findById(postId);
+      if (!requeued) return;
+      const session = await getSessionService().createForEdit(userId, requeued);
+      const withReplies = replies > 0 ? ` with ${replies} ${replies === 1 ? 'reply' : 'replies'}` : '';
+      await ctx.reply(`📅 Requeued${withReplies} for ${formatSlotTime(slot)}. Change it below, or leave it as is.`);
+      await showEditPreview(ctx, session._id.toString());
+      logger.info(`Failed post ${postId} requeued for ${slot.toISOString()} with ${replies} replies`);
+    } catch (error) {
+      await ErrorMessages.catchAndReply(ctx, error, '❌ Error requeueing the post.', 'failed:requeue');
+    }
+  });
 
   // queue:edit:{postId} — entry point for editing a scheduled post
   bot.callbackQuery(EDIT_POST_PATTERN, async (ctx: Context) => {
