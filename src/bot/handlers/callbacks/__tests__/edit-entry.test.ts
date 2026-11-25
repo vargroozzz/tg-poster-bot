@@ -6,8 +6,9 @@ describe('editEntryBlocker', () => {
     expect(editEntryBlocker({ status: 'posted' }, 1)).toMatch(/already published/);
   });
 
-  it('blocks a failed post, which an edit could never save', () => {
-    expect(editEntryBlocker({ status: 'failed' }, 1)).toMatch(/no longer queued/);
+  // ✅ Schedule on its edit puts it back in the queue (see /failed).
+  it('lets a failed post through', () => {
+    expect(editEntryBlocker({ status: 'failed' }, 1)).toBeUndefined();
   });
 
   it('blocks when no posting channels exist', () => {

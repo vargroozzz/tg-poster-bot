@@ -1,14 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ScheduledPostRepository, PARENT_FAILED } from '../scheduled-post.repository.js';
 
 const slot = new Date('2026-11-26T12:00:01Z');
+vi.mock('../../../utils/time-slots.js', () => ({ findNextAvailableSlot: vi.fn(async () => slot) }));
+
+const { ScheduledPostRepository, PARENT_FAILED } = await import('../scheduled-post.repository.js');
 
 // Replies by parent id: p1 ← r1 ← r2, and p1 ← r3.
 const tree: Record<string, string[]> = { p1: ['r1', 'r3'], r1: ['r2'] };
 
-const repoWith = (requeued: object | null) => {
+const repoWith = (failed: object | null) => {
   const model = {
-    findOneAndUpdate: vi.fn().mockResolvedValue(requeued),
+    findOne: vi.fn().mockResolvedValue(failed),
+    findOneAndUpdate: vi.fn().mockResolvedValue(failed),
     find: vi.fn(async ({ parentPostId }: { parentPostId: string }) =>
       (tree[parentPostId] ?? []).map((id) => ({ _id: { toString: () => id } }))
     ),
@@ -19,23 +22,26 @@ const repoWith = (requeued: object | null) => {
   return { repo, model };
 };
 
-describe('ScheduledPostRepository.requeueFailed', () => {
+describe('ScheduledPostRepository.requeueIfFailed', () => {
   it('requeues the post in its own slot and brings back the replies that failed with it', async () => {
-    const { repo, model } = repoWith({ _id: 'p1' });
+    const { repo, model } = repoWith({ _id: 'p1', targetChannelId: '-100123' });
 
-    expect(await repo.requeueFailed('p1', slot)).toBe(3);
+    expect(await repo.requeueIfFailed('p1')).toBe(slot);
     expect(model.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: 'p1', status: 'failed' },
       expect.objectContaining({ $set: { status: 'pending', scheduledTime: slot, sameSlot: false } })
     );
     expect(model.find).toHaveBeenCalledWith({ parentPostId: 'p1', status: 'failed', error: PARENT_FAILED }, { _id: 1 });
     expect(model.updateMany).toHaveBeenCalledWith({ slotPostId: 'p1', sameSlot: true }, { $set: { scheduledTime: slot } });
+    // r1, r2 (under r1) and r3 back to waiting on their parents.
+    expect(model.updateMany).toHaveBeenCalledTimes(3);
   });
 
-  it('does nothing to a post that is no longer failed', async () => {
+  it('does nothing to a post that is not failed', async () => {
     const { repo, model } = repoWith(null);
 
-    expect(await repo.requeueFailed('p1', slot)).toBeNull();
+    expect(await repo.requeueIfFailed('p1')).toBeNull();
+    expect(model.findOneAndUpdate).not.toHaveBeenCalled();
     expect(model.updateMany).not.toHaveBeenCalled();
   });
 });

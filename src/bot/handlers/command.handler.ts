@@ -1,4 +1,4 @@
-import { Context, InlineKeyboard } from 'grammy';
+import { Context } from 'grammy';
 import { ChannelListRepository } from '../../database/repositories/channel-list.repository.js';
 import { SchedulerService } from '../../services/scheduler.service.js';
 import { formatSlotTime } from '../../utils/time-slots.js';
@@ -30,10 +30,10 @@ import { createSleepStatusKeyboard } from '../keyboards/sleep.keyboard.js';
 import { getPostInterval } from '../../utils/post-interval.js';
 import { createChannelIntervalListKeyboard } from '../keyboards/interval.keyboard.js';
 import { ScheduledPost, FAILED } from '../../database/models/scheduled-post.model.js';
-import { PostingChannel } from '../../database/models/posting-channel.model.js';
-import { channelLabel } from '../../shared/helpers/channel.helper.js';
-import { requeueFailedCallback } from '../../shared/constants/queue-callbacks.js';
-import { QueuePreviewSenderService } from '../../core/queue/queue-preview-sender.service.js';
+import { PreviewGeneratorService } from '../../core/preview/preview-generator.service.js';
+import { PreviewSenderService } from '../../core/preview/preview-sender.service.js';
+import { SessionState } from '../../shared/constants/flow-states.js';
+import { getSessionService } from './callbacks/shared.js';
 
 const schedulerService = new SchedulerService(bot.api);
 const channelListRepo = new ChannelListRepository();
@@ -75,7 +75,7 @@ bot.command('help', async (ctx: Context) => {
 
 📊 Status:
 /status - Show pending scheduled posts count and next 5 posts
-/failed - Resend me the posts a network error skipped, to requeue
+/failed - Show the posts a network error skipped, to schedule again
 
 🎨 Attribution Control:
 /addgreen <channel_id> - Add channel to green list (forwards as-is automatically)
@@ -700,35 +700,39 @@ bot.command('interval', async (ctx: Context) => {
 
 
 // Failures a network glitch or rate limit caused: the post itself was fine, so it's worth
-// sending back to the owner to requeue. Replies that failed with one come back with it.
+// showing the owner again. Replies that failed with one come back with it.
 const SKIPPED_BY_NETWORK = /Network request|\b429\b/;
+
+// Each post /failed shows gets an edit session of its own; createForEdit keys them by these
+// ids (0 and -1 are the edit and reply sentinels). A rerun replaces the previous run's.
+const FAILED_EDIT_MESSAGE_ID = -2;
 
 bot.command('failed', async (ctx: Context) => {
   try {
+    const userId = ctx.from?.id;
+    if (!userId) return;
     const posts = await ScheduledPost.find({ status: FAILED, error: SKIPPED_BY_NETWORK }).sort({ scheduledTime: 1 });
     if (posts.length === 0) {
       await ctx.reply('✅ No posts were skipped by network errors.');
       return;
     }
 
-    await ctx.reply(`📤 ${posts.length} post(s) were skipped by network errors. Tap 📅 Requeue under one to queue it again.`);
-    const sender = new QueuePreviewSenderService(ctx.api);
-    const chatId = ctx.chat!.id;
+    await ctx.reply(`📤 ${posts.length} post(s) were skipped by network errors. ✅ Schedule puts one back in the queue.`);
+    const previewSender = new PreviewSenderService(ctx.api);
     await posts.reduce(
-      (previous, post) =>
+      (previous, post, index) =>
         previous.then(async () => {
-          const shown = await sender
-            .sendContent(chatId, post)
-            .then(() => true)
-            .catch((error: unknown) => {
-              logger.error(`Failed to resend failed post ${post._id}:`, error);
-              return false;
+          try {
+            const session = await getSessionService().createForEdit(userId, post, FAILED_EDIT_MESSAGE_ID - index);
+            const sessionId = session._id.toString();
+            await previewSender.sendPreview(userId, await new PreviewGeneratorService().generatePreview(session), sessionId, {
+              controlPrefix: `⚠️ Was due ${formatSlotTime(post.scheduledTime)}: ${escapeHtml(post.error ?? '')}`,
             });
-          const channel = await PostingChannel.findOne({ channelId: post.targetChannelId }).lean();
-          await ctx.reply(
-            `${shown ? '⬆️' : '❌ Couldn’t show this one.'} Was due ${formatSlotTime(post.scheduledTime)} in ${channelLabel(channel ?? { channelId: post.targetChannelId })}: ${post.error}`,
-            { reply_markup: new InlineKeyboard().text('📅 Requeue', requeueFailedCallback(post._id.toString())) }
-          );
+            await getSessionService().updateState(sessionId, SessionState.PREVIEW, {});
+          } catch (error) {
+            logger.error(`Failed to show failed post ${post._id}:`, error);
+            await ctx.reply(`❌ Couldn’t show the post due ${formatSlotTime(post.scheduledTime)}.`);
+          }
         }),
       Promise.resolve()
     );

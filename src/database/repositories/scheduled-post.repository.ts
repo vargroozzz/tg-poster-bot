@@ -252,11 +252,14 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
   }
 
   /**
-   * Put a failed post back in the queue at scheduledTime, holding a slot of its own, and the
-   * replies that failed with it back to waiting on it. Returns how many replies came back, or
-   * null when the post isn't failed (already requeued, or gone).
+   * Put a failed post back in the queue at its channel's next free slot, holding a slot of its
+   * own, and the replies that failed with it back to waiting on it. Returns the new slot, or
+   * null when the post isn't failed (still queued, already requeued, or gone).
    */
-  async requeueFailed(postId: string, scheduledTime: Date): Promise<number | null> {
+  async requeueIfFailed(postId: string): Promise<Date | null> {
+    const failed = await this.model.findOne({ _id: postId, status: FAILED });
+    if (!failed) return null;
+    const scheduledTime = await findNextAvailableSlot(failed.targetChannelId);
     const requeued = await this.model.findOneAndUpdate(
       { _id: postId, status: FAILED },
       {
@@ -266,7 +269,8 @@ export class ScheduledPostRepository extends BaseRepository<IScheduledPost> {
     );
     if (!requeued) return null;
     await this.model.updateMany({ slotPostId: postId, sameSlot: true }, { $set: { scheduledTime } });
-    return this.restoreFailedReplies(postId);
+    await this.restoreFailedReplies(postId);
+    return scheduledTime;
   }
 
   // The inverse of failWaitingReplies.

@@ -263,6 +263,8 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
   }
 
   const repository = new ScheduledPostRepository();
+  // A failed post (/failed) goes back in the queue first, at its channel's next free slot.
+  const scheduledTime = (await repository.requeueIfFailed(editingPostId)) ?? editingOriginalScheduledTime;
 
   if (route === 'edit-same-channel') {
     let newContent = editingRawContent;
@@ -301,7 +303,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     }
 
     await ctx.reply(
-      `✅ Post updated!\nTarget: ${await channelLabelById(editingOriginalChannelId)}\nScheduled for: ${formatSlotTime(editingOriginalScheduledTime)}`,
+      `✅ Post updated!\nTarget: ${await channelLabelById(editingOriginalChannelId)}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
       { reply_markup: createAddReplyKeyboard(editingPostId) }
     );
   } else {
@@ -319,7 +321,7 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     }
 
     const newChannelId = session.selectedChannel ?? editingOriginalChannelId;
-    const { scheduledTime, postId: movedPostId } =
+    const { scheduledTime: movedTime, postId: movedPostId } =
       session.selectedAction === 'forward'
         ? await postScheduler.scheduleForwardPost({
             targetChannelId: newChannelId,
@@ -348,13 +350,13 @@ async function confirmEdit(c: Confirm, route: ScheduleRoute): Promise<void> {
     }
     await repository.reparentSeparatedReplies(editingPostId, movedPostId, editingOriginalChannelId, newChannelId, {
       slotPostId: sameSlot?.slotPostId ?? movedPostId,
-      scheduledTime,
+      scheduledTime: movedTime,
     });
 
     await finalizePreview(c);
 
     await ctx.reply(
-      `✅ Moved to ${await channelLabelById(newChannelId)}\nScheduled for: ${formatSlotTime(scheduledTime)}`,
+      `✅ Moved to ${await channelLabelById(newChannelId)}\nScheduled for: ${formatSlotTime(movedTime)}`,
       { reply_markup: createAddReplyKeyboard(movedPostId) }
     );
   }

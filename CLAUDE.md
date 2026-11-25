@@ -381,7 +381,7 @@ message kind, sent with `sendRichMessage`; captions can't hold them. The bot use
 ### Schedule Management
 - `/status` - View pending scheduled posts count and next 5 posts
 - `/queue` - View and manage the post queue by channel
-- `/failed` - Resend to the owner the posts that failed on a network error or rate limit, each with 📅 Requeue: back to the channel's next free slot (with the replies that failed with it), then the edit preview. Publishing retries these errors for ~10 min before failing a post
+- `/failed` - Show the posts that failed on a network error or rate limit, each as the final-step preview (an edit session per post). ✅ Schedule puts it back in its channel's next free slot (`requeueIfFailed`), with the replies that failed with it; Back changes channel or settings first. Publishing retries these errors for ~10 min before failing a post
 - Forward any message - Start the scheduling flow
 - Send a post link (`t.me/<username>/<id>` or `t.me/c/<id>/<id>`) to a posting channel's post - Start a reply to that already-published post (see Replies to Published Posts)
 

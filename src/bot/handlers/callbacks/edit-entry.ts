@@ -1,5 +1,5 @@
 // src/bot/handlers/callbacks/edit-entry.ts
-import { QUEUED_STATUSES, WAITING_PARENT, slotOf, type IScheduledPost } from '../../../database/models/scheduled-post.model.js';
+import { QUEUED_STATUSES, WAITING_PARENT, FAILED, slotOf, type IScheduledPost } from '../../../database/models/scheduled-post.model.js';
 
 /**
  * What a reply keeps when an edit moves it to another channel: the published message it
@@ -21,14 +21,15 @@ export const movedReplyFields = (
   sameSlot: post?.sameSlot && post.status === WAITING_PARENT ? slotOf(post) : undefined,
 });
 
-/** Why an edit of this post can't start (✏️ Edit) or restart (preview Back); undefined when it can. */
+/** Why an edit of this post can't start (/failed, (✏️ Edit) or restart (preview Back); undefined when it can. */
 export const editEntryBlocker = (
   post: Pick<IScheduledPost, 'status'>,
   channelCount: number
 ): string | undefined =>
   post.status === 'posted'
     ? '❌ Post already published'
-    : !QUEUED_STATUSES.some((s) => s === post.status)
+    : // A failed one too: /failed edits it, and ✅ Schedule puts it back in the queue.
+      post.status !== FAILED && !QUEUED_STATUSES.some((s) => s === post.status)
       ? '❌ Post is no longer queued'
       : channelCount === 0
         ? '⚠️ No posting channels configured. Use /addchannel first.'

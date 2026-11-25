@@ -61,17 +61,18 @@ export class SessionService {
   /**
    * Create a session for editing an existing scheduled post.
    * No originalMessage — edit callbacks use sessionId directly.
-   * messageId: 0 is a sentinel (Telegram IDs start at 1).
+   * messageId: 0 is a sentinel (Telegram IDs start at 1). /failed opens several edits at once,
+   * so it passes its own non-positive ids (see FAILED_EDIT_MESSAGE_ID).
    */
-  async createForEdit(userId: number, post: IScheduledPost): Promise<ISession> {
+  async createForEdit(userId: number, post: IScheduledPost, messageId = 0): Promise<ISession> {
     const expiresAt = new Date(Date.now() + SessionService.SESSION_TTL_MS);
 
     // Delete any existing edit session for this user to avoid unique-index conflict
-    await this.repository.deleteMany({ userId, messageId: 0 });
+    await this.repository.deleteMany({ userId, messageId });
 
     const session = await this.repository.create({
       userId,
-      messageId: 0,
+      messageId,
       chatId: userId,
       state: SessionState.CHANNEL_SELECT,
       ...editSeed(post),
