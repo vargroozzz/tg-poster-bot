@@ -707,6 +707,9 @@ const SKIPPED_BY_NETWORK = /Network request|\b429\b/;
 // ids (0 and -1 are the edit and reply sentinels). A rerun replaces the previous run's.
 const FAILED_EDIT_MESSAGE_ID = -2;
 
+// Set while a /failed run sends its previews, so a second one doesn't interleave with it.
+let showingFailed = false;
+
 bot.command('failed', async (ctx: Context) => {
   try {
     const userId = ctx.from?.id;
@@ -717,9 +720,16 @@ bot.command('failed', async (ctx: Context) => {
       return;
     }
 
+    if (showingFailed) {
+      await ctx.reply('⏳ Still sending the previous /failed run.');
+      return;
+    }
     await ctx.reply(`📤 ${posts.length} post(s) were skipped by network errors. ✅ Schedule puts one back in the queue.`);
     const previewSender = new PreviewSenderService(ctx.api);
-    await posts.reduce(
+    // In the background: sending them all outlasts the webhook's 10s, and Telegram would
+    // redeliver /failed (and rerun it) until the handler returned in time.
+    showingFailed = true;
+    void posts.reduce(
       (previous, post, index) =>
         previous.then(async () => {
           try {
@@ -735,7 +745,9 @@ bot.command('failed', async (ctx: Context) => {
           }
         }),
       Promise.resolve()
-    );
+    ).finally(() => {
+      showingFailed = false;
+    });
   } catch (error) {
     logger.error('Error in /failed command:', error);
     await ctx.reply('❌ Error loading failed posts. Please try again.');
